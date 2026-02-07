@@ -8,7 +8,7 @@ function createYoutubeResourceFactory(deps) {
     createAudioResource,
     StreamType,
     logInfo,
-    maybeCheckYoutubeCookiesOnFailure,
+    tryCheckYoutubeCookiesOnFailure,
     getYoutubeCookiesNetscapePath,
     config,
   } = deps;
@@ -221,7 +221,7 @@ function createYoutubeResourceFactory(deps) {
             return await createYoutubeStreamResource(url, attempt, client, useCookies);
           } catch (error) {
             logInfo("yt-dlp stream attempt failed", { attempt, client, error });
-            await maybeCheckYoutubeCookiesOnFailure();
+            await tryCheckYoutubeCookiesOnFailure();
           }
         }
       }
@@ -242,7 +242,7 @@ function createYoutubeResourceFactory(deps) {
       } catch (error) {
         lastError = error;
         logInfo("yt-dlp download failed for client", { client, error });
-        await maybeCheckYoutubeCookiesOnFailure();
+        await tryCheckYoutubeCookiesOnFailure();
       }
     }
 

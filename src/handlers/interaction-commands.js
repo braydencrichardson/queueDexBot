@@ -19,7 +19,7 @@ function createCommandInteractionHandler(deps) {
     normalizeQueryInput,
     ensureSodiumReady,
     ensurePlayerListeners,
-    maybeSendSearchChooser,
+    trySendSearchChooser,
     resolveTracks,
     isSpotifyUrl,
     hasSpotifyCredentials,
@@ -80,7 +80,7 @@ function createCommandInteractionHandler(deps) {
       }
 
       try {
-        const handled = await maybeSendSearchChooser(interaction, query, requester, requesterId);
+        const handled = await trySendSearchChooser(interaction, query, requester, requesterId);
         if (handled) {
           return;
         }

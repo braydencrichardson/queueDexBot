@@ -271,7 +271,7 @@ function createProviderBootstrap(deps) {
     })();
   }
 
-  async function maybeCheckYoutubeCookiesOnFailure() {
+  async function tryCheckYoutubeCookiesOnFailure() {
     if (youtubeCookieCheckOnFailure || !youtubeCookieHeader) {
       return;
     }
@@ -294,7 +294,7 @@ function createProviderBootstrap(deps) {
     getSoundcloudClientId: () => soundcloudClientId,
     getYoutubeCookiesNetscapePath: () => youtubeCookiesNetscapePath,
     hasSpotifyCredentials,
-    maybeCheckYoutubeCookiesOnFailure,
+    tryCheckYoutubeCookiesOnFailure,
     ensureSoundcloudReady,
     ensureSpotifyReady,
     ensureYoutubeReady,

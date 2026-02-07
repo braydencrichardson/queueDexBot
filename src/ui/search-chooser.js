@@ -38,7 +38,7 @@ function createSearchChooser(deps) {
     return lines.join("\n");
   }
 
-  async function maybeSendSearchChooser(interaction, query, requesterName, requesterId) {
+  async function trySendSearchChooser(interaction, query, requesterName, requesterId) {
     let options = [];
     if (isSpotifyUrl(query) && !hasSpotifyCredentials()) {
       const spotifyType = playdl.sp_validate(query);
@@ -123,7 +123,7 @@ function createSearchChooser(deps) {
   }
 
   return {
-    maybeSendSearchChooser,
+    trySendSearchChooser,
   };
 }
 

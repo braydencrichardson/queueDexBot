@@ -63,7 +63,7 @@ const {
   getSoundcloudClientId,
   getYoutubeCookiesNetscapePath,
   hasSpotifyCredentials,
-  maybeCheckYoutubeCookiesOnFailure,
+  tryCheckYoutubeCookiesOnFailure,
   ensureSoundcloudReady,
   ensureSpotifyReady,
   ensureYoutubeReady,
@@ -139,7 +139,7 @@ const {
   getPlayNext: () => playNext,
 });
 
-const { maybeSendSearchChooser } = createSearchChooser({
+const { trySendSearchChooser } = createSearchChooser({
   playdl,
   isSpotifyUrl,
   hasSpotifyCredentials,
@@ -158,7 +158,7 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
   createAudioResource,
   StreamType,
   logInfo,
-  maybeCheckYoutubeCookiesOnFailure,
+  tryCheckYoutubeCookiesOnFailure,
   getYoutubeCookiesNetscapePath,
   config: {
     ytdlpPath: env.ytdlpPath,
@@ -234,7 +234,7 @@ registerInteractionHandler(client, {
   normalizeQueryInput,
   ensureSodiumReady,
   ensurePlayerListeners,
-  maybeSendSearchChooser,
+  trySendSearchChooser,
   resolveTracks,
   isSpotifyUrl,
   hasSpotifyCredentials,
