@@ -123,12 +123,12 @@ function createCommandInteractionHandler(deps) {
         });
         if (showQueuedControls) {
           const timeout = setTimeout(async () => {
-            const entry = pendingQueuedActions.get(message.id);
-            if (!entry) {
-              return;
-            }
-            pendingQueuedActions.delete(message.id);
             try {
+              const entry = pendingQueuedActions.get(message.id);
+              if (!entry) {
+                return;
+              }
+              pendingQueuedActions.delete(message.id);
               await message.edit({ components: [] });
             } catch (error) {
               logError("Failed to expire queued action controls", error);

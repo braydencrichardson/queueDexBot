@@ -66,12 +66,12 @@ function createSelectMenuInteractionHandler(deps) {
       });
       if (showQueuedControls) {
         const timeout = setTimeout(async () => {
-          const entry = pendingQueuedActions.get(interaction.message.id);
-          if (!entry) {
-            return;
-          }
-          pendingQueuedActions.delete(interaction.message.id);
           try {
+            const entry = pendingQueuedActions.get(interaction.message.id);
+            if (!entry) {
+              return;
+            }
+            pendingQueuedActions.delete(interaction.message.id);
             await interaction.message.edit({ components: [] });
           } catch (error) {
             logError("Failed to expire queued action controls", error);

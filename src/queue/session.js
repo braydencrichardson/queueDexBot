@@ -1,3 +1,5 @@
+const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
+
 function createQueueSession(deps) {
   const {
     queues,
@@ -10,7 +12,6 @@ function createQueueSession(deps) {
     logError,
     getPlayNext,
   } = deps;
-
   function getGuildQueue(guildId) {
     if (!queues.has(guildId)) {
       queues.set(guildId, {
@@ -39,13 +40,17 @@ function createQueueSession(deps) {
     const nextTrack = queue.tracks[0];
     const nowDuration = formatDuration(queue.current.duration);
     const nextDuration = formatDuration(nextTrack?.duration);
-    const displayUrl = queue.current.displayUrl || queue.current.url;
+    const currentTitle = sanitizeInlineDiscordText(queue.current.title);
+    const currentRequester = sanitizeInlineDiscordText(queue.current.requester);
+    const nextTitle = sanitizeInlineDiscordText(nextTrack?.title);
+    const nextRequester = sanitizeInlineDiscordText(nextTrack?.requester);
+    const displayUrl = sanitizeDiscordText(queue.current.displayUrl || queue.current.url);
     const nowLink = (queue.current.source === "youtube" || queue.current.source === "soundcloud") && displayUrl
       ? ` (${displayUrl})`
       : "";
-    const nowLine = `Now playing: ${queue.current.title}${nowDuration ? ` (**${nowDuration}**)` : ""}${queue.current.requester ? ` (requested by **${queue.current.requester}**)` : ""}${nowLink}`;
+    const nowLine = `Now playing: ${currentTitle}${nowDuration ? ` (**${nowDuration}**)` : ""}${currentRequester ? ` (requested by **${currentRequester}**)` : ""}${nowLink}`;
     const nextLine = nextTrack
-      ? `Up next: ${nextTrack.title}${nextDuration ? ` (**${nextDuration}**)` : ""}${nextTrack.requester ? ` (requested by **${nextTrack.requester}**)` : ""}`
+      ? `Up next: ${nextTitle}${nextDuration ? ` (**${nextDuration}**)` : ""}${nextRequester ? ` (requested by **${nextRequester}**)` : ""}`
       : "Up next: (empty)";
     const countLine = `Remaining: ${remaining}`;
     return `${nowLine}\n${nextLine}\n${countLine}`;
@@ -92,7 +97,7 @@ function createQueueSession(deps) {
   }
 
   function getDisplayName(member, user) {
-    return member?.displayName || user?.tag || user?.username || "Unknown user";
+    return sanitizeInlineDiscordText(member?.displayName || user?.tag || user?.username || "Unknown user");
   }
 
   async function announceNowPlayingAction(queue, action, user, member, messageChannel) {

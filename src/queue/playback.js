@@ -1,3 +1,5 @@
+const { sanitizeInlineDiscordText } = require("../utils/discord-content");
+
 function createQueuePlayback(deps) {
   const {
     playdl,
@@ -10,7 +12,6 @@ function createQueuePlayback(deps) {
     logInfo,
     logError,
   } = deps;
-
   async function createTrackResource(track) {
     if (!track?.url) {
       logInfo("Track missing URL", track);
@@ -57,7 +58,8 @@ function createQueuePlayback(deps) {
     if (queue.textChannel) {
       loadingTimeout = setTimeout(async () => {
         try {
-          loadingMessage = await queue.textChannel.send(`Loading **${next.title}**...`);
+          const title = sanitizeInlineDiscordText(next.title);
+          loadingMessage = await queue.textChannel.send(`Loading **${title}**...`);
         } catch (error) {
           logError("Failed to send loading message", error);
         }

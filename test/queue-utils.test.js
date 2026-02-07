@@ -33,6 +33,21 @@ test("ensureTrackId keeps existing IDs unchanged", () => {
   assert.equal(track.id, "fixed-id");
 });
 
+test("ensureTrackId sanitizes control characters in track metadata", () => {
+  const track = {
+    title: "Bad\u0000Title\nLine",
+    requester: "Req\u0007User\r\nName",
+    channel: "Chan\u0000nel\tName",
+  };
+
+  ensureTrackId(track);
+
+  assert.equal(track.title, "BadTitle Line");
+  assert.equal(track.requester, "ReqUser Name");
+  assert.equal(track.channel, "Channel Name");
+  assert.match(track.id, /^t_\d+_\d+$/);
+});
+
 test("getTrackIndexById returns index or -1", () => {
   const queue = {
     tracks: [{ id: "a" }, { id: "b" }, { id: "c" }],

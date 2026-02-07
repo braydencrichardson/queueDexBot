@@ -17,6 +17,8 @@ function loadEnvVars(sourceEnv = process.env) {
     interactionTimeoutMs: parseInt(sourceEnv.INTERACTION_TIMEOUT_MS || "45000", 10),
     devAlertChannelId: sourceEnv.DEV_ALERT_CHANNEL_ID,
     devLogChannelId: sourceEnv.DEV_LOG_CHANNEL_ID,
+    botActivityName: sourceEnv.BOT_ACTIVITY_NAME || "music with /play",
+    botActivityType: String(sourceEnv.BOT_ACTIVITY_TYPE || "LISTENING").toUpperCase(),
     spotifyClientId: sourceEnv.SPOTIFY_CLIENT_ID,
     spotifyClientSecret: sourceEnv.SPOTIFY_CLIENT_SECRET,
     spotifyRefreshToken: sourceEnv.SPOTIFY_REFRESH_TOKEN,

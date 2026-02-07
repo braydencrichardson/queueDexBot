@@ -189,11 +189,23 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
 registerReadyHandler(client, {
   logInfo,
   logError,
+  presence: {
+    activityName: env.botActivityName,
+    activityType: env.botActivityType,
+  },
   onReady: async () => {
     await warmupProviders();
   },
 });
-registerVoiceStateHandler(client, { queues, stopAndLeaveQueue });
+registerVoiceStateHandler(client, { queues, stopAndLeaveQueue, logError });
+
+client.on("error", (error) => {
+  logError("Discord client error", error);
+});
+
+client.on("shardError", (error) => {
+  logError("Discord shard error", error);
+});
 
 registerInteractionHandler(client, {
   AudioPlayerStatus,
@@ -229,4 +241,7 @@ registerInteractionHandler(client, {
   stopAndLeaveQueue,
 });
 
-client.login(env.token);
+client.login(env.token).catch((error) => {
+  logError("Failed to login to Discord", error);
+  process.exit(1);
+});

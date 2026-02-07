@@ -1,4 +1,5 @@
 let nextTrackId = 1;
+const { sanitizeTrackForDiscord } = require("../utils/discord-content");
 
 function enqueueTracks(queue, tracks) {
   if (!tracks?.length) {
@@ -12,6 +13,7 @@ function ensureTrackId(track) {
   if (!track) {
     return;
   }
+  sanitizeTrackForDiscord(track);
   if (!track.id) {
     track.id = `t_${Date.now()}_${nextTrackId++}`;
   }

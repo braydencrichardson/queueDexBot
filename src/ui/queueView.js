@@ -4,6 +4,7 @@ const {
   getTrackIndexById,
   formatDuration,
 } = require("../queue/utils");
+const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
 
 function formatQueuePage(queue, page, pageSize, selectedTrackId) {
   const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
@@ -19,11 +20,13 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
   ];
   if (queue.current) {
     const nowDuration = formatDuration(queue.current.duration);
-    const nowDisplayUrl = queue.current.displayUrl || queue.current.url;
+    const nowTitle = sanitizeInlineDiscordText(queue.current.title);
+    const nowRequester = sanitizeInlineDiscordText(queue.current.requester);
+    const nowDisplayUrl = sanitizeDiscordText(queue.current.displayUrl || queue.current.url);
     const nowLink = (queue.current.source === "youtube" || queue.current.source === "soundcloud") && nowDisplayUrl
       ? ` (<${nowDisplayUrl}>)`
       : "";
-    lines.push(`Now playing: ${queue.current.title}${nowDuration ? ` (**${nowDuration}**)` : ""}${queue.current.requester ? ` (requested by **${queue.current.requester}**)` : ""}${nowLink}`);
+    lines.push(`Now playing: ${nowTitle}${nowDuration ? ` (**${nowDuration}**)` : ""}${nowRequester ? ` (requested by **${nowRequester}**)` : ""}${nowLink}`);
   }
   if (queue.tracks.length) {
     lines.push(`Up next (page ${safePage}/${totalPages}):`);
@@ -32,13 +35,15 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
       .map((track, index) => {
         ensureTrackId(track);
         const duration = formatDuration(track.duration);
-        const displayUrl = track.displayUrl || track.url;
+        const safeTitle = sanitizeInlineDiscordText(track.title);
+        const safeRequester = sanitizeInlineDiscordText(track.requester);
+        const displayUrl = sanitizeDiscordText(track.displayUrl || track.url);
         const link = (track.source === "youtube" || track.source === "soundcloud") && displayUrl
           ? ` (<${displayUrl}>)`
           : "";
         const number = startIndex + index + 1;
         const numberText = track.id && track.id === selectedTrackId ? `**${number}.**` : `${number}.`;
-        const firstLine = `${numberText} ${track.title}${duration ? ` (**${duration}**)` : ""}${track.requester ? ` (requested by **${track.requester}**)` : ""}`;
+        const firstLine = `${numberText} ${safeTitle}${duration ? ` (**${duration}**)` : ""}${safeRequester ? ` (requested by **${safeRequester}**)` : ""}`;
         const secondLine = link ? `   ${link}` : null;
         return secondLine ? [firstLine, secondLine] : [firstLine];
       });
@@ -78,7 +83,7 @@ function buildQueueViewComponents(queueView, queue) {
       ensureTrackId(track);
       const absoluteIndex = startIndex + index + 1;
       const duration = formatDuration(track.duration);
-      const labelBase = `${absoluteIndex}. ${track.title}`;
+      const labelBase = `${absoluteIndex}. ${sanitizeInlineDiscordText(track.title)}`;
       const label = labelBase.length > 100 ? `${labelBase.slice(0, 97)}...` : labelBase;
       return {
         label,
@@ -179,9 +184,10 @@ function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale 
     const selectedIndex = getTrackIndexById(queue, selectedTrackId);
     if (selectedIndex >= 0) {
       const selectedTrack = queue.tracks[selectedIndex];
+      const selectedTitle = sanitizeInlineDiscordText(selectedTrack.title);
       return {
         ...pageData,
-        content: `${headerLines.join("\n")}\n${pageData.content}\nSelected: ${selectedIndex + 1}. ${selectedTrack.title}`,
+        content: `${headerLines.join("\n")}\n${pageData.content}\nSelected: ${selectedIndex + 1}. ${selectedTitle}`,
       };
     }
   }
@@ -194,7 +200,7 @@ function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = 25) {
   const startIndex = (safePage - 1) * pageSize;
   const options = queue.tracks.slice(startIndex, startIndex + pageSize).map((track, index) => {
     const position = startIndex + index + 1;
-    const labelBase = `${position}. ${track.title}`;
+    const labelBase = `${position}. ${sanitizeInlineDiscordText(track.title)}`;
     const label = labelBase.length > 100 ? `${labelBase.slice(0, 97)}...` : labelBase;
     const description = position === selectedIndex ? "Current position" : undefined;
     return { label, value: String(position), description };

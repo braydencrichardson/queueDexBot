@@ -167,12 +167,12 @@ function createButtonInteractionHandler(deps) {
           components: moveMenu.components,
         });
         const timeout = setTimeout(async () => {
-          const entry = pendingMoves.get(moveMessage.id);
-          if (!entry) {
-            return;
-          }
-          pendingMoves.delete(moveMessage.id);
           try {
+            const entry = pendingMoves.get(moveMessage.id);
+            if (!entry) {
+              return;
+            }
+            pendingMoves.delete(moveMessage.id);
             await moveMessage.edit({ content: "Move request expired.", components: [] });
           } catch (error) {
             logError("Failed to expire move request", error);
@@ -350,12 +350,12 @@ function createButtonInteractionHandler(deps) {
           components: moveMenu.components,
         });
         const timeout = setTimeout(async () => {
-          const entry = pendingMoves.get(moveMessage.id);
-          if (!entry) {
-            return;
-          }
-          pendingMoves.delete(moveMessage.id);
           try {
+            const entry = pendingMoves.get(moveMessage.id);
+            if (!entry) {
+              return;
+            }
+            pendingMoves.delete(moveMessage.id);
             await moveMessage.edit({ content: "Move request expired.", components: [] });
           } catch (error) {
             logError("Failed to expire move request", error);

@@ -1,4 +1,5 @@
 const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
+const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
 
 function createSearchChooser(deps) {
   const {
@@ -18,17 +19,20 @@ function createSearchChooser(deps) {
 
   function formatSearchChooserMessage(query, requesterId, tracks, timeoutMs) {
     const timeoutSeconds = Math.max(1, Math.round(timeoutMs / 1000));
+    const safeQuery = sanitizeDiscordText(query);
     const lines = [
-      `Search results for **${query}** (requested by <@${requesterId}>).`,
+      `Search results for **${safeQuery}** (requested by <@${requesterId}>).`,
       `Choose a result within ${timeoutSeconds}s to queue a track.`,
     ];
     tracks.forEach((track, index) => {
       const duration = formatDuration(track.duration);
-      const displayUrl = track.displayUrl || track.url;
+      const title = sanitizeInlineDiscordText(track.title);
+      const channel = sanitizeInlineDiscordText(track.channel);
+      const displayUrl = sanitizeDiscordText(track.displayUrl || track.url);
       const link = displayUrl ? ` (<${displayUrl}>)` : "";
-      lines.push(`${index + 1}. ${track.title}${duration ? ` (**${duration}**)` : ""}${link}`);
-      if (track.channel) {
-        lines.push(`   ${track.channel}`);
+      lines.push(`${index + 1}. ${title}${duration ? ` (**${duration}**)` : ""}${link}`);
+      if (channel) {
+        lines.push(`   ${channel}`);
       }
     });
     return lines.join("\n");
@@ -53,12 +57,14 @@ function createSearchChooser(deps) {
 
     const content = formatSearchChooserMessage(query, requesterId, options, interactionTimeoutMs);
     const menuOptions = options.map((track, index) => {
-      const baseLabel = `${index + 1}. ${track.title}`;
+      const safeTitle = sanitizeInlineDiscordText(track.title);
+      const safeChannel = sanitizeInlineDiscordText(track.channel);
+      const baseLabel = `${index + 1}. ${safeTitle}`;
       const label = baseLabel.length > 100 ? `${baseLabel.slice(0, 97)}...` : baseLabel;
       const duration = formatDuration(track.duration);
       const channelParts = [];
-      if (track.channel) {
-        channelParts.push(`Channel: ${track.channel}`);
+      if (safeChannel) {
+        channelParts.push(`Channel: ${safeChannel}`);
       }
       if (duration) {
         channelParts.push(duration);
@@ -88,13 +94,13 @@ function createSearchChooser(deps) {
     const message = await interaction.editReply({ content, components: [selectRow, controlRow], fetchReply: true });
 
     const timeout = setTimeout(async () => {
-      const entry = pendingSearches.get(message.id);
-      if (!entry) {
-        return;
-      }
-      pendingSearches.delete(message.id);
       try {
-        await message.edit({ content: `Search expired for **${query}**.`, components: [] });
+        const entry = pendingSearches.get(message.id);
+        if (!entry) {
+          return;
+        }
+        pendingSearches.delete(message.id);
+        await message.edit({ content: `Search expired for **${sanitizeDiscordText(query)}**.`, components: [] });
       } catch (error) {
         logError("Failed to expire search chooser", error);
       }
