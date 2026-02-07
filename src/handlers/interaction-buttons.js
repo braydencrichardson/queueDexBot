@@ -12,9 +12,11 @@ function createButtonInteractionHandler(deps) {
     isSameVoiceChannel,
     announceNowPlayingAction,
     buildNowPlayingControls,
+    buildQueuedActionComponents,
     formatQueueViewContent,
     buildQueueViewComponents,
     buildMoveMenu,
+    getQueuedTrackIndex,
     getTrackIndexById,
     ensureTrackId,
     pendingSearches,
@@ -23,6 +25,7 @@ function createButtonInteractionHandler(deps) {
     queueViews,
     logInfo,
     logError,
+    playNext,
     sendNowPlaying,
     stopAndLeaveQueue,
   } = deps;
@@ -46,14 +49,69 @@ function createButtonInteractionHandler(deps) {
     const member = interaction.guild?.members?.resolve(interaction.user.id);
     const customId = interaction.customId || "";
 
-    if (customId === "search_close") {
+    if (customId === "search_close" || customId === "search_queue_first") {
       const pending = pendingSearches.get(interaction.message.id);
       if (!pending) {
         await interaction.reply({ content: "That search has expired.", ephemeral: true });
         return;
       }
       if (interaction.user.id !== pending.requesterId) {
-        await interaction.reply({ content: "Only the requester can close this search.", ephemeral: true });
+        await interaction.reply({ content: "Only the requester can use this search.", ephemeral: true });
+        return;
+      }
+      if (customId === "search_queue_first") {
+        const selected = pending.options?.[0];
+        if (!selected) {
+          clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
+          await interaction.update({ content: "Search had no selectable results.", components: [] });
+          return;
+        }
+        if (!isSameVoiceChannel(member, queue)) {
+          await interaction.reply({ content: "Join my voice channel to choose a result.", ephemeral: true });
+          return;
+        }
+        clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
+        queue.textChannel = interaction.channel;
+        ensureTrackId(selected);
+        queue.tracks.push(selected);
+        logInfo("Queued first result from search chooser", {
+          title: selected.title,
+          guildId: interaction.guildId,
+          requesterId: pending.requesterId,
+        });
+
+        const queuedIndex = getQueuedTrackIndex(queue, selected);
+        const positionText = queuedIndex >= 0 ? ` (position ${queuedIndex + 1})` : "";
+        const showQueuedControls = queuedIndex >= 1;
+        await interaction.update({
+          content: `Queued: **${selected.title}**${positionText} (requested by **${selected.requester || "unknown"}**).`,
+          components: showQueuedControls ? buildQueuedActionComponents() : [],
+        });
+
+        if (showQueuedControls) {
+          setExpiringMapEntry({
+            store: pendingQueuedActions,
+            key: interaction.message.id,
+            timeoutMs: INTERACTION_TIMEOUT_MS,
+            logError,
+            errorMessage: "Failed to expire queued action controls",
+            onExpire: async () => {
+              await interaction.message.edit({ components: [] });
+            },
+            entry: {
+              guildId: interaction.guildId,
+              ownerId: interaction.user.id,
+              trackId: selected.id,
+              trackTitle: selected.title,
+            },
+          });
+        }
+
+        if (!queue.playing) {
+          playNext(interaction.guildId).catch((error) => {
+            logError("Error starting playback", error);
+          });
+        }
         return;
       }
       clearMapEntryWithTimeout(pendingSearches, interaction.message.id);

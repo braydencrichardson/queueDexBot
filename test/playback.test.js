@@ -94,3 +94,110 @@ test("playNext plays next track, subscribes connection, marks queue view stale, 
   assert.equal(queueViews.get("msg-1").stale, true);
   assert.equal(nowPlayingCalled, true);
 });
+
+test("playNext skips malformed tracks, notifies channel once, and continues playback", async () => {
+  const validTrack = { source: "youtube", url: "https://youtu.be/ok", title: "Playable" };
+  const sentMessages = [];
+  const queue = {
+    tracks: [
+      { source: "soundcloud", title: undefined, url: undefined, id: "bad-1" },
+      { source: "soundcloud", title: undefined, url: undefined, id: "bad-2" },
+      validTrack,
+    ],
+    playing: false,
+    current: null,
+    connection: {
+      subscribedWith: null,
+      subscribe(player) {
+        this.subscribedWith = player;
+      },
+      destroy() {},
+    },
+    player: {
+      played: null,
+      play(resource) {
+        this.played = resource;
+      },
+    },
+    textChannel: {
+      async send(content) {
+        sentMessages.push(content);
+        return { delete: async () => {} };
+      },
+    },
+  };
+
+  let nowPlayingCalled = false;
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => "yt-resource",
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => {
+      nowPlayingCalled = true;
+    },
+    loadingMessageDelayMs: 0,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(queue.current, validTrack);
+  assert.equal(queue.player.played, "yt-resource");
+  assert.equal(nowPlayingCalled, true);
+  assert.equal(sentMessages.some((text) => String(text).includes("Skipped 2 malformed queue entries")), true);
+});
+
+test("playNext notifies channel and leaves when no playable tracks remain", async () => {
+  const sentMessages = [];
+  const queue = {
+    tracks: [
+      { source: "soundcloud", title: undefined, url: undefined, id: "bad-1" },
+      { source: "soundcloud", title: undefined, url: undefined, id: "bad-2" },
+    ],
+    playing: true,
+    current: { title: "Old" },
+    voiceChannel: { id: "vc-1" },
+    connection: {
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    },
+    player: {
+      play() {
+        throw new Error("should not play");
+      },
+    },
+    textChannel: {
+      async send(content) {
+        sentMessages.push(content);
+        return { delete: async () => {} };
+      },
+    },
+  };
+
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => ({}) ,
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    loadingMessageDelayMs: 0,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(queue.playing, false);
+  assert.equal(queue.current, null);
+  assert.equal(queue.connection, null);
+  assert.equal(queue.voiceChannel, null);
+  assert.equal(sentMessages.some((text) => String(text).includes("No playable tracks remain; leaving voice channel.")), true);
+});

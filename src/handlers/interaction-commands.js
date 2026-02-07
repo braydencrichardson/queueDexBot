@@ -25,6 +25,7 @@ function createCommandInteractionHandler(deps) {
     ensureSodiumReady,
     ensurePlayerListeners,
     trySendSearchChooser,
+    getSearchOptionsForQuery,
     resolveTracks,
     isSpotifyUrl,
     hasSpotifyCredentials,
@@ -90,18 +91,9 @@ function createCommandInteractionHandler(deps) {
         ensurePlayerListeners(queue, interaction.guildId);
       }
 
-      try {
-        const handled = await trySendSearchChooser(interaction, query, requester, requesterId);
-        if (handled) {
-          return;
-        }
-      } catch (error) {
-        logError("Failed to send search chooser", error);
-      }
-
       let tracks;
       try {
-        tracks = await resolveTracks(query, requester);
+        tracks = await resolveTracks(query, requester, { allowSearchFallback: false });
       } catch (error) {
         logError("Failed to resolve tracks", error);
         const message = error?.message?.includes("SoundCloud discover links")
@@ -113,8 +105,32 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (!tracks.length) {
-        await interaction.editReply("No results found.");
-        return;
+        try {
+          const searchOptions = await getSearchOptionsForQuery(query, requester);
+          const handled = await trySendSearchChooser(interaction, query, requesterId, searchOptions);
+          if (handled) {
+            return;
+          }
+        } catch (error) {
+          logError("Failed to send search chooser", error);
+        }
+
+        try {
+          tracks = await resolveTracks(query, requester);
+        } catch (error) {
+          logError("Failed to resolve tracks", error);
+          const message = error?.message?.includes("SoundCloud discover links")
+            || error?.message?.includes("Spotify")
+            ? error.message
+            : "Could not load that track or playlist.";
+          await interaction.editReply(message);
+          return;
+        }
+
+        if (!tracks.length) {
+          await interaction.editReply("No results found.");
+          return;
+        }
       }
 
       enqueueTracks(queue, tracks);

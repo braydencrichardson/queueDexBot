@@ -86,6 +86,7 @@ const {
 });
 
 const {
+  getSearchOptionsForQuery,
   getSpotifySearchOptions,
   isProbablyUrl,
   isSpotifyUrl,
@@ -142,18 +143,11 @@ const {
 });
 
 const { trySendSearchChooser } = createSearchChooser({
-  playdl,
-  isSpotifyUrl,
-  hasSpotifyCredentials,
-  getSpotifySearchOptions,
-  isProbablyUrl,
-  searchYouTubeOptions,
   formatDuration,
   interactionTimeoutMs: env.interactionTimeoutMs,
   pendingSearches,
   logInfo,
   logError,
-  searchChooserMaxResults: env.searchChooserMaxResults,
 });
 
 const { createYoutubeResource } = createYoutubeResourceFactory({
@@ -248,6 +242,7 @@ registerInteractionHandler(client, {
   ensureSodiumReady,
   ensurePlayerListeners,
   trySendSearchChooser,
+  getSearchOptionsForQuery,
   resolveTracks,
   isSpotifyUrl,
   hasSpotifyCredentials,

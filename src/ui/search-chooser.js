@@ -1,6 +1,5 @@
 const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
-const { isYoutubeHost, normalizeIncomingUrl } = require("../utils/url-normalization");
 const {
   DISCORD_SELECT_LABEL_MAX_LENGTH,
   DISCORD_SELECT_LABEL_TRUNCATE_LENGTH,
@@ -8,18 +7,11 @@ const {
 
 function createSearchChooser(deps) {
   const {
-    playdl,
-    isSpotifyUrl,
-    hasSpotifyCredentials,
-    getSpotifySearchOptions,
-    isProbablyUrl,
-    searchYouTubeOptions,
     formatDuration,
     interactionTimeoutMs,
     pendingSearches,
     logInfo,
     logError,
-    searchChooserMaxResults,
   } = deps;
 
   function formatSearchChooserMessage(query, requesterId, tracks, timeoutMs) {
@@ -43,28 +35,14 @@ function createSearchChooser(deps) {
     return lines.join("\n");
   }
 
-  async function trySendSearchChooser(interaction, query, requesterName, requesterId) {
-    const queryForLookup = normalizeIncomingUrl(query);
-    let options = [];
-    if (isSpotifyUrl(queryForLookup) && !hasSpotifyCredentials()) {
-      const spotifyType = playdl.sp_validate(queryForLookup);
-      if (spotifyType === "track") {
-        options = await getSpotifySearchOptions(queryForLookup, requesterName);
-      } else {
-        return false;
-      }
-    } else if (!isProbablyUrl(queryForLookup)) {
-      options = await searchYouTubeOptions(queryForLookup, requesterName, null, searchChooserMaxResults);
-    } else if (isYoutubeHost(new URL(queryForLookup).hostname) && playdl.yt_validate(queryForLookup) === "search") {
-      options = await searchYouTubeOptions(queryForLookup, requesterName, null, searchChooserMaxResults);
-    }
-
-    if (!options.length) {
+  async function trySendSearchChooser(interaction, query, requesterId, options) {
+    const chooserOptions = Array.isArray(options) ? options : [];
+    if (!chooserOptions.length) {
       return false;
     }
 
-    const content = formatSearchChooserMessage(query, requesterId, options, interactionTimeoutMs);
-    const menuOptions = options.map((track, index) => {
+    const content = formatSearchChooserMessage(query, requesterId, chooserOptions, interactionTimeoutMs);
+    const menuOptions = chooserOptions.map((track, index) => {
       const safeTitle = sanitizeInlineDiscordText(track.title);
       const safeChannel = sanitizeInlineDiscordText(track.channel);
       const baseLabel = `${index + 1}. ${safeTitle}`;
@@ -96,6 +74,11 @@ function createSearchChooser(deps) {
     );
     const controlRow = new MessageActionRow().addComponents(
       new MessageButton()
+        .setCustomId("search_queue_first")
+        .setLabel("Queue First")
+        .setEmoji("⏩")
+        .setStyle("PRIMARY"),
+      new MessageButton()
         .setCustomId("search_close")
         .setLabel("Close")
         .setEmoji("❌")
@@ -119,14 +102,14 @@ function createSearchChooser(deps) {
     pendingSearches.set(message.id, {
       guildId: interaction.guildId,
       requesterId,
-      options,
+      options: chooserOptions,
       timeout,
     });
 
     logInfo("Posted search chooser", {
       query,
       requesterId,
-      results: options.length,
+      results: chooserOptions.length,
     });
 
     return true;

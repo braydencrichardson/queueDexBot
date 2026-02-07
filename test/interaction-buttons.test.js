@@ -80,3 +80,96 @@ test("np_stop uses stopAndLeaveQueue to stop consistently", async () => {
   assert.deepEqual(editedComponents, [{ type: "row" }]);
   assert.equal(deferred, true);
 });
+
+test("search_queue_first queues first option and starts playback when idle", async () => {
+  const queue = {
+    tracks: [{ id: "existing", title: "Existing Track" }],
+    playing: false,
+    current: null,
+  };
+  const pendingSearches = new Map();
+  pendingSearches.set("search-msg-1", {
+    requesterId: "user-1",
+    options: [
+      {
+        id: "opt-1",
+        title: "First Result",
+        requester: "Requester",
+        source: "youtube",
+        url: "https://youtu.be/SqD_8FGk89o",
+      },
+      {
+        id: "opt-2",
+        title: "Second Result",
+        requester: "Requester",
+        source: "youtube",
+        url: "https://youtu.be/IrdYueB9pY4",
+      },
+    ],
+    timeout: setTimeout(() => {}, 1000),
+  });
+  const pendingQueuedActions = new Map();
+  let updatedPayload = null;
+  let playNextGuildId = null;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: () => ({ type: "row" }),
+    buildQueuedActionComponents: () => [{ type: "queued-row" }],
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getQueuedTrackIndex: (guildQueue, track) => guildQueue.tracks.indexOf(track),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches,
+    pendingMoves: new Map(),
+    pendingQueuedActions,
+    queueViews: new Map(),
+    logInfo: () => {},
+    logError: () => {},
+    playNext: async (guildId) => {
+      playNextGuildId = guildId;
+    },
+    sendNowPlaying: async () => null,
+    stopAndLeaveQueue: () => {},
+  });
+
+  const interaction = {
+    guildId: "guild-1",
+    customId: "search_queue_first",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" } }),
+      },
+    },
+    message: {
+      id: "search-msg-1",
+      edit: async () => {},
+    },
+    channel: {
+      id: "channel-1",
+      send: async () => ({ id: "sent-msg-1" }),
+    },
+    update: async (payload) => {
+      updatedPayload = payload;
+    },
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.equal(pendingSearches.has("search-msg-1"), false);
+  assert.equal(queue.tracks.length, 2);
+  assert.equal(queue.tracks[1].title, "First Result");
+  assert.equal(queue.textChannel, interaction.channel);
+  assert.equal(playNextGuildId, "guild-1");
+  assert.equal(String(updatedPayload?.content || "").includes("Queued: **First Result**"), true);
+  assert.deepEqual(updatedPayload?.components, [{ type: "queued-row" }]);
+  clearTimeout(pendingQueuedActions.get("search-msg-1")?.timeout);
+});

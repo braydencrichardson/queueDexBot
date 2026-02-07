@@ -205,6 +205,10 @@ function createTrackResolver(deps) {
     }
   }
 
+  function isValidYouTubeVideoId(value) {
+    return /^[a-zA-Z0-9_-]{11}$/.test(String(value || ""));
+  }
+
   async function getSpotifySearchOptions(url, requester) {
     const embed = await fetchSpotifyOembed(url);
     const meta = await fetchSpotifyMeta(url);
@@ -481,6 +485,22 @@ function createTrackResolver(deps) {
   }
 
   async function resolveSoundcloudDiscover(url, slug, requester) {
+    function toSoundcloudApiTrack(track) {
+      const title = track?.title || track?.name || null;
+      const permalink = toSoundcloudPermalink(track?.permalink_url || track?.url || track?.uri);
+      if (!title || !permalink) {
+        return null;
+      }
+      return {
+        title,
+        url: permalink,
+        displayUrl: permalink,
+        source: "soundcloud",
+        duration: Math.round((track.duration || 0) / 1000),
+        requester,
+      };
+    }
+
     const soundcloudClientId = getSoundcloudClientId();
     if (!soundcloudClientId) {
       return [];
@@ -488,35 +508,23 @@ function createTrackResolver(deps) {
     const resolveUrl = `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(url)}&client_id=${soundcloudClientId}`;
     const data = await httpGetJson(resolveUrl);
     if (data?.kind === "track") {
-      return [
-        {
-          title: data.title,
-          url: data.permalink_url,
-          source: "soundcloud",
-          duration: Math.round((data.duration || 0) / 1000),
-        },
-      ];
+      const mapped = toSoundcloudApiTrack(data);
+      return mapped ? [mapped] : [];
     }
     if (data?.kind === "playlist") {
       if (Array.isArray(data.tracks) && data.tracks.length) {
-        return data.tracks.map((track) => ({
-          title: track.title,
-          url: track.permalink_url,
-          source: "soundcloud",
-          duration: Math.round((track.duration || 0) / 1000),
-        }));
+        const mappedTracks = data.tracks.map(toSoundcloudApiTrack).filter(Boolean);
+        // SoundCloud resolve can return partially hydrated playlist tracks.
+        // If any item is incomplete, fetch playlist details by id instead.
+        if (mappedTracks.length === data.tracks.length) {
+          return mappedTracks;
+        }
       }
       if (data.id) {
         const playlistUrl = `https://api-v2.soundcloud.com/playlists/${data.id}?client_id=${soundcloudClientId}`;
         const playlist = await httpGetJson(playlistUrl);
         if (Array.isArray(playlist?.tracks)) {
-          return playlist.tracks.map((track) => ({
-            title: track.title,
-            url: track.permalink_url,
-            source: "soundcloud",
-            duration: Math.round((track.duration || 0) / 1000),
-            requester,
-          }));
+          return playlist.tracks.map(toSoundcloudApiTrack).filter(Boolean);
         }
       }
     }
@@ -527,19 +535,30 @@ function createTrackResolver(deps) {
       if (Array.isArray(tracks) && tracks.length) {
         return tracks
           .filter((track) => track?.kind === "track")
-          .map((track) => ({
-            title: track.title,
-            url: track.permalink_url,
-            source: "soundcloud",
-            duration: Math.round((track.duration || 0) / 1000),
-            requester,
-          }));
+          .map(toSoundcloudApiTrack)
+          .filter(Boolean);
       }
     }
     return [];
   }
 
-  async function resolveTracks(query, requester) {
+  async function getSearchOptionsForQuery(query, requester) {
+    await ensureSoundcloudReady();
+    await ensureYoutubeReady();
+    const queryToResolve = normalizeIncomingUrl(query);
+
+    if (isSpotifyUrl(queryToResolve) && !hasSpotifyCredentials()) {
+      const spotifyType = playdl.sp_validate(queryToResolve);
+      if (spotifyType === "track") {
+        return getSpotifySearchOptions(queryToResolve, requester);
+      }
+      return [];
+    }
+
+    return searchYouTubeOptions(queryToResolve, requester, null, searchChooserMaxResults);
+  }
+
+  async function resolveTracks(query, requester, { allowSearchFallback = true } = {}) {
     await ensureSoundcloudReady();
     await ensureYoutubeReady();
     const queryToResolve = normalizeIncomingUrl(query);
@@ -586,11 +605,13 @@ function createTrackResolver(deps) {
 
     const soundcloudCandidates = [];
     if (isSoundcloudUrl) {
-      soundcloudCandidates.push(normalizedSoundcloud);
-      if (queryToResolve !== normalizedSoundcloud) {
-        soundcloudCandidates.push(queryToResolve);
+      // Prefer the original normalized input first, then transformed variants.
+      soundcloudCandidates.push(queryToResolve);
+      if (normalizedSoundcloud !== queryToResolve) {
+        soundcloudCandidates.push(normalizedSoundcloud);
       }
     }
+    const uniqueSoundcloudCandidates = Array.from(new Set(soundcloudCandidates.filter(Boolean)));
 
     async function resolveSoundcloudCandidate(candidate) {
       const type = await playdl.so_validate(candidate);
@@ -667,16 +688,40 @@ function createTrackResolver(deps) {
       }
     }
 
-    if (soundcloudCandidates.length) {
-      for (const candidate of soundcloudCandidates) {
+    if (isSoundcloudUrl && uniqueSoundcloudCandidates.length) {
+      // Prefer SoundCloud API resolve; fallback to play-dl when API does not resolve.
+      for (const candidate of uniqueSoundcloudCandidates) {
+        try {
+          const apiTracks = await resolveSoundcloudDiscover(candidate, null, requester);
+          if (apiTracks.length) {
+            return apiTracks;
+          }
+        } catch {
+          // Keep trying other candidates and fallback paths.
+        }
+      }
+    }
+
+    if (uniqueSoundcloudCandidates.length) {
+      const candidateErrors = [];
+      for (const candidate of uniqueSoundcloudCandidates) {
         try {
           const tracks = await resolveSoundcloudCandidate(candidate);
           if (tracks.length) {
             return tracks;
           }
         } catch (error) {
-          logInfo("SoundCloud candidate failed", { candidate, error });
+          candidateErrors.push({ candidate, error });
         }
+      }
+      if (candidateErrors.length) {
+        logInfo("SoundCloud candidate(s) failed", {
+          failures: candidateErrors.map((entry) => ({
+            candidate: entry.candidate,
+            error: entry.error?.message || String(entry.error),
+          })),
+          totalCandidates: uniqueSoundcloudCandidates.length,
+        });
       }
     }
 
@@ -711,6 +756,9 @@ function createTrackResolver(deps) {
     if (isSpotifyUrl(queryToResolve)) {
       const spotifyType = playdl.sp_validate(queryToResolve);
       if (spotifyType) {
+        if (!hasSpotifyCredentials() && spotifyType === "track" && !allowSearchFallback) {
+          return [];
+        }
         const spotifyTracks = await resolveSpotifyTracks(queryToResolve, spotifyType, requester);
         if (spotifyTracks.length) {
           return spotifyTracks;
@@ -719,19 +767,27 @@ function createTrackResolver(deps) {
     }
 
     const ytType = playdl.yt_validate(queryToResolve);
+    const youtubeId = getYoutubeId(queryToResolve);
+    const youtubeVideoUrlDirectlyPlayable = !isProbablyUrl(queryToResolve) || isValidYouTubeVideoId(youtubeId);
     if (ytType === "video") {
-      const info = await playdl.video_basic_info(queryToResolve);
-      const videoId = info.video_details.id || getYoutubeId(queryToResolve);
-      const videoUrl = toShortYoutubeUrl(videoId || info.video_details.url || queryToResolve);
-      return [
-        {
-          title: info.video_details.title,
-          url: videoUrl,
-          source: "youtube",
-          duration: info.video_details.durationInSec ?? null,
-          requester,
-        },
-      ];
+      if (!youtubeVideoUrlDirectlyPlayable) {
+        if (!allowSearchFallback) {
+          return [];
+        }
+      } else {
+        const info = await playdl.video_basic_info(queryToResolve);
+        const videoId = info.video_details.id || youtubeId || getYoutubeId(queryToResolve);
+        const videoUrl = toShortYoutubeUrl(videoId || info.video_details.url || queryToResolve);
+        return [
+          {
+            title: info.video_details.title,
+            url: videoUrl,
+            source: "youtube",
+            duration: info.video_details.durationInSec ?? null,
+            requester,
+          },
+        ];
+      }
     }
 
     if (ytType === "playlist") {
@@ -748,6 +804,10 @@ function createTrackResolver(deps) {
         .filter((track) => track.url);
     }
 
+    if (!allowSearchFallback) {
+      return [];
+    }
+
     const searchResult = await searchYouTubePreferred(queryToResolve, requester);
     if (!searchResult) {
       return [];
@@ -757,6 +817,7 @@ function createTrackResolver(deps) {
   }
 
   return {
+    getSearchOptionsForQuery,
     getSpotifySearchOptions,
     isProbablyUrl,
     isSpotifyUrl,
