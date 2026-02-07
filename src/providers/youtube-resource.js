@@ -3,6 +3,9 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { PassThrough } = require("stream");
 
+const YT_AUDIO_FORMAT_SELECTOR =
+  "bestaudio[vcodec=none][channels=2]/bestaudio[vcodec=none]/bestaudio[channels=2]/bestaudio/best";
+
 function createYoutubeResourceFactory(deps) {
   const {
     createAudioResource,
@@ -50,7 +53,7 @@ function createYoutubeResourceFactory(deps) {
     const cookiesPath = getYoutubeCookiesNetscapePath();
     const args = [
       "-f",
-      "bestaudio/best",
+      YT_AUDIO_FORMAT_SELECTOR,
       "-o",
       outputPath,
       "--extract-audio",
@@ -109,7 +112,7 @@ function createYoutubeResourceFactory(deps) {
     const cookiesPath = getYoutubeCookiesNetscapePath();
     const args = [
       "-f",
-      "bestaudio/best",
+      YT_AUDIO_FORMAT_SELECTOR,
       "-o",
       "-",
       "--no-playlist",
@@ -204,6 +207,11 @@ function createYoutubeResourceFactory(deps) {
     logInfo("yt-dlp stream started", { attempt, stderr: stderrRef() });
     return createAudioResource(passthrough, {
       inputType: StreamType.Arbitrary,
+      metadata: {
+        source: "youtube",
+        pipeline: "yt-dlp-stream-passthrough",
+        inputType: StreamType.Arbitrary,
+      },
     });
   }
 
@@ -238,6 +246,11 @@ function createYoutubeResourceFactory(deps) {
         });
         return createAudioResource(stream, {
           inputType: StreamType.OggOpus,
+          metadata: {
+            source: "youtube",
+            pipeline: "yt-dlp-download-opus",
+            inputType: StreamType.OggOpus,
+          },
         });
       } catch (error) {
         lastError = error;

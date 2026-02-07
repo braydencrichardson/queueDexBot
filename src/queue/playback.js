@@ -66,6 +66,11 @@ function createQueuePlayback(deps) {
     const stream = await playdl.stream(track.url);
     return createAudioResource(stream.stream, {
       inputType: stream.type ?? StreamType.Arbitrary,
+      metadata: {
+        source: track.source || "unknown",
+        pipeline: "play-dl-passthrough",
+        inputType: stream.type ?? StreamType.Arbitrary,
+      },
     });
   }
 

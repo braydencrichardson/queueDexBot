@@ -170,6 +170,15 @@ function createQueueSession(deps) {
       });
     });
 
+    queue.player.on(AudioPlayerStatus.Playing, () => {
+      const resourceMetadata = queue.player.state?.resource?.metadata;
+      if (resourceMetadata) {
+        logInfo("Audio resource playback started", resourceMetadata);
+      } else {
+        logInfo("Audio resource playback started", { metadata: null });
+      }
+    });
+
     queue.player.on("error", (error) => {
       logError("Audio player error", error);
       const playNext = getPlayNext();
