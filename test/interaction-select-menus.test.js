@@ -61,5 +61,5 @@ test("queue_move_select moves track to exact requested destination when moving d
 
   clearTimeout(pendingMoves.get("move-msg-1")?.timeout);
   assert.deepEqual(queue.tracks.map((track) => track.id), ["t1", "t3", "t4", "t5", "t2"]);
-  assert.equal(updateContent, "Moved **B** to position 5.");
+  assert.equal(updateContent, "**Moved:** B -> position 5.");
 });

@@ -5,6 +5,7 @@ const { loadEnvVars } = require("../src/config/env");
 const {
   DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS,
   DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE,
+  DEFAULT_QUEUE_VIEW_TIMEOUT_MS,
   DEFAULT_QUEUE_VIEW_PAGE_SIZE,
   DEFAULT_SEARCH_CHOOSER_MAX_RESULTS,
   DEFAULT_SOUND_CLOUD_REDIRECT_MAX_HOPS,
@@ -15,6 +16,7 @@ test("loadEnvVars applies defaults for new tuning env vars", () => {
 
   assert.equal(env.botStatus, "online");
   assert.equal(env.queueViewPageSize, DEFAULT_QUEUE_VIEW_PAGE_SIZE);
+  assert.equal(env.queueViewTimeoutMs, DEFAULT_QUEUE_VIEW_TIMEOUT_MS);
   assert.equal(env.queueMoveMenuPageSize, DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE);
   assert.equal(env.playbackLoadingMessageDelayMs, DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS);
   assert.equal(env.soundcloudRedirectMaxHops, DEFAULT_SOUND_CLOUD_REDIRECT_MAX_HOPS);

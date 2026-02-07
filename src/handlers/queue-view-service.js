@@ -3,6 +3,8 @@ function createQueueViewService(deps) {
     queueViews,
     formatQueueViewContent,
     buildQueueViewComponents,
+    queueViewTimeoutMs = 300000,
+    logError,
   } = deps;
 
   function resolveOwnerName(interaction) {
@@ -24,6 +26,7 @@ function createQueueViewService(deps) {
       ownerName: resolveOwnerName(interaction),
       selectedTrackId,
       stale,
+      channelId: interaction.channelId || interaction.channel?.id || null,
     };
   }
 
@@ -39,37 +42,135 @@ function createQueueViewService(deps) {
     };
   }
 
-  function remember(messageId, view) {
-    queueViews.set(messageId, { ...view });
+  async function resolveChannel(client, channelId) {
+    if (!client || !channelId) {
+      return null;
+    }
+    const cached = client.channels?.cache?.get(channelId);
+    if (cached) {
+      return cached;
+    }
+    if (!client.channels?.fetch) {
+      return null;
+    }
+    try {
+      return await client.channels.fetch(channelId);
+    } catch {
+      return null;
+    }
+  }
+
+  function clearViewTimeout(entry) {
+    if (entry?.timeout) {
+      clearTimeout(entry.timeout);
+    }
+  }
+
+  function scheduleViewTimeout(messageId, view, client) {
+    const timeoutMs = Number.isFinite(queueViewTimeoutMs) && queueViewTimeoutMs > 0 ? queueViewTimeoutMs : 300000;
+    return setTimeout(async () => {
+      const current = queueViews.get(messageId);
+      if (!current) {
+        return;
+      }
+      queueViews.delete(messageId);
+      const channel = await resolveChannel(client, current.channelId);
+      if (!channel?.messages?.fetch) {
+        return;
+      }
+      try {
+        const message = await channel.messages.fetch(messageId);
+        await message.edit({ content: "Queue view expired.", components: [] });
+      } catch {
+        // message likely deleted or inaccessible
+      }
+    }, timeoutMs);
+  }
+
+  function remember(messageId, view, channelId = null, client = null) {
+    const existing = queueViews.get(messageId);
+    clearViewTimeout(existing);
+    const next = { ...view, channelId: channelId || view.channelId || existing?.channelId || null };
+    next.timeout = scheduleViewTimeout(messageId, next, client);
+    queueViews.set(messageId, next);
+  }
+
+  async function closeOtherViewsForOwner(ownerId, guildId, keepMessageId, client) {
+    for (const [messageId, existing] of queueViews.entries()) {
+      if (messageId === keepMessageId) {
+        continue;
+      }
+      if (existing.ownerId !== ownerId || existing.guildId !== guildId) {
+        continue;
+      }
+      clearViewTimeout(existing);
+      queueViews.delete(messageId);
+      const channel = await resolveChannel(client, existing.channelId);
+      if (!channel?.messages?.fetch) {
+        continue;
+      }
+      try {
+        const message = await channel.messages.fetch(messageId);
+        await message.edit({ content: "Queue view closed (new view opened).", components: [] });
+      } catch (error) {
+        if (typeof logError === "function") {
+          logError("Failed to close previous queue view", error);
+        }
+      }
+    }
+  }
+
+  async function closeByMessageId(messageId, interactionOrClient = null, reason = "Queue view closed.") {
+    const existing = queueViews.get(messageId);
+    if (!existing) {
+      return;
+    }
+    clearViewTimeout(existing);
+    queueViews.delete(messageId);
+    const client = interactionOrClient?.client || interactionOrClient;
+    const channel = await resolveChannel(client, existing.channelId);
+    if (!channel?.messages?.fetch) {
+      return;
+    }
+    try {
+      const message = await channel.messages.fetch(messageId);
+      await message.edit({ content: reason, components: [] });
+    } catch (error) {
+      if (typeof logError === "function") {
+        logError("Failed to close queue view", error);
+      }
+    }
   }
 
   async function sendToChannel(channel, queue, view) {
+    await closeOtherViewsForOwner(view.ownerId, view.guildId, null, channel?.client);
     const payload = buildPayload(queue, view);
     const message = await channel.send(payload);
-    remember(message.id, view);
+    remember(message.id, view, message.channel?.id, channel?.client);
     return message;
   }
 
   async function reply(interaction, queue, view) {
+    await closeOtherViewsForOwner(view.ownerId, view.guildId, null, interaction.client);
     const payload = buildPayload(queue, view);
     const message = await interaction.reply({
       ...payload,
       fetchReply: true,
     });
-    remember(message.id, view);
+    remember(message.id, view, message.channel?.id || interaction.channelId, interaction.client);
     return message;
   }
 
   async function updateInteraction(interaction, queue, view) {
     const payload = buildPayload(queue, view);
-    remember(interaction.message.id, view);
+    remember(interaction.message.id, view, interaction.channelId || interaction.message?.channel?.id, interaction.client);
     await interaction.update(payload);
   }
 
   async function editMessage(channel, messageId, queue, view, options = {}) {
     const { logError, errorMessage = "Failed to update queue view" } = options;
     const payload = buildPayload(queue, view);
-    remember(messageId, view);
+    remember(messageId, view, view.channelId, channel?.client);
     try {
       const message = await channel.messages.fetch(messageId);
       await message.edit(payload);
@@ -83,6 +184,7 @@ function createQueueViewService(deps) {
   }
 
   return {
+    closeByMessageId,
     createFromInteraction,
     sendToChannel,
     reply,

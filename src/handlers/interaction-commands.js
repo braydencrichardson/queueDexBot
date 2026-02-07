@@ -1,17 +1,27 @@
 const { DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
 const { setExpiringMapEntry } = require("./interaction-helpers");
+const {
+  formatQueueClearedNotice,
+  formatQueueRemovedNotice,
+  formatMovedMessage,
+  formatQueuedMessage,
+  formatQueuedPlaylistMessage,
+} = require("../ui/messages");
+const { formatDuration } = require("../queue/utils");
 
 function createCommandInteractionHandler(deps) {
   const {
     INTERACTION_TIMEOUT_MS,
     QUEUE_VIEW_PAGE_SIZE,
+    QUEUE_VIEW_TIMEOUT_MS,
     joinVoiceChannel,
     getGuildQueue,
     isSameVoiceChannel,
     formatQueueViewContent,
     buildQueueViewComponents,
     buildQueuedActionComponents,
+    buildPlaylistQueuedComponents,
     ensureTrackId,
     getQueuedTrackIndex,
     enqueueTracks,
@@ -20,6 +30,7 @@ function createCommandInteractionHandler(deps) {
     logInfo,
     logError,
     sendNowPlaying,
+    maybeRefreshNowPlayingUpNext = async () => {},
     playNext,
     normalizeQueryInput,
     ensureSodiumReady,
@@ -36,7 +47,23 @@ function createCommandInteractionHandler(deps) {
     queueViews,
     formatQueueViewContent,
     buildQueueViewComponents,
+    queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
+    logError,
   });
+  async function handleResolveErrorReply(interaction, error) {
+    const message = String(error?.message || "");
+    const isDiscoverError = message.includes("SoundCloud discover links");
+    if (isDiscoverError) {
+      await interaction.editReply("Could not load that track or playlist.");
+      await interaction.followUp({
+        content: message,
+        ephemeral: true,
+      });
+      return;
+    }
+    const isDetailedPublicError = message.includes("Spotify");
+    await interaction.editReply(isDetailedPublicError ? message : "Could not load that track or playlist.");
+  }
 
   return async function handleCommandInteraction(interaction) {
     if (!interaction.isCommand()) {
@@ -75,6 +102,7 @@ function createCommandInteractionHandler(deps) {
       logInfo("Resolving track(s)", { query });
       const requester = interaction.member?.displayName || interaction.user.tag;
       const requesterId = interaction.user.id;
+      const hadAnythingQueuedBeforePlay = Boolean(queue.current) || queue.tracks.length > 0;
 
       queue.voiceChannel = voiceChannel;
 
@@ -96,11 +124,7 @@ function createCommandInteractionHandler(deps) {
         tracks = await resolveTracks(query, requester, { allowSearchFallback: false });
       } catch (error) {
         logError("Failed to resolve tracks", error);
-        const message = error?.message?.includes("SoundCloud discover links")
-          || error?.message?.includes("Spotify")
-          ? error.message
-          : "Could not load that track or playlist.";
-        await interaction.editReply(message);
+        await handleResolveErrorReply(interaction, error);
         return;
       }
 
@@ -119,11 +143,7 @@ function createCommandInteractionHandler(deps) {
           tracks = await resolveTracks(query, requester);
         } catch (error) {
           logError("Failed to resolve tracks", error);
-          const message = error?.message?.includes("SoundCloud discover links")
-            || error?.message?.includes("Spotify")
-            ? error.message
-            : "Could not load that track or playlist.";
-          await interaction.editReply(message);
+          await handleResolveErrorReply(interaction, error);
           return;
         }
 
@@ -134,6 +154,7 @@ function createCommandInteractionHandler(deps) {
       }
 
       enqueueTracks(queue, tracks);
+      await maybeRefreshNowPlayingUpNext(queue);
       logInfo("Queued tracks", {
         count: tracks.length,
         first: tracks[0]?.title,
@@ -141,11 +162,11 @@ function createCommandInteractionHandler(deps) {
 
       if (tracks.length === 1) {
         const queuedIndex = getQueuedTrackIndex(queue, tracks[0]);
-        const positionText = queuedIndex >= 0 ? ` (position ${queuedIndex + 1})` : "";
-        const showQueuedControls = queuedIndex >= 1;
+        const position = (hadAnythingQueuedBeforePlay && queuedIndex >= 0) ? queuedIndex + 1 : null;
+        const showQueuedControls = queuedIndex >= 0;
         const message = await interaction.editReply({
-          content: `Queued: **${tracks[0].title}**${positionText}`,
-          components: showQueuedControls ? buildQueuedActionComponents() : [],
+          content: formatQueuedMessage(tracks[0], position, formatDuration),
+          components: showQueuedControls ? buildQueuedActionComponents({ includeMoveControls: queuedIndex >= 1 }) : [],
           fetchReply: true,
         });
         if (showQueuedControls) {
@@ -168,7 +189,10 @@ function createCommandInteractionHandler(deps) {
           });
         }
       } else {
-        await interaction.editReply(`Queued ${tracks.length} tracks from playlist.`);
+        await interaction.editReply({
+          content: formatQueuedPlaylistMessage(tracks.length, requester),
+          components: buildPlaylistQueuedComponents(interaction.user.id),
+        });
       }
 
       if (isSpotifyUrl(query) && !hasSpotifyCredentials()) {
@@ -281,8 +305,10 @@ function createCommandInteractionHandler(deps) {
           await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
           return;
         }
+        const removedCount = queue.tracks.length;
         queue.tracks = [];
-        await interaction.reply("Cleared the queue.");
+        await maybeRefreshNowPlayingUpNext(queue);
+        await interaction.reply(formatQueueClearedNotice(removedCount));
         return;
       }
 
@@ -295,6 +321,7 @@ function createCommandInteractionHandler(deps) {
           const j = Math.floor(Math.random() * (i + 1));
           [queue.tracks[i], queue.tracks[j]] = [queue.tracks[j], queue.tracks[i]];
         }
+        await maybeRefreshNowPlayingUpNext(queue);
         await interaction.reply("Shuffled the queue.");
         return;
       }
@@ -310,7 +337,8 @@ function createCommandInteractionHandler(deps) {
           return;
         }
         const removed = queue.tracks.splice(index - 1, 1)[0];
-        await interaction.reply(`Removed **${removed.title}**.`);
+        await maybeRefreshNowPlayingUpNext(queue);
+        await interaction.reply(formatQueueRemovedNotice(removed));
         return;
       }
 
@@ -327,7 +355,8 @@ function createCommandInteractionHandler(deps) {
         }
         const [moved] = queue.tracks.splice(from - 1, 1);
         queue.tracks.splice(to - 1, 0, moved);
-        await interaction.reply(`Moved **${moved.title}** from ${from} to ${to}.`);
+        await maybeRefreshNowPlayingUpNext(queue);
+        await interaction.reply(formatMovedMessage(moved, to));
       }
     }
   };

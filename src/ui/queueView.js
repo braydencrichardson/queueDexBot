@@ -4,7 +4,8 @@ const {
   getTrackIndexById,
   formatDuration,
 } = require("../queue/utils");
-const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { escapeDiscordMarkdown, sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { formatTrackPrimary, formatTrackSecondary } = require("./messages");
 const {
   DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE,
   DISCORD_MESSAGE_SAFE_MAX_LENGTH,
@@ -24,42 +25,100 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
     .reduce((sum, track) => sum + (typeof track.duration === "number" ? track.duration : 0), 0);
   const totalDuration = formatDuration(totalSeconds);
   const lines = [
-    `Total queued: ${totalQueued}${totalDuration ? ` (${totalDuration})` : ""}`,
+    `**Total queued:** ${totalQueued}${totalDuration ? ` (**${totalDuration}**)` : ""}`,
   ];
   if (queue.current) {
-    const nowDuration = formatDuration(queue.current.duration);
-    const nowTitle = sanitizeInlineDiscordText(queue.current.title);
-    const nowRequester = sanitizeInlineDiscordText(queue.current.requester);
-    const nowDisplayUrl = sanitizeDiscordText(queue.current.displayUrl || queue.current.url);
-    const nowLink = (queue.current.source === "youtube" || queue.current.source === "soundcloud") && nowDisplayUrl
-      ? ` (<${nowDisplayUrl}>)`
-      : "";
-    lines.push(`Now playing: ${nowTitle}${nowDuration ? ` (**${nowDuration}**)` : ""}${nowRequester ? ` (requested by **${nowRequester}**)` : ""}${nowLink}`);
+    const nowPrimary = formatTrackPrimary(queue.current, {
+      formatDuration,
+      includeRequester: true,
+    });
+    const nowSecondary = formatTrackSecondary(queue.current, {
+      includeArtist: true,
+      includeLink: true,
+    });
+    lines.push(`**Now playing:** ${nowPrimary}`);
+    if (nowSecondary) {
+      lines.push(`↳ ${nowSecondary}`);
+    }
   }
   if (queue.tracks.length) {
-    lines.push(`Up next (page ${safePage}/${totalPages}):`);
+    lines.push(`**Up next:** (page ${safePage}/${totalPages})`);
     const preview = queue.tracks
       .slice(startIndex, startIndex + pageSize)
       .map((track, index) => {
         ensureTrackId(track);
-        const duration = formatDuration(track.duration);
-        const safeTitle = sanitizeInlineDiscordText(track.title);
-        const safeRequester = sanitizeInlineDiscordText(track.requester);
-        const displayUrl = sanitizeDiscordText(track.displayUrl || track.url);
-        const link = (track.source === "youtube" || track.source === "soundcloud") && displayUrl
-          ? ` (<${displayUrl}>)`
-          : "";
         const number = startIndex + index + 1;
-        const numberText = track.id && track.id === selectedTrackId ? `**${number}.**` : `${number}.`;
-        const firstLine = `${numberText} ${safeTitle}${duration ? ` (**${duration}**)` : ""}${safeRequester ? ` (requested by **${safeRequester}**)` : ""}`;
-        const secondLine = link ? `   ${link}` : null;
-        return secondLine ? [firstLine, secondLine] : [firstLine];
+        const selectedMark = track.id && track.id === selectedTrackId ? "▶ " : "•  ";
+        const primary = formatTrackPrimary(track, {
+          formatDuration,
+          includeRequester: true,
+        });
+        const secondary = formatTrackSecondary(track, {
+          includeArtist: true,
+          includeLink: true,
+        });
+        const firstLine = `${selectedMark}**${number}.** ${primary}`;
+        return secondary ? [firstLine, `   ↳ ${secondary}`] : [firstLine];
       });
     const maxLength = DISCORD_MESSAGE_SAFE_MAX_LENGTH;
     let previewLines = preview.flat();
     let content = [...lines, previewLines.join("\n")].join("\n");
     if (content.length > maxLength) {
-      const stripLink = (line) => line.replace(/\s*\(<https?:\/\/[^>]+>\)/g, "");
+      const previewWithTruncatedLinks = queue.tracks
+        .slice(startIndex, startIndex + pageSize)
+        .map((track, index) => {
+          ensureTrackId(track);
+          const number = startIndex + index + 1;
+          const isSelected = Boolean(track.id && track.id === selectedTrackId);
+          const selectedMark = isSelected ? "▶ " : "•  ";
+          const primary = formatTrackPrimary(track, {
+            formatDuration,
+            includeRequester: true,
+          });
+          const secondary = formatTrackSecondary(track, {
+            includeArtist: true,
+            includeLink: true,
+            truncateLinkDisplay: !isSelected,
+          });
+          const firstLine = `${selectedMark}**${number}.** ${primary}`;
+          return secondary ? [firstLine, `   ↳ ${secondary}`] : [firstLine];
+        });
+      const truncatedPreviewLines = previewWithTruncatedLinks.flat();
+      const truncatedContent = [...lines, truncatedPreviewLines.join("\n")].join("\n");
+      if (truncatedContent.length <= maxLength) {
+        previewLines = truncatedPreviewLines;
+        content = truncatedContent;
+      }
+    }
+    if (content.length > maxLength) {
+      const previewWithPriorityLinks = queue.tracks
+        .slice(startIndex, startIndex + pageSize)
+        .map((track, index) => {
+          ensureTrackId(track);
+          const number = startIndex + index + 1;
+          const isSelected = Boolean(track.id && track.id === selectedTrackId);
+          const selectedMark = isSelected ? "▶ " : "•  ";
+          const primary = formatTrackPrimary(track, {
+            formatDuration,
+            includeRequester: true,
+          });
+          const keepLink = isSelected || index === 0;
+          const secondary = formatTrackSecondary(track, {
+            includeArtist: true,
+            includeLink: keepLink,
+          });
+          const firstLine = `${selectedMark}**${number}.** ${primary}`;
+          return secondary ? [firstLine, `   ↳ ${secondary}`] : [firstLine];
+        });
+      const priorityPreviewLines = previewWithPriorityLinks.flat();
+      const priorityContent = [...lines, priorityPreviewLines.join("\n")].join("\n");
+      if (priorityContent.length <= maxLength) {
+        previewLines = priorityPreviewLines;
+        content = priorityContent;
+      }
+    }
+    if (content.length > maxLength) {
+      const stripLink = (line) => line.replace(/\s*\((<https?:\/\/[^>]+>|\[[^\]]+\]\(<https?:\/\/[^>]+>\))\)/g, "");
       const stripRequester = (line) => line.replace(/\s*\(requested by \*\*[^)]+\*\*\)/g, "");
       const clampLine = (line) => (
         line.length > QUEUE_PREVIEW_LINE_CLAMP_MAX_LENGTH
@@ -81,7 +140,7 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
     return { content, page: safePage, totalPages };
   }
 
-  lines.push("Up next: (empty)");
+  lines.push("**Up next:** (empty)");
   return { content: lines.join("\n"), page: safePage, totalPages };
 }
 
@@ -119,14 +178,20 @@ function buildQueueViewComponents(queueView, queue) {
 
   const actionRow = new MessageActionRow().addComponents(
     new MessageButton()
-      .setCustomId("queue_remove")
-      .setLabel("Remove")
-      .setEmoji("🗑️")
-      .setStyle("DANGER")
+      .setCustomId("queue_backward")
+      .setLabel("Move Up")
+      .setEmoji("⬆️")
+      .setStyle("SECONDARY")
+      .setDisabled(!options.length || !queueView.selectedTrackId),
+    new MessageButton()
+      .setCustomId("queue_forward")
+      .setLabel("Move Down")
+      .setEmoji("⬇️")
+      .setStyle("SECONDARY")
       .setDisabled(!options.length || !queueView.selectedTrackId),
     new MessageButton()
       .setCustomId("queue_move")
-      .setLabel("Move")
+      .setLabel("Move To")
       .setEmoji("↔️")
       .setStyle("SECONDARY")
       .setDisabled(!options.length || !queueView.selectedTrackId),
@@ -135,19 +200,46 @@ function buildQueueViewComponents(queueView, queue) {
       .setLabel("Move to First")
       .setEmoji("⏫")
       .setStyle("PRIMARY")
+      .setDisabled(!options.length || !queueView.selectedTrackId),
+    new MessageButton()
+      .setCustomId("queue_remove")
+      .setLabel("Remove")
+      .setEmoji("🗑️")
+      .setStyle("DANGER")
       .setDisabled(!options.length || !queueView.selectedTrackId)
+  );
+
+  const selectNavRow = new MessageActionRow().addComponents(
+    new MessageButton()
+      .setCustomId("queue_select_prev")
+      .setLabel("Select Previous")
+      .setEmoji("⬅️")
+      .setStyle("SECONDARY")
+      .setDisabled(!options.length),
+    new MessageButton()
+      .setCustomId("queue_select_next")
+      .setLabel("Select Next")
+      .setEmoji("➡️")
+      .setStyle("SECONDARY")
+      .setDisabled(!options.length),
+    new MessageButton()
+      .setCustomId("queue_select_last")
+      .setLabel("Select Last")
+      .setEmoji("⏭️")
+      .setStyle("SECONDARY")
+      .setDisabled(!options.length)
   );
 
   const navRow = new MessageActionRow().addComponents(
     new MessageButton()
       .setCustomId("queue_prev")
-      .setLabel("Prev")
+      .setLabel("Previous Page")
       .setEmoji("⬅️")
       .setStyle("SECONDARY")
       .setDisabled(safePage <= 1),
     new MessageButton()
       .setCustomId("queue_next")
-      .setLabel("Next")
+      .setLabel("Next Page")
       .setEmoji("➡️")
       .setStyle("SECONDARY")
       .setDisabled(safePage >= totalPages),
@@ -183,14 +275,14 @@ function buildQueueViewComponents(queueView, queue) {
       .setStyle("SECONDARY")
   );
 
-  return [selectRow, actionRow, navRow, navRow2];
+  return [selectRow, navRow, actionRow, selectNavRow, navRow2];
 }
 
 function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale, ownerName } = {}) {
   const pageData = formatQueuePage(queue, page, pageSize, selectedTrackId);
-  const safeOwnerName = sanitizeInlineDiscordText(ownerName || "requester");
+  const safeOwnerName = escapeDiscordMarkdown(ownerName || "requester");
   const headerLines = [
-    `_Controls limited to ${safeOwnerName}._`,
+    `_**Queue** controls limited to **${safeOwnerName}.**_`,
   ];
   if (stale) {
     headerLines.unshift("_Queue view may be stale — press Refresh._");
@@ -199,13 +291,13 @@ function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale,
     const selectedIndex = getTrackIndexById(queue, selectedTrackId);
     if (selectedIndex >= 0) {
       const selectedTrack = queue.tracks[selectedIndex];
-      const selectedTitle = sanitizeInlineDiscordText(selectedTrack.title);
-      return {
-        ...pageData,
-        content: `${headerLines.join("\n")}\n${pageData.content}\nSelected: ${selectedIndex + 1}. ${selectedTitle}`,
-      };
+      const selectedTitle = escapeDiscordMarkdown(selectedTrack.title);
+        return {
+          ...pageData,
+          content: `${headerLines.join("\n")}\n${pageData.content}\n**Selected:** ${selectedIndex + 1}. ${selectedTitle}`,
+        };
+      }
     }
-  }
   return { ...pageData, content: `${headerLines.join("\n")}\n${pageData.content}` };
 }
 
@@ -236,13 +328,13 @@ function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = DEFAULT_QUEUE_
   const controlRow = new MessageActionRow().addComponents(
     new MessageButton()
       .setCustomId("move_prev")
-      .setLabel("Prev")
+      .setLabel("Previous Page")
       .setEmoji("⬅️")
       .setStyle("SECONDARY")
       .setDisabled(safePage <= 1),
     new MessageButton()
       .setCustomId("move_next")
-      .setLabel("Next")
+      .setLabel("Next Page")
       .setEmoji("➡️")
       .setStyle("SECONDARY")
       .setDisabled(safePage >= totalPages),
@@ -257,7 +349,6 @@ function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = DEFAULT_QUEUE_
       .setEmoji("❌")
       .setStyle("SECONDARY")
   );
-
   return { components: [selectRow, controlRow], page: safePage, totalPages };
 }
 

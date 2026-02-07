@@ -1,5 +1,6 @@
 const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { formatTrackSummary } = require("./messages");
 const {
   DISCORD_SELECT_LABEL_MAX_LENGTH,
   DISCORD_SELECT_LABEL_TRUNCATE_LENGTH,
@@ -22,15 +23,9 @@ function createSearchChooser(deps) {
       `Choose a result within ${timeoutSeconds}s to queue a track.`,
     ];
     tracks.forEach((track, index) => {
-      const duration = formatDuration(track.duration);
-      const title = sanitizeInlineDiscordText(track.title);
       const channel = sanitizeInlineDiscordText(track.channel);
-      const displayUrl = sanitizeDiscordText(track.displayUrl || track.url);
-      const link = displayUrl ? ` (<${displayUrl}>)` : "";
-      lines.push(`${index + 1}. ${title}${duration ? ` (**${duration}**)` : ""}${link}`);
-      if (channel) {
-        lines.push(`   ${channel}`);
-      }
+      const summary = formatTrackSummary(track, { formatDuration, includeRequester: false, includeLink: true });
+      lines.push(`${index + 1}. ${summary}${channel ? ` | channel: ${channel}` : ""}`);
     });
     return lines.join("\n");
   }

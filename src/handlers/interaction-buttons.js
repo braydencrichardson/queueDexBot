@@ -1,12 +1,22 @@
 const { DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE, DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
 const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
+const {
+  formatMovePrompt,
+  formatQueueClearedNotice,
+  formatQueueRemovedNotice,
+  formatMovedMessage,
+  formatQueuedMessage,
+  formatRemovedMessage,
+} = require("../ui/messages");
+const { formatDuration } = require("../queue/utils");
 
 function createButtonInteractionHandler(deps) {
   const {
     AudioPlayerStatus,
     INTERACTION_TIMEOUT_MS,
     QUEUE_VIEW_PAGE_SIZE,
+    QUEUE_VIEW_TIMEOUT_MS,
     QUEUE_MOVE_MENU_PAGE_SIZE,
     getGuildQueue,
     isSameVoiceChannel,
@@ -27,6 +37,7 @@ function createButtonInteractionHandler(deps) {
     logError,
     playNext,
     sendNowPlaying,
+    maybeRefreshNowPlayingUpNext = async () => {},
     stopAndLeaveQueue,
   } = deps;
   const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : DEFAULT_QUEUE_VIEW_PAGE_SIZE;
@@ -37,7 +48,22 @@ function createButtonInteractionHandler(deps) {
     queueViews,
     formatQueueViewContent,
     buildQueueViewComponents,
+    queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
+    logError,
   });
+  async function sendQueueActionNotice(channel, content) {
+    if (!channel?.send || !content) {
+      return;
+    }
+    try {
+      await channel.send(content);
+    } catch (error) {
+      logError("Failed to send queue action notice", error);
+    }
+  }
+  function getActorName(interaction, member) {
+    return member?.displayName || interaction.user?.username || interaction.user?.tag || "Someone";
+  }
 
   return async function handleButtonInteraction(interaction) {
     if (!interaction.guildId) {
@@ -48,6 +74,28 @@ function createButtonInteractionHandler(deps) {
     const queue = getGuildQueue(interaction.guildId);
     const member = interaction.guild?.members?.resolve(interaction.user.id);
     const customId = interaction.customId || "";
+
+    if (customId.startsWith("playlist_view_queue")) {
+      const ownerId = customId.split(":")[1];
+      if (ownerId && ownerId !== interaction.user.id) {
+        await interaction.reply({ content: "Only the requester can use this queue shortcut.", ephemeral: true });
+        return;
+      }
+      if (!queue.current && !queue.tracks.length) {
+        await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+        return;
+      }
+      const pageSize = queueViewPageSize;
+      const view = queueViewService.createFromInteraction(interaction, {
+        page: 1,
+        pageSize,
+        selectedTrackId: null,
+        stale: false,
+      });
+      await queueViewService.sendToChannel(interaction.channel, queue, view);
+      await interaction.deferUpdate();
+      return;
+    }
 
     if (customId === "search_close" || customId === "search_queue_first") {
       const pending = pendingSearches.get(interaction.message.id);
@@ -74,6 +122,7 @@ function createButtonInteractionHandler(deps) {
         queue.textChannel = interaction.channel;
         ensureTrackId(selected);
         queue.tracks.push(selected);
+        await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Queued first result from search chooser", {
           title: selected.title,
           guildId: interaction.guildId,
@@ -81,11 +130,11 @@ function createButtonInteractionHandler(deps) {
         });
 
         const queuedIndex = getQueuedTrackIndex(queue, selected);
-        const positionText = queuedIndex >= 0 ? ` (position ${queuedIndex + 1})` : "";
-        const showQueuedControls = queuedIndex >= 1;
+        const position = queuedIndex >= 0 ? queuedIndex + 1 : null;
+        const showQueuedControls = queuedIndex >= 0;
         await interaction.update({
-          content: `Queued: **${selected.title}**${positionText} (requested by **${selected.requester || "unknown"}**).`,
-          components: showQueuedControls ? buildQueuedActionComponents() : [],
+          content: formatQueuedMessage(selected, position, formatDuration),
+          components: showQueuedControls ? buildQueuedActionComponents({ includeMoveControls: queuedIndex >= 1 }) : [],
         });
 
         if (showQueuedControls) {
@@ -207,7 +256,7 @@ function createButtonInteractionHandler(deps) {
         const page = Math.floor(trackIndex / pageSize) + 1;
         const moveMenu = buildMoveMenu(queue, selectedIndex, page, pageSize);
         const moveMessage = await interaction.channel.send({
-          content: `Move **${pending.trackTitle || "selected track"}** to (page ${moveMenu.page}/${moveMenu.totalPages}):`,
+          content: formatMovePrompt({ title: pending.trackTitle || "selected track" }, moveMenu.page, moveMenu.totalPages),
           components: moveMenu.components,
         });
         setExpiringMapEntry({
@@ -225,6 +274,7 @@ function createButtonInteractionHandler(deps) {
             sourceIndex: selectedIndex,
             trackId: pending.trackId,
             queueViewMessageId: null,
+            channelId: interaction.channel?.id,
             page: moveMenu.page,
             pageSize,
           },
@@ -236,9 +286,10 @@ function createButtonInteractionHandler(deps) {
       if (customId === "queued_first") {
         const [moved] = queue.tracks.splice(trackIndex, 1);
         queue.tracks.unshift(moved);
+        await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Moved track to front via queued controls", { title: moved?.title, user: interaction.user.tag });
         await interaction.update({
-          content: `Moved **${moved.title}** to position 1.`,
+          content: formatMovedMessage(moved, 1),
           components: [],
         });
         clearMapEntryWithTimeout(pendingQueuedActions, interaction.message.id);
@@ -247,9 +298,14 @@ function createButtonInteractionHandler(deps) {
 
       if (customId === "queued_remove") {
         const [removed] = queue.tracks.splice(trackIndex, 1);
+        await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Removed track via queued controls", { title: removed?.title, user: interaction.user.tag });
+        await sendQueueActionNotice(
+          interaction.channel,
+          formatQueueRemovedNotice(removed, getActorName(interaction, member))
+        );
         await interaction.update({
-          content: `Removed **${removed.title}** from the queue.`,
+          content: formatRemovedMessage(removed),
           components: [],
         });
         clearMapEntryWithTimeout(pendingQueuedActions, interaction.message.id);
@@ -285,8 +341,9 @@ function createButtonInteractionHandler(deps) {
         }
         const [moved] = guildQueue.tracks.splice(currentIndex - 1, 1);
         guildQueue.tracks.unshift(moved);
+        await maybeRefreshNowPlayingUpNext(guildQueue);
         clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
-        await interaction.update({ content: `Moved **${moved.title}** to position 1.`, components: [] });
+        await interaction.update({ content: formatMovedMessage(moved, 1), components: [] });
 
         const queueView = queueViews.get(pending.queueViewMessageId);
         if (queueView) {
@@ -309,13 +366,15 @@ function createButtonInteractionHandler(deps) {
         return;
       }
       pending.sourceIndex = currentIndex;
-      const moveMenu = buildMoveMenu(guildQueue, currentIndex, pending.page, pending.pageSize);
+      const updatedIndex = pending.trackId ? getTrackIndexById(guildQueue, pending.trackId) + 1 : pending.sourceIndex;
+      pending.sourceIndex = updatedIndex || pending.sourceIndex;
+      const moveMenu = buildMoveMenu(guildQueue, pending.sourceIndex, pending.page, pending.pageSize);
       pending.page = moveMenu.page;
       pendingMoves.set(interaction.message.id, pending);
       const track = guildQueue.tracks[pending.sourceIndex - 1];
       const title = track?.title || "selected track";
       await interaction.update({
-        content: `Move **${title}** to (page ${moveMenu.page}/${moveMenu.totalPages}):`,
+        content: formatMovePrompt({ title }, moveMenu.page, moveMenu.totalPages),
         components: moveMenu.components,
       });
       return;
@@ -333,8 +392,8 @@ function createButtonInteractionHandler(deps) {
       }
 
       if (customId === "queue_close") {
-        queueViews.delete(interaction.message.id);
-        await interaction.update({ content: "Queue view closed.", components: [] });
+        await interaction.deferUpdate();
+        await queueViewService.closeByMessageId(interaction.message.id, interaction, "Queue view closed.");
         return;
       }
 
@@ -342,6 +401,28 @@ function createButtonInteractionHandler(deps) {
         queueView.page = Math.max(1, queueView.page - 1);
       } else if (customId === "queue_next") {
         queueView.page += 1;
+      } else if (customId === "queue_select_prev" || customId === "queue_select_next" || customId === "queue_select_last") {
+        if (!queue.tracks.length) {
+          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+          return;
+        }
+        const selectedIndex = queueView.selectedTrackId
+          ? getTrackIndexById(queue, queueView.selectedTrackId)
+          : -1;
+        let nextIndex;
+        if (customId === "queue_select_last") {
+          nextIndex = queue.tracks.length - 1;
+        } else if (selectedIndex < 0) {
+          nextIndex = customId === "queue_select_prev" ? queue.tracks.length - 1 : 0;
+        } else if (customId === "queue_select_prev") {
+          nextIndex = (selectedIndex - 1 + queue.tracks.length) % queue.tracks.length;
+        } else {
+          nextIndex = (selectedIndex + 1) % queue.tracks.length;
+        }
+        const nextTrack = queue.tracks[nextIndex];
+        ensureTrackId(nextTrack);
+        queueView.selectedTrackId = nextTrack.id;
+        queueView.page = Math.floor(nextIndex / queueView.pageSize) + 1;
       } else if (customId === "queue_refresh") {
         // no-op; just re-render below
       } else if (customId === "queue_nowplaying") {
@@ -354,15 +435,22 @@ function createButtonInteractionHandler(deps) {
             [queue.tracks[i], queue.tracks[j]] = [queue.tracks[j], queue.tracks[i]];
           }
         }
+        await maybeRefreshNowPlayingUpNext(queue);
         queueView.selectedTrackId = null;
       } else if (customId === "queue_clear") {
         if (!queue.tracks.length) {
           await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
           return;
         }
+        const removedCount = queue.tracks.length;
         queue.tracks = [];
+        await maybeRefreshNowPlayingUpNext(queue);
         queueView.selectedTrackId = null;
         logInfo("Cleared queue via queue view", { user: interaction.user.tag });
+        await sendQueueActionNotice(
+          interaction.channel,
+          formatQueueClearedNotice(removedCount, getActorName(interaction, member))
+        );
       } else if (customId === "queue_move") {
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
@@ -377,7 +465,7 @@ function createButtonInteractionHandler(deps) {
         const movePage = Math.floor((selectedIndex - 1) / movePageSize) + 1;
         const moveMenu = buildMoveMenu(queue, selectedIndex, movePage, movePageSize);
         const moveMessage = await interaction.channel.send({
-          content: `Move **${queue.tracks[selectedIndex - 1].title}** to (page ${moveMenu.page}/${moveMenu.totalPages}):`,
+          content: formatMovePrompt(queue.tracks[selectedIndex - 1], moveMenu.page, moveMenu.totalPages),
           components: moveMenu.components,
         });
         setExpiringMapEntry({
@@ -395,10 +483,31 @@ function createButtonInteractionHandler(deps) {
             sourceIndex: selectedIndex,
             trackId: selectedTrack.id,
             queueViewMessageId: interaction.message.id,
+            channelId: interaction.channel?.id,
             page: moveMenu.page,
             pageSize: movePageSize,
           },
         });
+      } else if (customId === "queue_backward" || customId === "queue_forward") {
+        const selectedIndex = queueView.selectedTrackId
+          ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
+          : 0;
+        if (!selectedIndex || !queue.tracks[selectedIndex - 1]) {
+          await interaction.reply({ content: "Select a track to move.", ephemeral: true });
+          return;
+        }
+        const step = customId === "queue_backward" ? -1 : 1;
+        const targetIndex = selectedIndex + step;
+        if (targetIndex < 1 || targetIndex > queue.tracks.length) {
+          await interaction.reply({ content: "Track is already at the edge.", ephemeral: true });
+          return;
+        }
+        const [moved] = queue.tracks.splice(selectedIndex - 1, 1);
+        queue.tracks.splice(targetIndex - 1, 0, moved);
+        await maybeRefreshNowPlayingUpNext(queue);
+        ensureTrackId(moved);
+        queueView.selectedTrackId = moved.id || queueView.selectedTrackId;
+        queueView.page = Math.floor((targetIndex - 1) / queueView.pageSize) + 1;
       } else if (customId === "queue_remove") {
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
@@ -408,7 +517,12 @@ function createButtonInteractionHandler(deps) {
           return;
         }
         const [removed] = queue.tracks.splice(selectedIndex - 1, 1);
+        await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Removed track via queue view", { title: removed?.title, user: interaction.user.tag });
+        await sendQueueActionNotice(
+          interaction.channel,
+          formatQueueRemovedNotice(removed, getActorName(interaction, member))
+        );
         queueView.selectedTrackId = null;
       } else if (customId === "queue_front") {
         const selectedIndex = queueView.selectedTrackId
@@ -420,6 +534,7 @@ function createButtonInteractionHandler(deps) {
         }
         const [moved] = queue.tracks.splice(selectedIndex - 1, 1);
         queue.tracks.unshift(moved);
+        await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Moved track to front via queue view", { title: moved?.title, user: interaction.user.tag });
         queueView.selectedTrackId = moved.id || queueView.selectedTrackId;
         queueView.page = 1;

@@ -40,6 +40,22 @@ function createTrackResolver(deps) {
     if (!value) {
       return value;
     }
+    const extractTrackId = (text) => {
+      const decoded = decodeURIComponent(String(text || ""));
+      const tokenMatch = decoded.match(/soundcloud:tracks:(\d+)/);
+      if (tokenMatch) {
+        return tokenMatch[1];
+      }
+      const apiMatch = decoded.match(/soundcloud\.com\/tracks\/(\d+)/);
+      if (apiMatch) {
+        return apiMatch[1];
+      }
+      const plainMatch = decoded.match(/(?:^|\/)tracks\/(\d+)(?:$|[/?#])/);
+      if (plainMatch) {
+        return plainMatch[1];
+      }
+      return null;
+    };
     try {
       const url = new URL(value);
       const decodedPath = decodeURIComponent(url.pathname);
@@ -50,12 +66,15 @@ function createTrackResolver(deps) {
         return id ? `https://soundcloud.com/tracks/${id}` : value;
       }
       if (url.hostname === "api.soundcloud.com" && parts[0] === "tracks" && parts[1]) {
-        return `https://soundcloud.com/tracks/${parts[1]}`;
+        const id = extractTrackId(parts[1]) || parts[1];
+        return `https://soundcloud.com/tracks/${id}`;
       }
     } catch {
-      return value;
+      const id = extractTrackId(value);
+      return id ? `https://soundcloud.com/tracks/${id}` : value;
     }
-    return value;
+    const id = extractTrackId(value);
+    return id ? `https://soundcloud.com/tracks/${id}` : value;
   }
 
   function getSoundcloudTrackId(value) {
@@ -495,6 +514,8 @@ function createTrackResolver(deps) {
         title,
         url: permalink,
         displayUrl: permalink,
+        artist: track?.user?.username || track?.user?.name || track?.publisher_metadata?.artist || null,
+        channel: track?.user?.username || track?.user?.name || null,
         source: "soundcloud",
         duration: Math.round((track.duration || 0) / 1000),
         requester,
@@ -623,6 +644,8 @@ function createTrackResolver(deps) {
             title: track.name,
             url: track.url,
             displayUrl,
+            artist: track.user?.name || track.publisher?.artist || track.publisher_metadata?.artist || null,
+            channel: track.user?.name || null,
             source: "soundcloud",
             duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
             requester,
@@ -638,6 +661,8 @@ function createTrackResolver(deps) {
             title: track.name,
             url: track.url,
             displayUrl: await resolveSoundcloudDisplayUrl(track.url, track.permalink_url),
+            artist: track.user?.name || track.publisher?.artist || track.publisher_metadata?.artist || null,
+            channel: track.user?.name || null,
             source: "soundcloud",
             duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
             requester,
@@ -653,6 +678,8 @@ function createTrackResolver(deps) {
             title: info.name,
             url: info.url,
             displayUrl,
+            artist: info.user?.name || info.publisher?.artist || info.publisher_metadata?.artist || null,
+            channel: info.user?.name || null,
             source: "soundcloud",
             duration: info.durationInSec ?? Math.round((info.durationInMs || 0) / 1000),
             requester,
@@ -666,6 +693,8 @@ function createTrackResolver(deps) {
             title: track.name,
             url: track.url,
             displayUrl: await resolveSoundcloudDisplayUrl(track.url, track.permalink_url),
+            artist: track.user?.name || track.publisher?.artist || track.publisher_metadata?.artist || null,
+            channel: track.user?.name || null,
             source: "soundcloud",
             duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
             requester,
@@ -677,11 +706,19 @@ function createTrackResolver(deps) {
     }
 
     if (soundcloudDiscoverSlug) {
+      if (!getSoundcloudClientId()) {
+        throw new Error(
+          "SoundCloud discover links require API access and cannot be resolved without a SoundCloud client id."
+        );
+      }
       try {
         const apiTracks = await resolveSoundcloudDiscover(queryToResolve, soundcloudDiscoverSlug, requester);
         if (apiTracks.length) {
           return apiTracks;
         }
+        throw new Error(
+          "SoundCloud discover links are personalized and cannot be resolved by the public API. Use a direct playlist link instead."
+        );
       } catch (error) {
         soundcloudDiscoverFailed = true;
         logError("SoundCloud discover resolve failed", error);
@@ -725,28 +762,6 @@ function createTrackResolver(deps) {
       }
     }
 
-    if (soundcloudDiscoverSlug) {
-      try {
-        const results = await playdl.search(soundcloudDiscoverSlug, {
-          limit: 1,
-          source: { soundcloud: "playlists" },
-        });
-        if (results.length) {
-          const playlist = await playdl.soundcloud(results[0].url);
-          const tracks = await playlist.all_tracks();
-          return tracks.map((track) => ({
-            title: track.name,
-            url: track.url,
-            source: "soundcloud",
-            duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
-            requester,
-          }));
-        }
-      } catch (error) {
-        logError("SoundCloud discover search failed", error);
-      }
-    }
-
     if (soundcloudDiscoverFailed) {
       throw new Error(
         "SoundCloud discover links are personalized and cannot be resolved by the public API. Use a direct playlist link instead."
@@ -782,6 +797,8 @@ function createTrackResolver(deps) {
           {
             title: info.video_details.title,
             url: videoUrl,
+            artist: info.video_details.channel?.name || info.video_details.channel?.title || null,
+            channel: info.video_details.channel?.name || info.video_details.channel?.title || null,
             source: "youtube",
             duration: info.video_details.durationInSec ?? null,
             requester,
@@ -797,6 +814,8 @@ function createTrackResolver(deps) {
         .map((item) => ({
           title: item.title,
           url: toShortYoutubeUrl(item.id || item.url),
+          artist: item.channel?.name || item.author?.name || null,
+          channel: item.channel?.name || item.author?.name || null,
           source: "youtube",
           duration: item.durationInSec ?? null,
           requester,

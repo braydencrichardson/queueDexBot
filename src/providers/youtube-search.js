@@ -145,6 +145,7 @@ async function searchYouTubeOptions(query, requester, matchOptions, limit = YOUT
         title: video.title,
         url: toShortYoutubeUrl(video.videoId || video.url),
         channel: video.author?.name || video.channel?.name || null,
+        artist: video.author?.name || video.channel?.name || null,
         source: "youtube",
         duration: typeof video.seconds === "number" ? video.seconds : null,
         requester,
@@ -171,6 +172,8 @@ async function searchYouTubePreferred(query, requester, matchOptions) {
       return {
         title: top.title,
         url: toShortYoutubeUrl(id || top.url),
+        channel: top.author?.name || top.channel?.name || null,
+        artist: top.author?.name || top.channel?.name || null,
         source: "youtube",
         duration: typeof top.seconds === "number" ? top.seconds : null,
         requester,

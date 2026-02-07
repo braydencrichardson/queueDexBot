@@ -169,7 +169,7 @@ test("search_queue_first queues first option and starts playback when idle", asy
   assert.equal(queue.tracks[1].title, "First Result");
   assert.equal(queue.textChannel, interaction.channel);
   assert.equal(playNextGuildId, "guild-1");
-  assert.equal(String(updatedPayload?.content || "").includes("Queued: **First Result**"), true);
+  assert.equal(String(updatedPayload?.content || "").includes("**Queued:** First Result"), true);
   assert.deepEqual(updatedPayload?.components, [{ type: "queued-row" }]);
   clearTimeout(pendingQueuedActions.get("search-msg-1")?.timeout);
 });

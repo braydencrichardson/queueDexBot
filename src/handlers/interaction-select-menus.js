@@ -1,9 +1,12 @@
 const { createQueueViewService } = require("./queue-view-service");
 const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
+const { formatMovedMessage, formatQueuedMessage } = require("../ui/messages");
+const { formatDuration } = require("../queue/utils");
 
 function createSelectMenuInteractionHandler(deps) {
   const {
     INTERACTION_TIMEOUT_MS,
+    QUEUE_VIEW_TIMEOUT_MS,
     getGuildQueue,
     isSameVoiceChannel,
     buildQueueViewComponents,
@@ -19,11 +22,14 @@ function createSelectMenuInteractionHandler(deps) {
     logInfo,
     logError,
     playNext,
+    maybeRefreshNowPlayingUpNext = async () => {},
   } = deps;
   const queueViewService = createQueueViewService({
     queueViews,
     formatQueueViewContent,
     buildQueueViewComponents,
+    queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
+    logError,
   });
 
   return async function handleSelectMenuInteraction(interaction) {
@@ -58,6 +64,7 @@ function createSelectMenuInteractionHandler(deps) {
       queue.textChannel = interaction.channel;
       ensureTrackId(selected);
       queue.tracks.push(selected);
+      await maybeRefreshNowPlayingUpNext(queue);
       logInfo("Queued from search chooser", {
         title: selected.title,
         guildId: interaction.guildId,
@@ -65,11 +72,11 @@ function createSelectMenuInteractionHandler(deps) {
       });
 
       const queuedIndex = getQueuedTrackIndex(queue, selected);
-      const positionText = queuedIndex >= 0 ? ` (position ${queuedIndex + 1})` : "";
-      const showQueuedControls = queuedIndex >= 1;
+      const position = queuedIndex >= 0 ? queuedIndex + 1 : null;
+      const showQueuedControls = queuedIndex >= 0;
       await interaction.update({
-        content: `Queued: **${selected.title}**${positionText} (requested by **${selected.requester || "unknown"}**).`,
-        components: showQueuedControls ? buildQueuedActionComponents() : [],
+        content: formatQueuedMessage(selected, position, formatDuration),
+        components: showQueuedControls ? buildQueuedActionComponents({ includeMoveControls: queuedIndex >= 1 }) : [],
       });
       if (showQueuedControls) {
         setExpiringMapEntry({
@@ -122,9 +129,10 @@ function createSelectMenuInteractionHandler(deps) {
 
       const [moved] = queue.tracks.splice(sourceIndex - 1, 1);
       queue.tracks.splice(destIndex - 1, 0, moved);
+      await maybeRefreshNowPlayingUpNext(queue);
 
       clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
-      await interaction.update({ content: `Moved **${moved.title}** to position ${destIndex}.`, components: [] });
+      await interaction.update({ content: formatMovedMessage(moved, destIndex), components: [] });
 
       const queueView = queueViews.get(pending.queueViewMessageId);
       if (queueView) {

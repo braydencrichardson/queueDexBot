@@ -21,7 +21,8 @@ const { enqueueTracks, ensureTrackId, getTrackIndexById, getQueuedTrackIndex, fo
 const { createQueuePlayback } = require("./src/queue/playback");
 const { createQueueSession } = require("./src/queue/session");
 const { buildQueueViewComponents, formatQueueViewContent, buildMoveMenu } = require("./src/ui/queueView");
-const { buildQueuedActionComponents, buildNowPlayingControls } = require("./src/ui/controls");
+const { buildQueuedActionComponents, buildNowPlayingControls, buildPlaylistQueuedComponents } = require("./src/ui/controls");
+const { formatMovePrompt } = require("./src/ui/messages");
 const { createSearchChooser } = require("./src/ui/search-chooser");
 const { normalizeQueryInput } = require("./src/utils/query");
 const { registerInteractionHandler } = require("./src/handlers/interaction");
@@ -128,6 +129,7 @@ const {
   ensurePlayerListeners,
   getGuildQueue,
   isSameVoiceChannel,
+  maybeRefreshNowPlayingUpNext,
   sendNowPlaying,
   stopAndLeaveQueue,
 } = createQueueSession({
@@ -171,13 +173,20 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
 });
 
 ({ playNext } = createQueuePlayback({
+  client,
   playdl,
   createAudioResource,
   StreamType,
   createYoutubeResource,
   getGuildQueue,
   queueViews,
+  pendingMoves,
+  formatQueueViewContent,
+  buildQueueViewComponents,
+  buildMoveMenu,
+  formatMovePrompt,
   sendNowPlaying,
+  maybeRefreshNowPlayingUpNext,
   loadingMessageDelayMs: env.playbackLoadingMessageDelayMs,
   logInfo,
   logError,
@@ -216,6 +225,7 @@ registerInteractionHandler(client, {
   AudioPlayerStatus,
   INTERACTION_TIMEOUT_MS: env.interactionTimeoutMs,
   QUEUE_VIEW_PAGE_SIZE: env.queueViewPageSize,
+  QUEUE_VIEW_TIMEOUT_MS: env.queueViewTimeoutMs,
   QUEUE_MOVE_MENU_PAGE_SIZE: env.queueMoveMenuPageSize,
   joinVoiceChannel,
   getGuildQueue,
@@ -226,6 +236,7 @@ registerInteractionHandler(client, {
   buildQueueViewComponents,
   buildMoveMenu,
   buildQueuedActionComponents,
+  buildPlaylistQueuedComponents,
   getTrackIndexById,
   ensureTrackId,
   getQueuedTrackIndex,
@@ -237,6 +248,7 @@ registerInteractionHandler(client, {
   logInfo,
   logError,
   sendNowPlaying,
+  maybeRefreshNowPlayingUpNext,
   playNext,
   normalizeQueryInput,
   ensureSodiumReady,

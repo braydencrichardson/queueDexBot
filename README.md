@@ -63,6 +63,7 @@ Playback/interaction tuning:
 
 - `SEARCH_CHOOSER_MAX_RESULTS`: Search chooser result count (default: `5`, clamped to `1-25`).
 - `QUEUE_VIEW_PAGE_SIZE`: Queue view page size (default: `10`, clamped to `1-25`).
+- `QUEUE_VIEW_TIMEOUT_MS`: Queue view auto-close timeout (default: `300000`).
 - `QUEUE_MOVE_MENU_PAGE_SIZE`: Move-menu page size (default: `25`, clamped to `1-25`).
 - `PLAYBACK_LOADING_MESSAGE_DELAY_MS`: Delay before "Loading..." message appears (default: `5000`).
 - `QUEUE_INACTIVITY_TIMEOUT_MS`: Time before bot leaves empty voice channel (default: `300000`).

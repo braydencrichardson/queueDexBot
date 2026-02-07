@@ -1,4 +1,5 @@
-const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { formatTrackPrimary, formatTrackSecondary } = require("../ui/messages");
 
 function createQueueSession(deps) {
   const {
@@ -25,6 +26,7 @@ function createQueueSession(deps) {
         current: null,
         nowPlayingMessageId: null,
         nowPlayingChannelId: null,
+        nowPlayingUpNextKey: null,
         inactivityTimeout: null,
         inactivityNoticeMessageId: null,
         inactivityNoticeChannelId: null,
@@ -42,22 +44,47 @@ function createQueueSession(deps) {
     }
     const remaining = queue.tracks.length;
     const nextTrack = queue.tracks[0];
-    const nowDuration = formatDuration(queue.current.duration);
-    const nextDuration = formatDuration(nextTrack?.duration);
-    const currentTitle = sanitizeInlineDiscordText(queue.current.title);
-    const currentRequester = sanitizeInlineDiscordText(queue.current.requester);
-    const nextTitle = sanitizeInlineDiscordText(nextTrack?.title);
-    const nextRequester = sanitizeInlineDiscordText(nextTrack?.requester);
-    const displayUrl = sanitizeDiscordText(queue.current.displayUrl || queue.current.url);
-    const nowLink = (queue.current.source === "youtube" || queue.current.source === "soundcloud") && displayUrl
-      ? ` (${displayUrl})`
-      : "";
-    const nowLine = `Now playing: ${currentTitle}${nowDuration ? ` (**${nowDuration}**)` : ""}${currentRequester ? ` (requested by **${currentRequester}**)` : ""}${nowLink}`;
-    const nextLine = nextTrack
-      ? `Up next: ${nextTitle}${nextDuration ? ` (**${nextDuration}**)` : ""}${nextRequester ? ` (requested by **${nextRequester}**)` : ""}`
-      : "Up next: (empty)";
-    const countLine = `Remaining: ${remaining}`;
-    return `${nowLine}\n${nextLine}\n${countLine}`;
+    const lines = [];
+    const nowPrimary = formatTrackPrimary(queue.current, {
+      formatDuration,
+      includeRequester: true,
+    });
+    const nowSecondary = formatTrackSecondary(queue.current, {
+      includeArtist: true,
+      includeLink: true,
+      embeddableLink: true,
+    });
+    lines.push(`**Now playing:** ${nowPrimary}`);
+    if (nowSecondary) {
+      lines.push(`↳ ${nowSecondary}`);
+    }
+    if (nextTrack) {
+      const nextPrimary = formatTrackPrimary(nextTrack, {
+        formatDuration,
+        includeRequester: true,
+      });
+      const nextSecondary = formatTrackSecondary(nextTrack, {
+        includeArtist: true,
+        includeLink: true,
+        embeddableLink: false,
+      });
+      lines.push(`**Up next:** ${nextPrimary}`);
+      if (nextSecondary) {
+        lines.push(`↳ ${nextSecondary}`);
+      }
+    } else {
+      lines.push("**Up next:** (empty)");
+    }
+    lines.push(`**Remaining:** ${remaining}`);
+    return lines.join("\n");
+  }
+
+  function getUpNextKey(queue) {
+    const next = queue?.tracks?.[0];
+    if (!next) {
+      return "empty";
+    }
+    return String(next.id || `${next.url || ""}|${next.title || ""}|${next.requester || ""}`);
   }
 
   async function sendNowPlaying(queue, forceNew = false) {
@@ -66,6 +93,7 @@ function createQueueSession(deps) {
     }
 
     const content = formatNowPlaying(queue);
+    queue.nowPlayingUpNextKey = getUpNextKey(queue);
     let message = null;
 
     if (!forceNew && queue.nowPlayingMessageId && queue.nowPlayingChannelId === queue.textChannel.id) {
@@ -98,6 +126,17 @@ function createQueueSession(deps) {
     }
 
     return message;
+  }
+
+  async function maybeRefreshNowPlayingUpNext(queue) {
+    if (!queue?.current || !queue?.nowPlayingMessageId || !queue?.textChannel) {
+      return;
+    }
+    const nextKey = getUpNextKey(queue);
+    if (queue.nowPlayingUpNextKey === nextKey) {
+      return;
+    }
+    await sendNowPlaying(queue, false);
   }
 
   function getDisplayName(member, user) {
@@ -146,6 +185,7 @@ function createQueueSession(deps) {
     logInfo(reason);
     queue.tracks = [];
     queue.current = null;
+    queue.nowPlayingUpNextKey = null;
     queue.playing = false;
     if (queue.inactivityTimeout) {
       clearTimeout(queue.inactivityTimeout);
@@ -176,6 +216,7 @@ function createQueueSession(deps) {
     ensurePlayerListeners,
     getGuildQueue,
     isSameVoiceChannel,
+    maybeRefreshNowPlayingUpNext,
     sendNowPlaying,
     stopAndLeaveQueue,
   };

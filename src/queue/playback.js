@@ -3,12 +3,18 @@ const { DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constan
 
 function createQueuePlayback(deps) {
   const {
+    client,
     playdl,
     createAudioResource,
     StreamType,
     createYoutubeResource,
     getGuildQueue,
     queueViews,
+    pendingMoves,
+    formatQueueViewContent,
+    buildQueueViewComponents,
+    buildMoveMenu,
+    formatMovePrompt,
     sendNowPlaying,
     loadingMessageDelayMs,
     logInfo,
@@ -71,6 +77,102 @@ function createQueuePlayback(deps) {
     }
   }
 
+  async function resolveChannel(channelId) {
+    if (!channelId || !client) {
+      return null;
+    }
+    const cached = client.channels?.cache?.get(channelId);
+    if (cached) {
+      return cached;
+    }
+    if (!client.channels?.fetch) {
+      return null;
+    }
+    try {
+      return await client.channels.fetch(channelId);
+    } catch {
+      return null;
+    }
+  }
+
+  async function refreshQueueViews(guildId, queue) {
+    if (typeof formatQueueViewContent !== "function" || typeof buildQueueViewComponents !== "function") {
+      return;
+    }
+    for (const [messageId, rawView] of queueViews.entries()) {
+      if (rawView.guildId !== guildId) {
+        continue;
+      }
+      const view = { ...rawView };
+      if (view.selectedTrackId && !queue.tracks.some((track) => track?.id === view.selectedTrackId)) {
+        view.selectedTrackId = null;
+      }
+      const channel = await resolveChannel(view.channelId);
+      if (!channel?.messages?.fetch) {
+        queueViews.set(messageId, { ...view, stale: true });
+        continue;
+      }
+      const pageData = formatQueueViewContent(queue, view.page, view.pageSize, view.selectedTrackId, {
+        stale: false,
+        ownerName: view.ownerName,
+      });
+      view.page = pageData.page;
+      const payload = {
+        content: pageData.content,
+        components: buildQueueViewComponents(view, queue),
+      };
+      try {
+        const message = await channel.messages.fetch(messageId);
+        await message.edit(payload);
+        queueViews.set(messageId, { ...view, stale: false });
+      } catch {
+        queueViews.set(messageId, { ...view, stale: true });
+      }
+    }
+  }
+
+  async function refreshPendingMoves(guildId, queue) {
+    if (!pendingMoves || typeof buildMoveMenu !== "function" || typeof formatMovePrompt !== "function") {
+      return;
+    }
+    for (const [messageId, pending] of pendingMoves.entries()) {
+      if (pending.guildId !== guildId) {
+        continue;
+      }
+      const sourceIndex = pending.trackId ? queue.tracks.findIndex((track) => track?.id === pending.trackId) + 1 : pending.sourceIndex;
+      const channel = await resolveChannel(pending.channelId);
+      if (!sourceIndex || !queue.tracks[sourceIndex - 1]) {
+        clearTimeout(pending.timeout);
+        pendingMoves.delete(messageId);
+        if (channel?.messages?.fetch) {
+          try {
+            const message = await channel.messages.fetch(messageId);
+            await message.edit({ content: "Selected track no longer exists.", components: [] });
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        continue;
+      }
+      const moveMenu = buildMoveMenu(queue, sourceIndex, pending.page, pending.pageSize);
+      pending.page = moveMenu.page;
+      pending.sourceIndex = sourceIndex;
+      pendingMoves.set(messageId, pending);
+      if (!channel?.messages?.fetch) {
+        continue;
+      }
+      try {
+        const message = await channel.messages.fetch(messageId);
+        await message.edit({
+          content: formatMovePrompt(queue.tracks[sourceIndex - 1], moveMenu.page, moveMenu.totalPages),
+          components: moveMenu.components,
+        });
+      } catch {
+        // keep pending interaction state even if message edit fails
+      }
+    }
+  }
+
   async function playNext(guildId) {
     const queue = getGuildQueue(guildId);
     const skipStats = {
@@ -108,6 +210,8 @@ function createQueuePlayback(deps) {
       queue.playing = true;
       queue.current = next;
       markQueueViewsStale(guildId);
+      await refreshQueueViews(guildId, queue);
+      await refreshPendingMoves(guildId, queue);
 
       let loadingTimeout = null;
       let loadingMessage = null;
