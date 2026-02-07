@@ -63,6 +63,29 @@ function registerVoiceStateHandler(client, deps) {
     return message;
   }
 
+  async function clearInactivityNotice(queue) {
+    const noticeMessageId = queue?.inactivityNoticeMessageId;
+    const noticeChannelId = queue?.inactivityNoticeChannelId;
+    const channel = queue?.textChannel;
+    queue.inactivityNoticeMessageId = null;
+    queue.inactivityNoticeChannelId = null;
+
+    if (!noticeMessageId || !channel || noticeChannelId !== channel.id || !channel.messages?.fetch) {
+      return;
+    }
+
+    try {
+      const message = await channel.messages.fetch(noticeMessageId);
+      await message.delete();
+    } catch (error) {
+      if (typeof logError === "function") {
+        logError("Failed to clear inactivity notice", error);
+      } else {
+        console.error("Failed to clear inactivity notice", error);
+      }
+    }
+  }
+
   client.on("voiceStateUpdate", async (oldState, newState) => {
     try {
       const guildId = newState.guild?.id || oldState.guild?.id;
@@ -110,6 +133,7 @@ function registerVoiceStateHandler(client, deps) {
                   queue.player.unpause();
                 }
                 queue.pausedForInactivity = false;
+                await clearInactivityNotice(queue);
                 return;
               }
 
@@ -160,6 +184,7 @@ function registerVoiceStateHandler(client, deps) {
         queue.player.unpause();
       }
       queue.pausedForInactivity = false;
+      await clearInactivityNotice(queue);
     } catch (error) {
       if (typeof logError === "function") {
         logError("Voice state handler failed", error);
