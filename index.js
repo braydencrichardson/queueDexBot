@@ -7,8 +7,6 @@ const {
   NoSubscriberBehavior,
   StreamType,
 } = require("@discordjs/voice");
-const ytdl = require("@distube/ytdl-core");
-const yts = require("yt-search");
 const playdl = require("play-dl");
 const sodium = require("libsodium-wrappers");
 const dotenv = require("dotenv");
@@ -18,6 +16,10 @@ const { spawn } = require("child_process");
 const https = require("https");
 const { PassThrough } = require("stream");
 const util = require("util");
+const { searchYouTubeOptions, searchYouTubePreferred, getYoutubeId, toShortYoutubeUrl } = require("./src/providers/youtube-search");
+const { enqueueTracks, ensureTrackId, getTrackIndexById, getQueuedTrackIndex, formatDuration } = require("./src/queue/utils");
+const { buildQueueViewComponents, formatQueueViewContent, buildMoveMenu } = require("./src/ui/queueView");
+const { buildQueuedActionComponents, buildNowPlayingControls } = require("./src/ui/controls");
 
 dotenv.config();
 
@@ -65,7 +67,6 @@ const queueViews = new Map();
 const pendingSearches = new Map();
 const pendingMoves = new Map();
 const pendingQueuedActions = new Map();
-let nextTrackId = 1;
 
 function formatLogMessage(stamp, message, data) {
   let line = `[${stamp}] ${message}`;
@@ -148,7 +149,6 @@ async function sendDevLog(message) {
 let soundcloudReady = false;
 let soundcloudClientId = null;
 let youtubeReady = false;
-let youtubeAgent = null;
 let youtubeCookieWarned = false;
 let youtubeCookieHeader = null;
 let youtubeCookiesNetscapePath = null;
@@ -298,7 +298,6 @@ async function ensureYoutubeReady() {
   }
   try {
     const filteredCookies = filterYoutubeCookies(cookiesInput);
-    youtubeAgent = ytdl.createAgent(filteredCookies);
     youtubeCookieHeader = cookiesToHeader(filteredCookies) || null;
     youtubeCookiesNetscapePath = writeNetscapeCookies(filteredCookies);
     if (youtubeCookieHeader || YOUTUBE_USER_AGENT) {
@@ -345,41 +344,6 @@ async function ensureSpotifyReady() {
     },
   });
   spotifyReady = true;
-}
-
-function getYoutubeId(value) {
-  if (!value) {
-    return null;
-  }
-  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
-    return value;
-  }
-  try {
-    const url = new URL(value);
-    if (url.hostname === "youtu.be") {
-      return url.pathname.replace("/", "");
-    }
-    if (url.hostname.endsWith("youtube.com")) {
-      const id = url.searchParams.get("v");
-      if (id) {
-        return id;
-      }
-      if (url.pathname.startsWith("/shorts/")) {
-        return url.pathname.split("/")[2];
-      }
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function toShortYoutubeUrl(value) {
-  const id = getYoutubeId(value);
-  if (!id) {
-    return value;
-  }
-  return `https://youtu.be/${id}`;
 }
 
 function toSoundcloudPermalink(value) {
@@ -450,145 +414,6 @@ async function resolveSoundcloudDisplayUrl(trackUrl, permalinkUrl) {
     logError("SoundCloud permalink lookup failed", error);
     return direct;
   }
-}
-
-function tokenizeQuery(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[\(\)\[\]{}]/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(" ")
-    .map((token) => token.trim())
-    .filter(Boolean);
-}
-
-function parseQueryParts(query) {
-  const raw = String(query || "");
-  const parts = raw.split(" - ").map((part) => part.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    return { artist: parts[0], title: parts.slice(1).join(" - ") };
-  }
-  return { title: raw.trim() };
-}
-
-function scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions) {
-  const title = String(video.title || "").toLowerCase();
-  const titleTokens = new Set(tokenizeQuery(title));
-  const requiredMatches = requiredTokens.filter((token) => titleTokens.has(token)).length;
-  const artistMatches = artistTokens.filter((token) => titleTokens.has(token)).length;
-  const minTitleRatio = matchOptions?.minTitleMatchRatio ?? 0.5;
-  const minArtistRatio = matchOptions?.minArtistMatchRatio ?? 0.5;
-  if (requiredTokens.length && requiredMatches / requiredTokens.length < minTitleRatio) {
-    return -Infinity;
-  }
-  if (artistTokens.length && artistMatches / artistTokens.length < minArtistRatio) {
-    return -Infinity;
-  }
-  let score = requiredMatches * 2 + artistMatches * 3;
-  if (title.includes("official audio")) score += 3;
-  if (title.includes("official music video")) score += 3;
-  if (title.includes("official")) score += 1;
-  if (title.includes("audio")) score += 2;
-  if (title.includes("music video")) score += 2;
-  if (title.includes("lyric")) score += 1;
-  if (title.includes("live")) score -= 2;
-  if (title.includes("cover")) score -= 2;
-  return score;
-}
-
-function pickYouTubeVideo(videos, query, matchOptions) {
-  if (!Array.isArray(videos) || !videos.length) {
-    return null;
-  }
-  const parsed = parseQueryParts(query);
-  const requiredTokens = tokenizeQuery(parsed.title || query);
-  const artistTokens = tokenizeQuery(parsed.artist || "");
-  const scored = videos
-    .filter((video) => typeof video.seconds === "number" && video.seconds > 30)
-    .map((video) => ({
-      video,
-      score: scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions),
-    }))
-    .filter((entry) => Number.isFinite(entry.score))
-    .sort((a, b) => b.score - a.score);
-
-  if (scored.length) {
-    return scored[0].video;
-  }
-
-  return videos[0];
-}
-
-function rankYouTubeVideos(videos, query, matchOptions) {
-  if (!Array.isArray(videos) || !videos.length) {
-    return [];
-  }
-  const parsed = parseQueryParts(query);
-  const requiredTokens = tokenizeQuery(parsed.title || query);
-  const artistTokens = tokenizeQuery(parsed.artist || "");
-  const scored = videos
-    .filter((video) => typeof video.seconds === "number" && video.seconds > 30)
-    .map((video) => ({
-      video,
-      score: scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions),
-    }))
-    .filter((entry) => Number.isFinite(entry.score))
-    .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.video);
-
-  return scored.length ? scored : videos;
-}
-
-async function searchYouTubeOptions(query, requester, matchOptions, limit = 5) {
-  const variants = [
-    `${query} official audio`,
-    `${query} official music video`,
-    `${query} audio`,
-    `${query} lyrics`,
-    query,
-  ];
-  const baseQuery = String(query || "");
-  for (const searchQuery of variants) {
-    const results = await yts(searchQuery);
-    const ranked = rankYouTubeVideos(results.videos, baseQuery, matchOptions);
-    if (ranked.length) {
-      return ranked.slice(0, limit).map((video) => ({
-        title: video.title,
-        url: toShortYoutubeUrl(video.videoId || video.url),
-        channel: video.author?.name || video.channel?.name || null,
-        source: "youtube",
-        duration: typeof video.seconds === "number" ? video.seconds : null,
-        requester,
-      }));
-    }
-  }
-  return [];
-}
-
-async function searchYouTubePreferred(query, requester, matchOptions) {
-  const variants = [
-    `${query} official audio`,
-    `${query} official music video`,
-    `${query} audio`,
-    `${query} lyrics`,
-    query,
-  ];
-  const baseQuery = String(query || "");
-  for (const searchQuery of variants) {
-    const results = await yts(searchQuery);
-    const top = pickYouTubeVideo(results.videos, baseQuery, matchOptions);
-    if (top) {
-      const id = top.videoId || getYoutubeId(top.url);
-      return {
-        title: top.title,
-        url: toShortYoutubeUrl(id || top.url),
-        source: "youtube",
-        duration: typeof top.seconds === "number" ? top.seconds : null,
-        requester,
-      };
-    }
-  }
-  return null;
 }
 
 function isSpotifyUrl(value) {
@@ -839,239 +664,6 @@ function formatNowPlaying(queue) {
   return `${nowLine}\n${nextLine}\n${countLine}`;
 }
 
-function formatQueuePage(queue, page, pageSize, selectedTrackId) {
-  const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
-  const safePage = Math.min(Math.max(page, 1), totalPages);
-  const startIndex = (safePage - 1) * pageSize;
-  const totalQueued = (queue.current ? 1 : 0) + queue.tracks.length;
-  const totalSeconds = [queue.current, ...queue.tracks]
-    .filter(Boolean)
-    .reduce((sum, track) => sum + (typeof track.duration === "number" ? track.duration : 0), 0);
-  const totalDuration = formatDuration(totalSeconds);
-  const lines = [
-    `Total queued: ${totalQueued}${totalDuration ? ` (${totalDuration})` : ""}`,
-  ];
-  if (queue.current) {
-    const nowDuration = formatDuration(queue.current.duration);
-    const nowDisplayUrl = queue.current.displayUrl || queue.current.url;
-    const nowLink = (queue.current.source === "youtube" || queue.current.source === "soundcloud") && nowDisplayUrl
-      ? ` (<${nowDisplayUrl}>)`
-      : "";
-    lines.push(`Now playing: ${queue.current.title}${nowDuration ? ` (**${nowDuration}**)` : ""}${queue.current.requester ? ` (requested by **${queue.current.requester}**)` : ""}${nowLink}`);
-  }
-  if (queue.tracks.length) {
-    lines.push(`Up next (page ${safePage}/${totalPages}):`);
-    const preview = queue.tracks
-      .slice(startIndex, startIndex + pageSize)
-      .map((track, index) => {
-        ensureTrackId(track);
-        const duration = formatDuration(track.duration);
-        const displayUrl = track.displayUrl || track.url;
-        const link = (track.source === "youtube" || track.source === "soundcloud") && displayUrl
-          ? ` (<${displayUrl}>)`
-          : "";
-        const number = startIndex + index + 1;
-        const numberText = track.id && track.id === selectedTrackId ? `**${number}.**` : `${number}.`;
-        const firstLine = `${numberText} ${track.title}${duration ? ` (**${duration}**)` : ""}${track.requester ? ` (requested by **${track.requester}**)` : ""}`;
-        const secondLine = link ? `   ${link}` : null;
-        return secondLine ? [firstLine, secondLine] : [firstLine];
-      });
-    const maxLength = 1900;
-    let previewLines = preview.flat();
-    let content = [...lines, previewLines.join("\n")].join("\n");
-    if (content.length > maxLength) {
-      const stripLink = (line) => line.replace(/\s*\(<https?:\/\/[^>]+>\)/g, "");
-      const stripRequester = (line) => line.replace(/\s*\(requested by \*\*[^)]+\*\*\)/g, "");
-      const clampLine = (line) => (line.length > 140 ? `${line.slice(0, 137)}…` : line);
-      const previewNoLinks = previewLines.map(stripLink);
-      const previewNoLinksNoRequester = previewNoLinks.map(stripRequester).map(clampLine);
-      content = [...lines, previewNoLinksNoRequester.join("\n")].join("\n");
-      previewLines = previewNoLinksNoRequester;
-    }
-    while (content.length > maxLength && previewLines.length > 1) {
-      previewLines.pop();
-      content = [...lines, previewLines.join("\n")].join("\n");
-    }
-    if (content.length > maxLength) {
-      content = `${content.slice(0, maxLength - 1)}…`;
-    }
-    return { content, page: safePage, totalPages };
-  } else {
-    lines.push("Up next: (empty)");
-  }
-  return { content: lines.join("\n"), page: safePage, totalPages };
-}
-
-function buildQueueViewComponents(queueView, queue) {
-  const totalPages = Math.max(1, Math.ceil(queue.tracks.length / queueView.pageSize));
-  const safePage = Math.min(Math.max(queueView.page, 1), totalPages);
-  const startIndex = (safePage - 1) * queueView.pageSize;
-  const options = queue.tracks
-    .slice(startIndex, startIndex + queueView.pageSize)
-    .map((track, index) => {
-      ensureTrackId(track);
-      const absoluteIndex = startIndex + index + 1;
-      const duration = formatDuration(track.duration);
-      const labelBase = `${absoluteIndex}. ${track.title}`;
-      const label = labelBase.length > 100 ? `${labelBase.slice(0, 97)}...` : labelBase;
-      return {
-        label,
-        value: track.id,
-        description: duration ? `Duration: ${duration}` : undefined,
-        default: queueView.selectedTrackId === track.id,
-      };
-    });
-
-  const selectRow = new MessageActionRow().addComponents(
-    new MessageSelectMenu()
-      .setCustomId("queue_select")
-      .setPlaceholder(options.length ? "Select a track" : "Queue is empty")
-      .setMinValues(1)
-      .setMaxValues(1)
-      .setDisabled(options.length === 0)
-      .addOptions(options.length ? options : [{ label: "Empty", value: "0" }])
-  );
-
-  const actionRow = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId("queue_remove")
-      .setLabel("Remove")
-      .setEmoji("🗑️")
-      .setStyle("DANGER")
-      .setDisabled(!options.length || !queueView.selectedTrackId),
-    new MessageButton()
-      .setCustomId("queue_move")
-      .setLabel("Move")
-      .setEmoji("↔️")
-      .setStyle("SECONDARY")
-      .setDisabled(!options.length || !queueView.selectedTrackId),
-    new MessageButton()
-      .setCustomId("queue_front")
-      .setLabel("Move to First")
-      .setEmoji("⏫")
-      .setStyle("PRIMARY")
-      .setDisabled(!options.length || !queueView.selectedTrackId)
-  );
-
-  const navRow = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId("queue_prev")
-      .setLabel("Prev")
-      .setEmoji("⬅️")
-      .setStyle("SECONDARY")
-      .setDisabled(safePage <= 1),
-    new MessageButton()
-      .setCustomId("queue_next")
-      .setLabel("Next")
-      .setEmoji("➡️")
-      .setStyle("SECONDARY")
-      .setDisabled(safePage >= totalPages),
-    new MessageButton()
-      .setCustomId("queue_refresh")
-      .setLabel("Refresh")
-      .setEmoji("🔃")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("queue_shuffle")
-      .setLabel("Shuffle")
-      .setEmoji("🔀")
-      .setStyle("SECONDARY")
-      .setDisabled(queue.tracks.length < 2),
-    new MessageButton()
-      .setCustomId("queue_clear")
-      .setLabel("Clear")
-      .setEmoji("⚠️")
-      .setStyle("DANGER")
-      .setDisabled(queue.tracks.length === 0)
-  );
-
-  const navRow2 = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId("queue_nowplaying")
-      .setLabel("Now Playing")
-      .setEmoji("🎶")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("queue_close")
-      .setLabel("Close")
-      .setEmoji("❌")
-      .setStyle("SECONDARY")
-  );
-
-  return [selectRow, actionRow, navRow, navRow2];
-}
-
-function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale } = {}) {
-  const pageData = formatQueuePage(queue, page, pageSize, selectedTrackId);
-  const headerLines = [
-    "_Controls limited to requester._",
-  ];
-  if (stale) {
-    headerLines.unshift("_Queue view may be stale — press Refresh._");
-  }
-  if (selectedTrackId) {
-    const selectedIndex = getTrackIndexById(queue, selectedTrackId);
-    if (selectedIndex >= 0) {
-      const selectedTrack = queue.tracks[selectedIndex];
-      return {
-        ...pageData,
-        content: `${headerLines.join("\n")}\n${pageData.content}\nSelected: ${selectedIndex + 1}. ${selectedTrack.title}`,
-      };
-    }
-  }
-  return { ...pageData, content: `${headerLines.join("\n")}\n${pageData.content}` };
-}
-
-function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = 25) {
-  const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
-  const safePage = Math.min(Math.max(page, 1), totalPages);
-  const startIndex = (safePage - 1) * pageSize;
-  const options = queue.tracks.slice(startIndex, startIndex + pageSize).map((track, index) => {
-    const position = startIndex + index + 1;
-    const labelBase = `${position}. ${track.title}`;
-    const label = labelBase.length > 100 ? `${labelBase.slice(0, 97)}...` : labelBase;
-    const description = position === selectedIndex ? "Current position" : undefined;
-    return { label, value: String(position), description };
-  });
-
-  const selectRow = new MessageActionRow().addComponents(
-    new MessageSelectMenu()
-      .setCustomId("queue_move_select")
-      .setPlaceholder("Move selected track to position…")
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(options.length ? options : [{ label: "Empty", value: "0" }])
-      .setDisabled(options.length === 0)
-  );
-
-  const controlRow = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId("move_prev")
-      .setLabel("Prev")
-      .setEmoji("⬅️")
-      .setStyle("SECONDARY")
-      .setDisabled(safePage <= 1),
-    new MessageButton()
-      .setCustomId("move_next")
-      .setLabel("Next")
-      .setEmoji("➡️")
-      .setStyle("SECONDARY")
-      .setDisabled(safePage >= totalPages),
-    new MessageButton()
-      .setCustomId("move_first")
-      .setLabel("Move to First")
-      .setEmoji("⏫")
-      .setStyle("PRIMARY"),
-    new MessageButton()
-      .setCustomId("move_close")
-      .setLabel("Close")
-      .setEmoji("❌")
-      .setStyle("SECONDARY")
-  );
-
-  return { components: [selectRow, controlRow], page: safePage, totalPages };
-}
-
 function formatSearchChooserMessage(query, requesterId, tracks, timeoutMs) {
   const timeoutSeconds = Math.max(1, Math.round(timeoutMs / 1000));
   const lines = [
@@ -1205,28 +797,7 @@ async function sendNowPlaying(queue, forceNew = false) {
     queue.nowPlayingDeleteTimeout = null;
   }
 
-  const controls = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId("np_toggle")
-      .setLabel("Play/Pause")
-      .setEmoji("⏯️")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("np_queue")
-      .setLabel("Queue")
-      .setEmoji("📜")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("np_skip")
-      .setLabel("Skip")
-      .setEmoji("⏭️")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("np_stop")
-      .setLabel("Stop")
-      .setEmoji("⏹️")
-      .setStyle("DANGER")
-  );
+  const controls = buildNowPlayingControls();
 
   try {
     await message.edit({ content, components: [controls] });
@@ -1306,86 +877,6 @@ function isSameVoiceChannel(member, queue) {
 function normalizeQueryInput(input) {
   const trimmed = input.trim();
   return trimmed.replace(/^\/?play\s+/i, "");
-}
-
-function enqueueTracks(queue, tracks, front = false) {
-  if (!tracks?.length) {
-    return;
-  }
-  tracks.forEach(ensureTrackId);
-  if (front) {
-    queue.tracks.unshift(...tracks.reverse());
-  } else {
-    queue.tracks.push(...tracks);
-  }
-}
-
-function ensureTrackId(track) {
-  if (!track) {
-    return;
-  }
-  if (!track.id) {
-    track.id = `t_${Date.now()}_${nextTrackId++}`;
-  }
-}
-
-function getTrackIndexById(queue, trackId) {
-  if (!queue?.tracks?.length || !trackId) {
-    return -1;
-  }
-  return queue.tracks.findIndex((entry) => entry?.id === trackId);
-}
-
-function getQueuedTrackIndex(queue, track) {
-  if (!queue?.tracks?.length || !track) {
-    return -1;
-  }
-  if (track.id) {
-    return getTrackIndexById(queue, track.id);
-  }
-  return queue.tracks.findIndex((entry) =>
-    entry?.url === track.url && entry?.title === track.title && entry?.requester === track.requester
-  );
-}
-
-function buildQueuedActionComponents() {
-  const row = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId("queued_view")
-      .setLabel("View Queue")
-      .setEmoji("📜")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("queued_move")
-      .setLabel("Move")
-      .setEmoji("↔️")
-      .setStyle("SECONDARY"),
-    new MessageButton()
-      .setCustomId("queued_first")
-      .setLabel("Move to First")
-      .setEmoji("⏫")
-      .setStyle("PRIMARY"),
-    new MessageButton()
-      .setCustomId("queued_remove")
-      .setLabel("Remove")
-      .setEmoji("🗑️")
-      .setStyle("DANGER")
-  );
-  return [row];
-}
-
-function formatDuration(seconds) {
-  if (typeof seconds !== "number" || Number.isNaN(seconds) || seconds <= 0) {
-    return "";
-  }
-  const totalSeconds = Math.floor(seconds);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const remainingSeconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
-  }
-  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function extractYoutubeId(url) {
@@ -2293,28 +1784,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       try {
-        const controls = new MessageActionRow().addComponents(
-          new MessageButton()
-            .setCustomId("np_toggle")
-            .setLabel("Play/Pause")
-            .setEmoji("⏯️")
-            .setStyle("SECONDARY"),
-          new MessageButton()
-            .setCustomId("np_queue")
-            .setLabel("Queue")
-            .setEmoji("📜")
-            .setStyle("SECONDARY"),
-          new MessageButton()
-            .setCustomId("np_skip")
-            .setLabel("Skip")
-            .setEmoji("⏭️")
-            .setStyle("SECONDARY"),
-          new MessageButton()
-            .setCustomId("np_stop")
-            .setLabel("Stop")
-            .setEmoji("⏹️")
-            .setStyle("DANGER")
-        );
+        const controls = buildNowPlayingControls();
         await interaction.message.edit({ components: [controls] });
       } catch (error) {
         logError("Failed to refresh now playing controls", error);
@@ -2790,8 +2260,7 @@ client.on("interactionCreate", async (interaction) => {
     command: interaction.commandName,
   });
 
-  if (interaction.commandName === "play" || interaction.commandName === "playnext") {
-    const enqueueAtFront = interaction.commandName === "playnext";
+  if (interaction.commandName === "play") {
     const query = normalizeQueryInput(interaction.options.getString("query", true));
     const voiceChannel = interaction.member?.voice?.channel;
     if (!voiceChannel) {
@@ -2851,11 +2320,10 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    enqueueTracks(queue, tracks, enqueueAtFront);
+    enqueueTracks(queue, tracks);
     logInfo("Queued tracks", {
       count: tracks.length,
       first: tracks[0]?.title,
-      front: enqueueAtFront,
     });
 
     if (tracks.length === 1) {
@@ -2863,7 +2331,7 @@ client.on("interactionCreate", async (interaction) => {
       const positionText = queuedIndex >= 0 ? ` (position ${queuedIndex + 1})` : "";
       const showQueuedControls = queuedIndex >= 1;
       const message = await interaction.editReply({
-        content: `Queued${enqueueAtFront ? " next" : ""}: **${tracks[0].title}**${positionText}`,
+        content: `Queued: **${tracks[0].title}**${positionText}`,
         components: showQueuedControls ? buildQueuedActionComponents() : [],
         fetchReply: true,
       });
@@ -2890,7 +2358,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
     } else {
-      await interaction.editReply(`Queued ${tracks.length} tracks${enqueueAtFront ? " to the front" : ""} from playlist.`);
+      await interaction.editReply(`Queued ${tracks.length} tracks from playlist.`);
     }
 
     if (isSpotifyUrl(query) && !hasSpotifyCredentials()) {
