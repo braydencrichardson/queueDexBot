@@ -24,7 +24,6 @@ function createQueueSession(deps) {
         current: null,
         nowPlayingMessageId: null,
         nowPlayingChannelId: null,
-        nowPlayingDeleteTimeout: null,
         playing: false,
         playerListenersReady: false,
       });
@@ -80,10 +79,6 @@ function createQueueSession(deps) {
 
     queue.nowPlayingMessageId = message.id;
     queue.nowPlayingChannelId = message.channel.id;
-    if (queue.nowPlayingDeleteTimeout) {
-      clearTimeout(queue.nowPlayingDeleteTimeout);
-      queue.nowPlayingDeleteTimeout = null;
-    }
 
     const controls = buildNowPlayingControls();
 
@@ -143,10 +138,6 @@ function createQueueSession(deps) {
     queue.tracks = [];
     queue.current = null;
     queue.playing = false;
-    if (queue.nowPlayingDeleteTimeout) {
-      clearTimeout(queue.nowPlayingDeleteTimeout);
-      queue.nowPlayingDeleteTimeout = null;
-    }
     if (queue.player) {
       queue.player.stop(true);
     }
