@@ -1,4 +1,5 @@
 const https = require("https");
+const { normalizeIncomingUrl } = require("../utils/url-normalization");
 
 function createTrackResolver(deps) {
   const {
@@ -519,13 +520,17 @@ function createTrackResolver(deps) {
   async function resolveTracks(query, requester) {
     await ensureSoundcloudReady();
     await ensureYoutubeReady();
-    let normalizedSoundcloud = query;
+    const queryToResolve = normalizeIncomingUrl(query);
+    if (queryToResolve !== query) {
+      logInfo("Normalized incoming URL before resolve", { from: query, to: queryToResolve });
+    }
+    let normalizedSoundcloud = queryToResolve;
     let isSoundcloudUrl = false;
     let soundcloudDiscoverSlug = null;
     let soundcloudDiscoverFailed = false;
     let url = null;
     try {
-      url = new URL(query);
+      url = new URL(queryToResolve);
     } catch {
       url = null;
     }
@@ -560,8 +565,8 @@ function createTrackResolver(deps) {
     const soundcloudCandidates = [];
     if (isSoundcloudUrl) {
       soundcloudCandidates.push(normalizedSoundcloud);
-      if (query !== normalizedSoundcloud) {
-        soundcloudCandidates.push(query);
+      if (queryToResolve !== normalizedSoundcloud) {
+        soundcloudCandidates.push(queryToResolve);
       }
     }
 
@@ -630,7 +635,7 @@ function createTrackResolver(deps) {
 
     if (soundcloudDiscoverSlug) {
       try {
-        const apiTracks = await resolveSoundcloudDiscover(query, soundcloudDiscoverSlug, requester);
+        const apiTracks = await resolveSoundcloudDiscover(queryToResolve, soundcloudDiscoverSlug, requester);
         if (apiTracks.length) {
           return apiTracks;
         }
@@ -681,21 +686,21 @@ function createTrackResolver(deps) {
       );
     }
 
-    if (isSpotifyUrl(query)) {
-      const spotifyType = playdl.sp_validate(query);
+    if (isSpotifyUrl(queryToResolve)) {
+      const spotifyType = playdl.sp_validate(queryToResolve);
       if (spotifyType) {
-        const spotifyTracks = await resolveSpotifyTracks(query, spotifyType, requester);
+        const spotifyTracks = await resolveSpotifyTracks(queryToResolve, spotifyType, requester);
         if (spotifyTracks.length) {
           return spotifyTracks;
         }
       }
     }
 
-    const ytType = playdl.yt_validate(query);
+    const ytType = playdl.yt_validate(queryToResolve);
     if (ytType === "video") {
-      const info = await playdl.video_basic_info(query);
-      const videoId = info.video_details.id || getYoutubeId(query);
-      const videoUrl = toShortYoutubeUrl(videoId || info.video_details.url || query);
+      const info = await playdl.video_basic_info(queryToResolve);
+      const videoId = info.video_details.id || getYoutubeId(queryToResolve);
+      const videoUrl = toShortYoutubeUrl(videoId || info.video_details.url || queryToResolve);
       return [
         {
           title: info.video_details.title,
@@ -708,7 +713,7 @@ function createTrackResolver(deps) {
     }
 
     if (ytType === "playlist") {
-      const playlist = await playdl.playlist_info(query, { incomplete: true });
+      const playlist = await playdl.playlist_info(queryToResolve, { incomplete: true });
       await playlist.fetch();
       return playlist.videos
         .map((item) => ({
@@ -721,7 +726,7 @@ function createTrackResolver(deps) {
         .filter((track) => track.url);
     }
 
-    const searchResult = await searchYouTubePreferred(query, requester);
+    const searchResult = await searchYouTubePreferred(queryToResolve, requester);
     if (!searchResult) {
       return [];
     }

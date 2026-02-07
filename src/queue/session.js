@@ -25,6 +25,10 @@ function createQueueSession(deps) {
         current: null,
         nowPlayingMessageId: null,
         nowPlayingChannelId: null,
+        inactivityTimeout: null,
+        inactivityNoticeMessageId: null,
+        inactivityNoticeChannelId: null,
+        pausedForInactivity: false,
         playing: false,
         playerListenersReady: false,
       });
@@ -143,6 +147,13 @@ function createQueueSession(deps) {
     queue.tracks = [];
     queue.current = null;
     queue.playing = false;
+    if (queue.inactivityTimeout) {
+      clearTimeout(queue.inactivityTimeout);
+      queue.inactivityTimeout = null;
+    }
+    queue.pausedForInactivity = false;
+    queue.inactivityNoticeMessageId = null;
+    queue.inactivityNoticeChannelId = null;
     if (queue.player) {
       queue.player.stop(true);
     }

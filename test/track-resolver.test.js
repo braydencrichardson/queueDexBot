@@ -92,6 +92,48 @@ test("resolveTracks returns youtube video result when yt_validate=video", async 
   assert.equal(tracks[0].requester, "Requester");
 });
 
+test("resolveTracks normalizes http youtube URL to https before validation", async () => {
+  let seenValidateQuery = null;
+  let seenInfoQuery = null;
+
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: () => null,
+      yt_validate: (query) => {
+        seenValidateQuery = query;
+        return query.startsWith("https://") ? "video" : "search";
+      },
+      video_basic_info: async (query) => {
+        seenInfoQuery = query;
+        return {
+          video_details: {
+            id: "SqD_8FGk89o",
+            title: "Normalized Video",
+            durationInSec: 111,
+            url: "https://www.youtube.com/watch?v=SqD_8FGk89o",
+          },
+        };
+      },
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async () => ({ type: "track", name: "n", artists: [], album: { name: "a" } }),
+      setToken: async () => {},
+    },
+    searchYouTubePreferred: async () => null,
+  });
+
+  const tracks = await resolver.resolveTracks("http://youtube.com/watch?v=SqD_8FGk89o", "Requester");
+
+  assert.equal(seenValidateQuery, "https://www.youtube.com/watch?v=SqD_8FGk89o");
+  assert.equal(seenInfoQuery, "https://www.youtube.com/watch?v=SqD_8FGk89o");
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].url, "https://youtu.be/SqD_8FGk89o");
+});
+
 test("resolveTracks falls back to searchYouTubePreferred for plain queries", async () => {
   const expected = {
     title: "Best Match",

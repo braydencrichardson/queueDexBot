@@ -1,5 +1,6 @@
 const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { isYoutubeHost, normalizeIncomingUrl } = require("../utils/url-normalization");
 
 function createSearchChooser(deps) {
   const {
@@ -39,16 +40,19 @@ function createSearchChooser(deps) {
   }
 
   async function trySendSearchChooser(interaction, query, requesterName, requesterId) {
+    const queryForLookup = normalizeIncomingUrl(query);
     let options = [];
-    if (isSpotifyUrl(query) && !hasSpotifyCredentials()) {
-      const spotifyType = playdl.sp_validate(query);
+    if (isSpotifyUrl(queryForLookup) && !hasSpotifyCredentials()) {
+      const spotifyType = playdl.sp_validate(queryForLookup);
       if (spotifyType === "track") {
-        options = await getSpotifySearchOptions(query, requesterName);
+        options = await getSpotifySearchOptions(queryForLookup, requesterName);
       } else {
         return false;
       }
-    } else if (!isProbablyUrl(query)) {
-      options = await searchYouTubeOptions(query, requesterName, null, searchChooserMaxResults);
+    } else if (!isProbablyUrl(queryForLookup)) {
+      options = await searchYouTubeOptions(queryForLookup, requesterName, null, searchChooserMaxResults);
+    } else if (isYoutubeHost(new URL(queryForLookup).hostname) && playdl.yt_validate(queryForLookup) === "search") {
+      options = await searchYouTubeOptions(queryForLookup, requesterName, null, searchChooserMaxResults);
     }
 
     if (!options.length) {

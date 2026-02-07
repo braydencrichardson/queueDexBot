@@ -14,6 +14,7 @@ function loadEnvVars(sourceEnv = process.env) {
     ytdlpStream: sourceEnv.YTDLP_STREAM === "1",
     ytdlpConcurrentFragments: parseInt(sourceEnv.YTDLP_CONCURRENT_FRAGMENTS || "", 10),
     ytdlpStreamTimeoutMs: parseInt(sourceEnv.YTDLP_STREAM_TIMEOUT_MS || "12000", 10),
+    queueInactivityTimeoutMs: parseInt(sourceEnv.QUEUE_INACTIVITY_TIMEOUT_MS || "300000", 10),
     interactionTimeoutMs: parseInt(sourceEnv.INTERACTION_TIMEOUT_MS || "45000", 10),
     devAlertChannelId: sourceEnv.DEV_ALERT_CHANNEL_ID,
     devLogChannelId: sourceEnv.DEV_LOG_CHANNEL_ID,

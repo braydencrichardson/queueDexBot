@@ -197,7 +197,14 @@ registerReadyHandler(client, {
     await warmupProviders();
   },
 });
-registerVoiceStateHandler(client, { queues, stopAndLeaveQueue, logError });
+registerVoiceStateHandler(client, {
+  queues,
+  stopAndLeaveQueue,
+  logInfo,
+  logError,
+  AudioPlayerStatus,
+  inactivityTimeoutMs: env.queueInactivityTimeoutMs,
+});
 
 client.on("error", (error) => {
   logError("Discord client error", error);
