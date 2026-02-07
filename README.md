@@ -1,4 +1,4 @@
-# queueDex
+# queueDexBot
 
 A Discord music bot with YouTube/SoundCloud playback, queue controls, and search/selection UI.
 Can queue from Spotify share links (will search title/artist on YouTube)
