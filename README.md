@@ -28,7 +28,7 @@ cp .env.example .env
 
 - `DISCORD_TOKEN`
 - `APPLICATION_ID`
-- `GUILD_ID` (optional; if set, commands deploy to that guild)
+- `GUILD_ID` (optional; required only for guild-scoped deploys)
 
 4. Install `yt-dlp` in a venv (recommended):
 
@@ -50,7 +50,7 @@ YTDLP_PATH=/path/to/project/.venv/bin/yt-dlp
 node deploy-commands.js
 ```
 
-By default, if `GUILD_ID` is set, commands deploy to that guild. To override:
+By default, commands deploy globally. To override:
 
 ```bash
 # force global
@@ -58,6 +58,14 @@ node deploy-commands.js --global
 
 # force guild (requires GUILD_ID)
 node deploy-commands.js --guild
+```
+
+Optional: set a default target in `.env`:
+
+```
+DEPLOY_COMMANDS_TARGET=global
+# or
+DEPLOY_COMMANDS_TARGET=guild
 ```
 
 Global commands can take up to an hour to propagate.
