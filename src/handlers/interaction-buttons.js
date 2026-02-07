@@ -1,7 +1,11 @@
+const { DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE, DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
+
 function createButtonInteractionHandler(deps) {
   const {
     AudioPlayerStatus,
     INTERACTION_TIMEOUT_MS,
+    QUEUE_VIEW_PAGE_SIZE,
+    QUEUE_MOVE_MENU_PAGE_SIZE,
     getGuildQueue,
     isSameVoiceChannel,
     announceNowPlayingAction,
@@ -18,7 +22,12 @@ function createButtonInteractionHandler(deps) {
     logInfo,
     logError,
     sendNowPlaying,
+    stopAndLeaveQueue,
   } = deps;
+  const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : DEFAULT_QUEUE_VIEW_PAGE_SIZE;
+  const queueMoveMenuPageSize = Number.isFinite(QUEUE_MOVE_MENU_PAGE_SIZE)
+    ? QUEUE_MOVE_MENU_PAGE_SIZE
+    : DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE;
 
   return async function handleButtonInteraction(interaction) {
     if (!interaction.guildId) {
@@ -69,7 +78,7 @@ function createButtonInteractionHandler(deps) {
           await interaction.reply({ content: "Queue is empty.", ephemeral: true });
           return;
         }
-        const pageSize = 10;
+        const pageSize = queueViewPageSize;
         const view = {
           guildId: interaction.guildId,
           page: 1,
@@ -92,16 +101,7 @@ function createButtonInteractionHandler(deps) {
         queue.player.stop(true);
       } else if (customId === "np_stop") {
         await announceNowPlayingAction(queue, "stopped playback and cleared the queue", interaction.user, member, interaction.message.channel);
-        queue.tracks = [];
-        queue.current = null;
-        queue.playing = false;
-        if (queue.player) {
-          queue.player.stop(true);
-        }
-        if (queue.connection) {
-          queue.connection.destroy();
-          queue.connection = null;
-        }
+        stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
       }
 
       try {
@@ -132,7 +132,7 @@ function createButtonInteractionHandler(deps) {
       }
 
       if (customId === "queued_view") {
-        const pageSize = 10;
+        const pageSize = queueViewPageSize;
         const page = Math.floor(trackIndex / pageSize) + 1;
         const selectedTrack = queue.tracks[trackIndex];
         ensureTrackId(selectedTrack);
@@ -159,7 +159,7 @@ function createButtonInteractionHandler(deps) {
 
       if (customId === "queued_move") {
         const selectedIndex = trackIndex + 1;
-        const pageSize = 10;
+        const pageSize = queueMoveMenuPageSize;
         const page = Math.floor(trackIndex / pageSize) + 1;
         const moveMenu = buildMoveMenu(queue, selectedIndex, page, pageSize);
         const moveMessage = await interaction.channel.send({
@@ -344,7 +344,9 @@ function createButtonInteractionHandler(deps) {
         }
         const selectedTrack = queue.tracks[selectedIndex - 1];
         ensureTrackId(selectedTrack);
-        const moveMenu = buildMoveMenu(queue, selectedIndex, queueView.page, queueView.pageSize);
+        const movePageSize = queueMoveMenuPageSize;
+        const movePage = Math.floor((selectedIndex - 1) / movePageSize) + 1;
+        const moveMenu = buildMoveMenu(queue, selectedIndex, movePage, movePageSize);
         const moveMessage = await interaction.channel.send({
           content: `Move **${queue.tracks[selectedIndex - 1].title}** to (page ${moveMenu.page}/${moveMenu.totalPages}):`,
           components: moveMenu.components,
@@ -368,7 +370,7 @@ function createButtonInteractionHandler(deps) {
           trackId: selectedTrack.id,
           queueViewMessageId: interaction.message.id,
           page: moveMenu.page,
-          pageSize: queueView.pageSize,
+          pageSize: movePageSize,
           timeout,
         });
       } else if (customId === "queue_remove") {

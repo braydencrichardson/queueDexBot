@@ -1,4 +1,5 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
+const { DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constants");
 
 function createQueuePlayback(deps) {
   const {
@@ -9,9 +10,13 @@ function createQueuePlayback(deps) {
     getGuildQueue,
     queueViews,
     sendNowPlaying,
+    loadingMessageDelayMs,
     logInfo,
     logError,
   } = deps;
+  const loadingDelayMs = Number.isFinite(loadingMessageDelayMs) && loadingMessageDelayMs >= 0
+    ? loadingMessageDelayMs
+    : DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS;
   async function createTrackResource(track) {
     if (!track?.url) {
       logInfo("Track missing URL", track);
@@ -46,6 +51,7 @@ function createQueuePlayback(deps) {
         queue.connection.destroy();
         queue.connection = null;
       }
+      queue.voiceChannel = null;
       return;
     }
 
@@ -63,7 +69,7 @@ function createQueuePlayback(deps) {
         } catch (error) {
           logError("Failed to send loading message", error);
         }
-      }, 5000);
+      }, loadingDelayMs);
     }
 
     let resource;

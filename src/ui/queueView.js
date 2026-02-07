@@ -5,6 +5,14 @@ const {
   formatDuration,
 } = require("../queue/utils");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
+const {
+  DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE,
+  DISCORD_MESSAGE_SAFE_MAX_LENGTH,
+  DISCORD_SELECT_LABEL_MAX_LENGTH,
+  DISCORD_SELECT_LABEL_TRUNCATE_LENGTH,
+  QUEUE_PREVIEW_LINE_CLAMP_MAX_LENGTH,
+  QUEUE_PREVIEW_LINE_CLAMP_SLICE_LENGTH,
+} = require("../config/constants");
 
 function formatQueuePage(queue, page, pageSize, selectedTrackId) {
   const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
@@ -47,13 +55,17 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
         const secondLine = link ? `   ${link}` : null;
         return secondLine ? [firstLine, secondLine] : [firstLine];
       });
-    const maxLength = 1900;
+    const maxLength = DISCORD_MESSAGE_SAFE_MAX_LENGTH;
     let previewLines = preview.flat();
     let content = [...lines, previewLines.join("\n")].join("\n");
     if (content.length > maxLength) {
       const stripLink = (line) => line.replace(/\s*\(<https?:\/\/[^>]+>\)/g, "");
       const stripRequester = (line) => line.replace(/\s*\(requested by \*\*[^)]+\*\*\)/g, "");
-      const clampLine = (line) => (line.length > 140 ? `${line.slice(0, 137)}…` : line);
+      const clampLine = (line) => (
+        line.length > QUEUE_PREVIEW_LINE_CLAMP_MAX_LENGTH
+          ? `${line.slice(0, QUEUE_PREVIEW_LINE_CLAMP_SLICE_LENGTH)}…`
+          : line
+      );
       const previewNoLinks = previewLines.map(stripLink);
       const previewNoLinksNoRequester = previewNoLinks.map(stripRequester).map(clampLine);
       content = [...lines, previewNoLinksNoRequester.join("\n")].join("\n");
@@ -84,7 +96,9 @@ function buildQueueViewComponents(queueView, queue) {
       const absoluteIndex = startIndex + index + 1;
       const duration = formatDuration(track.duration);
       const labelBase = `${absoluteIndex}. ${sanitizeInlineDiscordText(track.title)}`;
-      const label = labelBase.length > 100 ? `${labelBase.slice(0, 97)}...` : labelBase;
+      const label = labelBase.length > DISCORD_SELECT_LABEL_MAX_LENGTH
+        ? `${labelBase.slice(0, DISCORD_SELECT_LABEL_TRUNCATE_LENGTH)}...`
+        : labelBase;
       return {
         label,
         value: track.id,
@@ -194,14 +208,16 @@ function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale 
   return { ...pageData, content: `${headerLines.join("\n")}\n${pageData.content}` };
 }
 
-function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = 25) {
+function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE) {
   const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
   const safePage = Math.min(Math.max(page, 1), totalPages);
   const startIndex = (safePage - 1) * pageSize;
   const options = queue.tracks.slice(startIndex, startIndex + pageSize).map((track, index) => {
     const position = startIndex + index + 1;
     const labelBase = `${position}. ${sanitizeInlineDiscordText(track.title)}`;
-    const label = labelBase.length > 100 ? `${labelBase.slice(0, 97)}...` : labelBase;
+    const label = labelBase.length > DISCORD_SELECT_LABEL_MAX_LENGTH
+      ? `${labelBase.slice(0, DISCORD_SELECT_LABEL_TRUNCATE_LENGTH)}...`
+      : labelBase;
     const description = position === selectedIndex ? "Current position" : undefined;
     return { label, value: String(position), description };
   });

@@ -1,4 +1,9 @@
 const util = require("util");
+const {
+  DEV_LOG_INSPECT_BREAK_LENGTH,
+  DEV_LOG_INSPECT_DEPTH,
+  DISCORD_MESSAGE_SAFE_MAX_LENGTH,
+} = require("../config/constants");
 
 function createDevLogger(deps) {
   const { client, devAlertChannelId, devLogChannelId } = deps;
@@ -13,7 +18,10 @@ function createDevLogger(deps) {
         try {
           dataText = JSON.stringify(data);
         } catch {
-          dataText = util.inspect(data, { depth: 2, breakLength: 80 });
+          dataText = util.inspect(data, {
+            depth: DEV_LOG_INSPECT_DEPTH,
+            breakLength: DEV_LOG_INSPECT_BREAK_LENGTH,
+          });
         }
       }
       if (dataText) {
@@ -47,7 +55,7 @@ function createDevLogger(deps) {
       if (!channel?.send) {
         return;
       }
-      const trimmed = String(message || "").slice(0, 1900);
+      const trimmed = String(message || "").slice(0, DISCORD_MESSAGE_SAFE_MAX_LENGTH);
       if (!trimmed) {
         return;
       }

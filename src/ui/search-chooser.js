@@ -1,6 +1,10 @@
 const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { isYoutubeHost, normalizeIncomingUrl } = require("../utils/url-normalization");
+const {
+  DISCORD_SELECT_LABEL_MAX_LENGTH,
+  DISCORD_SELECT_LABEL_TRUNCATE_LENGTH,
+} = require("../config/constants");
 
 function createSearchChooser(deps) {
   const {
@@ -64,7 +68,9 @@ function createSearchChooser(deps) {
       const safeTitle = sanitizeInlineDiscordText(track.title);
       const safeChannel = sanitizeInlineDiscordText(track.channel);
       const baseLabel = `${index + 1}. ${safeTitle}`;
-      const label = baseLabel.length > 100 ? `${baseLabel.slice(0, 97)}...` : baseLabel;
+      const label = baseLabel.length > DISCORD_SELECT_LABEL_MAX_LENGTH
+        ? `${baseLabel.slice(0, DISCORD_SELECT_LABEL_TRUNCATE_LENGTH)}...`
+        : baseLabel;
       const duration = formatDuration(track.duration);
       const channelParts = [];
       if (safeChannel) {

@@ -11,7 +11,7 @@ const playdl = require("play-dl");
 const sodium = require("libsodium-wrappers");
 const dotenv = require("dotenv");
 const { loadEnvVars } = require("./src/config/env");
-const { createRuntimeState, SEARCH_CHOOSER_MAX_RESULTS } = require("./src/bot/runtime-state");
+const { createRuntimeState } = require("./src/bot/runtime-state");
 const { createDevLogger } = require("./src/logging/dev-logger");
 const { searchYouTubeOptions, searchYouTubePreferred, getYoutubeId, toShortYoutubeUrl } = require("./src/providers/youtube-search");
 const { createProviderBootstrap } = require("./src/providers/provider-bootstrap");
@@ -101,9 +101,11 @@ const {
   ensureSpotifyReady,
   hasSpotifyCredentials,
   getSoundcloudClientId,
-  searchChooserMaxResults: SEARCH_CHOOSER_MAX_RESULTS,
+  searchChooserMaxResults: env.searchChooserMaxResults,
   soundcloudUserAgent: env.soundcloudUserAgent,
   youtubeUserAgent: env.youtubeUserAgent,
+  httpTimeoutMs: env.trackResolverHttpTimeoutMs,
+  soundcloudRedirectMaxHops: env.soundcloudRedirectMaxHops,
   logInfo,
   logError,
 });
@@ -151,7 +153,7 @@ const { trySendSearchChooser } = createSearchChooser({
   pendingSearches,
   logInfo,
   logError,
-  searchChooserMaxResults: SEARCH_CHOOSER_MAX_RESULTS,
+  searchChooserMaxResults: env.searchChooserMaxResults,
 });
 
 const { createYoutubeResource } = createYoutubeResourceFactory({
@@ -182,6 +184,7 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
   getGuildQueue,
   queueViews,
   sendNowPlaying,
+  loadingMessageDelayMs: env.playbackLoadingMessageDelayMs,
   logInfo,
   logError,
 }));
@@ -190,6 +193,7 @@ registerReadyHandler(client, {
   logInfo,
   logError,
   presence: {
+    status: env.botStatus,
     activityName: env.botActivityName,
     activityType: env.botActivityType,
   },
@@ -217,6 +221,8 @@ client.on("shardError", (error) => {
 registerInteractionHandler(client, {
   AudioPlayerStatus,
   INTERACTION_TIMEOUT_MS: env.interactionTimeoutMs,
+  QUEUE_VIEW_PAGE_SIZE: env.queueViewPageSize,
+  QUEUE_MOVE_MENU_PAGE_SIZE: env.queueMoveMenuPageSize,
   joinVoiceChannel,
   getGuildQueue,
   isSameVoiceChannel,

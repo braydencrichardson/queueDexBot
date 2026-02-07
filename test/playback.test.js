@@ -8,6 +8,7 @@ test("playNext clears state and destroys connection when queue is empty", async 
     tracks: [],
     playing: true,
     current: { title: "Old" },
+    voiceChannel: { id: "vc-1" },
     connection: {
       destroyed: false,
       destroy() {
@@ -39,6 +40,7 @@ test("playNext clears state and destroys connection when queue is empty", async 
   assert.equal(queue.playing, false);
   assert.equal(queue.current, null);
   assert.equal(queue.connection, null);
+  assert.equal(queue.voiceChannel, null);
 });
 
 test("playNext plays next track, subscribes connection, marks queue view stale, and sends now playing", async () => {

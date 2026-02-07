@@ -1,5 +1,11 @@
 const https = require("https");
 const { normalizeIncomingUrl } = require("../utils/url-normalization");
+const {
+  DEFAULT_SOUND_CLOUD_REDIRECT_MAX_HOPS,
+  DEFAULT_TRACK_RESOLVER_HTTP_TIMEOUT_MS,
+  SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO,
+  SPOTIFY_YOUTUBE_MIN_TITLE_RATIO,
+} = require("../config/constants");
 
 function createTrackResolver(deps) {
   const {
@@ -16,9 +22,19 @@ function createTrackResolver(deps) {
     searchChooserMaxResults,
     soundcloudUserAgent,
     youtubeUserAgent,
+    httpTimeoutMs,
+    soundcloudRedirectMaxHops,
+    httpsModule = https,
     logInfo,
     logError,
   } = deps;
+
+  const requestTimeoutMs = Number.isFinite(httpTimeoutMs) && httpTimeoutMs > 0
+    ? httpTimeoutMs
+    : DEFAULT_TRACK_RESOLVER_HTTP_TIMEOUT_MS;
+  const redirectMaxHops = Number.isFinite(soundcloudRedirectMaxHops) && soundcloudRedirectMaxHops > 0
+    ? soundcloudRedirectMaxHops
+    : DEFAULT_SOUND_CLOUD_REDIRECT_MAX_HOPS;
 
   function toSoundcloudPermalink(value) {
     if (!value) {
@@ -215,8 +231,8 @@ function createTrackResolver(deps) {
         query,
         requester,
         {
-          minArtistMatchRatio: 1,
-          minTitleMatchRatio: 0.6,
+          minTitleMatchRatio: SPOTIFY_YOUTUBE_MIN_TITLE_RATIO,
+          minArtistMatchRatio: SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO,
         },
         searchChooserMaxResults
       );
@@ -255,8 +271,8 @@ function createTrackResolver(deps) {
       });
       for (const query of queries) {
         const track = await searchYouTubePreferred(query, requester, {
-          minArtistMatchRatio: 1,
-          minTitleMatchRatio: 0.6,
+          minArtistMatchRatio: SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO,
+          minTitleMatchRatio: SPOTIFY_YOUTUBE_MIN_TITLE_RATIO,
         });
         if (track) {
           return [track];
@@ -281,8 +297,8 @@ function createTrackResolver(deps) {
         });
         for (const query of queries) {
           const match = await searchYouTubePreferred(query, requester, {
-            minArtistMatchRatio: 1,
-            minTitleMatchRatio: 0.6,
+            minArtistMatchRatio: SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO,
+            minTitleMatchRatio: SPOTIFY_YOUTUBE_MIN_TITLE_RATIO,
           });
           if (match) {
             results.push(match);
@@ -298,8 +314,7 @@ function createTrackResolver(deps) {
 
   function httpGetJson(url) {
     return new Promise((resolve, reject) => {
-      https
-        .get(url, (res) => {
+      const req = httpsModule.get(url, (res) => {
           let data = "";
           res.on("data", (chunk) => {
             data += chunk;
@@ -315,15 +330,17 @@ function createTrackResolver(deps) {
               reject(error);
             }
           });
-        })
-        .on("error", reject);
+        });
+      req.setTimeout(requestTimeoutMs, () => {
+        req.destroy(new Error(`HTTP request timeout after ${requestTimeoutMs}ms`));
+      });
+      req.on("error", reject);
     });
   }
 
   function httpGetText(url, headers = {}) {
     return new Promise((resolve, reject) => {
-      https
-        .get(url, { headers }, (res) => {
+      const req = httpsModule.get(url, { headers }, (res) => {
           let data = "";
           res.on("data", (chunk) => {
             data += chunk;
@@ -335,12 +352,15 @@ function createTrackResolver(deps) {
             }
             resolve(data);
           });
-        })
-        .on("error", reject);
+        });
+      req.setTimeout(requestTimeoutMs, () => {
+        req.destroy(new Error(`HTTP request timeout after ${requestTimeoutMs}ms`));
+      });
+      req.on("error", reject);
     });
   }
 
-  function resolveRedirect(url, maxHops = 5) {
+  function resolveRedirect(url, maxHops = redirectMaxHops) {
     if (maxHops <= 0) {
       return Promise.resolve(url);
     }
@@ -348,8 +368,7 @@ function createTrackResolver(deps) {
       "User-Agent": soundcloudUserAgent || youtubeUserAgent || "Mozilla/5.0",
     };
     return new Promise((resolve, reject) => {
-      https
-        .get(url, { headers }, (res) => {
+      const req = httpsModule.get(url, { headers }, (res) => {
           res.resume();
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
             const nextUrl = new URL(res.headers.location, url).toString();
@@ -357,8 +376,11 @@ function createTrackResolver(deps) {
             return;
           }
           resolve(url);
-        })
-        .on("error", reject);
+        });
+      req.setTimeout(requestTimeoutMs, () => {
+        req.destroy(new Error(`HTTP request timeout after ${requestTimeoutMs}ms`));
+      });
+      req.on("error", reject);
     });
   }
 
@@ -536,7 +558,7 @@ function createTrackResolver(deps) {
     }
     if (url && url.hostname === "on.soundcloud.com") {
       try {
-        const resolved = await resolveRedirect(url.toString());
+        const resolved = await resolveRedirect(url.toString(), redirectMaxHops);
         if (resolved && resolved !== url.toString()) {
           normalizedSoundcloud = resolved;
           url = new URL(resolved);

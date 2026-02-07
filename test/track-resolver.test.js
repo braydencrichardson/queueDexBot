@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("events");
 
 const { createTrackResolver } = require("../src/providers/track-resolver");
 const { getYoutubeId, toShortYoutubeUrl } = require("../src/providers/youtube-search");
@@ -166,4 +167,59 @@ test("resolveTracks falls back to searchYouTubePreferred for plain queries", asy
   assert.equal(tracks[0].title, expected.title);
   assert.equal(tracks[0].url, expected.url);
   assert.equal(tracks[0].requester, "Requester");
+});
+
+test("resolveTracks applies configured HTTP timeout to external metadata requests", async () => {
+  const timeoutValues = [];
+  const httpsModule = {
+    get(url, optionsOrCallback, maybeCallback) {
+      const callback = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback;
+      const req = new EventEmitter();
+      req.setTimeout = (ms) => {
+        timeoutValues.push(ms);
+      };
+      req.destroy = () => {};
+
+      process.nextTick(() => {
+        const res = new EventEmitter();
+        res.statusCode = 200;
+        res.headers = {};
+        res.resume = () => {};
+        callback(res);
+        if (String(url).includes("/oembed?")) {
+          res.emit("data", JSON.stringify({ title: "Song", author_name: "Artist" }));
+        } else {
+          res.emit("data", '<meta property="og:title" content="Song"><meta property="og:description" content="Track · Artist">');
+        }
+        res.emit("end");
+      });
+
+      return req;
+    },
+  };
+
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: () => "track",
+      yt_validate: () => null,
+      video_basic_info: async () => ({ video_details: {} }),
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async () => ({ type: "track", name: "n", artists: [], album: { name: "a" } }),
+      setToken: async () => {},
+    },
+    httpsModule,
+    httpTimeoutMs: 4321,
+    searchYouTubeOptions: async () => [],
+  });
+
+  const tracks = await resolver.resolveTracks("https://open.spotify.com/track/abc123", "Requester");
+
+  assert.deepEqual(tracks, []);
+  assert.equal(timeoutValues.length >= 2, true);
+  assert.equal(timeoutValues.every((value) => value === 4321), true);
 });

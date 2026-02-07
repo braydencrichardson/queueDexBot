@@ -1,5 +1,3 @@
-const SEARCH_CHOOSER_MAX_RESULTS = 5;
-
 function createRuntimeState() {
   return {
     queues: new Map(),
@@ -12,5 +10,4 @@ function createRuntimeState() {
 
 module.exports = {
   createRuntimeState,
-  SEARCH_CHOOSER_MAX_RESULTS,
 };

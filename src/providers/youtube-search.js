@@ -1,4 +1,10 @@
 const yts = require("yt-search");
+const {
+  YOUTUBE_MATCH_DEFAULT_MIN_ARTIST_RATIO,
+  YOUTUBE_MATCH_DEFAULT_MIN_TITLE_RATIO,
+  YOUTUBE_SEARCH_DEFAULT_LIMIT,
+  YOUTUBE_SEARCH_MIN_SECONDS,
+} = require("../config/constants");
 
 function getYoutubeId(value) {
   if (!value) {
@@ -59,8 +65,8 @@ function scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions) {
   const titleTokens = new Set(tokenizeQuery(title));
   const requiredMatches = requiredTokens.filter((token) => titleTokens.has(token)).length;
   const artistMatches = artistTokens.filter((token) => titleTokens.has(token)).length;
-  const minTitleRatio = matchOptions?.minTitleMatchRatio ?? 0.5;
-  const minArtistRatio = matchOptions?.minArtistMatchRatio ?? 0.5;
+  const minTitleRatio = matchOptions?.minTitleMatchRatio ?? YOUTUBE_MATCH_DEFAULT_MIN_TITLE_RATIO;
+  const minArtistRatio = matchOptions?.minArtistMatchRatio ?? YOUTUBE_MATCH_DEFAULT_MIN_ARTIST_RATIO;
   if (requiredTokens.length && requiredMatches / requiredTokens.length < minTitleRatio) {
     return -Infinity;
   }
@@ -87,7 +93,7 @@ function pickYouTubeVideo(videos, query, matchOptions) {
   const requiredTokens = tokenizeQuery(parsed.title || query);
   const artistTokens = tokenizeQuery(parsed.artist || "");
   const scored = videos
-    .filter((video) => typeof video.seconds === "number" && video.seconds > 30)
+    .filter((video) => typeof video.seconds === "number" && video.seconds > YOUTUBE_SEARCH_MIN_SECONDS)
     .map((video) => ({
       video,
       score: scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions),
@@ -110,7 +116,7 @@ function rankYouTubeVideos(videos, query, matchOptions) {
   const requiredTokens = tokenizeQuery(parsed.title || query);
   const artistTokens = tokenizeQuery(parsed.artist || "");
   const scored = videos
-    .filter((video) => typeof video.seconds === "number" && video.seconds > 30)
+    .filter((video) => typeof video.seconds === "number" && video.seconds > YOUTUBE_SEARCH_MIN_SECONDS)
     .map((video) => ({
       video,
       score: scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions),
@@ -122,7 +128,7 @@ function rankYouTubeVideos(videos, query, matchOptions) {
   return scored.length ? scored : videos;
 }
 
-async function searchYouTubeOptions(query, requester, matchOptions, limit = 5) {
+async function searchYouTubeOptions(query, requester, matchOptions, limit = YOUTUBE_SEARCH_DEFAULT_LIMIT) {
   const variants = [
     `${query} official audio`,
     `${query} official music video`,

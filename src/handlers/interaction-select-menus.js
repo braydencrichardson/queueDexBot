@@ -117,8 +117,7 @@ function createSelectMenuInteractionHandler(deps) {
       }
 
       const [moved] = queue.tracks.splice(sourceIndex - 1, 1);
-      const adjustedIndex = destIndex > sourceIndex ? destIndex - 1 : destIndex;
-      queue.tracks.splice(adjustedIndex - 1, 0, moved);
+      queue.tracks.splice(destIndex - 1, 0, moved);
 
       pendingMoves.delete(interaction.message.id);
       clearTimeout(pending.timeout);
@@ -128,7 +127,7 @@ function createSelectMenuInteractionHandler(deps) {
       if (queueView) {
         ensureTrackId(moved);
         queueView.selectedTrackId = moved.id;
-        queueView.page = Math.floor((adjustedIndex - 1) / queueView.pageSize) + 1;
+        queueView.page = Math.floor((destIndex - 1) / queueView.pageSize) + 1;
         queueView.stale = false;
         const pageData = formatQueueViewContent(queue, queueView.page, queueView.pageSize, queueView.selectedTrackId, { stale: queueView.stale });
         queueViews.set(pending.queueViewMessageId, queueView);

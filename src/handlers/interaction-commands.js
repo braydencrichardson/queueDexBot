@@ -1,6 +1,9 @@
+const { DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
+
 function createCommandInteractionHandler(deps) {
   const {
     INTERACTION_TIMEOUT_MS,
+    QUEUE_VIEW_PAGE_SIZE,
     joinVoiceChannel,
     getGuildQueue,
     isSameVoiceChannel,
@@ -25,6 +28,7 @@ function createCommandInteractionHandler(deps) {
     hasSpotifyCredentials,
     stopAndLeaveQueue,
   } = deps;
+  const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : DEFAULT_QUEUE_VIEW_PAGE_SIZE;
 
   return async function handleCommandInteraction(interaction) {
     if (!interaction.isCommand()) {
@@ -241,7 +245,7 @@ function createCommandInteractionHandler(deps) {
           await interaction.reply("Queue is empty.");
           return;
         }
-        const pageSize = 10;
+        const pageSize = queueViewPageSize;
         const view = {
           guildId: interaction.guildId,
           page: 1,
