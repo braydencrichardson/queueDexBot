@@ -1,3 +1,6 @@
+const { createQueueViewService } = require("./queue-view-service");
+const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
+
 function createSelectMenuInteractionHandler(deps) {
   const {
     INTERACTION_TIMEOUT_MS,
@@ -17,6 +20,11 @@ function createSelectMenuInteractionHandler(deps) {
     logError,
     playNext,
   } = deps;
+  const queueViewService = createQueueViewService({
+    queueViews,
+    formatQueueViewContent,
+    buildQueueViewComponents,
+  });
 
   return async function handleSelectMenuInteraction(interaction) {
     if (!interaction.guildId) {
@@ -45,8 +53,7 @@ function createSelectMenuInteractionHandler(deps) {
         return;
       }
       const selected = pending.options[index];
-      pendingSearches.delete(interaction.message.id);
-      clearTimeout(pending.timeout);
+      clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
 
       queue.textChannel = interaction.channel;
       ensureTrackId(selected);
@@ -65,24 +72,21 @@ function createSelectMenuInteractionHandler(deps) {
         components: showQueuedControls ? buildQueuedActionComponents() : [],
       });
       if (showQueuedControls) {
-        const timeout = setTimeout(async () => {
-          try {
-            const entry = pendingQueuedActions.get(interaction.message.id);
-            if (!entry) {
-              return;
-            }
-            pendingQueuedActions.delete(interaction.message.id);
+        setExpiringMapEntry({
+          store: pendingQueuedActions,
+          key: interaction.message.id,
+          timeoutMs: INTERACTION_TIMEOUT_MS,
+          logError,
+          errorMessage: "Failed to expire queued action controls",
+          onExpire: async () => {
             await interaction.message.edit({ components: [] });
-          } catch (error) {
-            logError("Failed to expire queued action controls", error);
-          }
-        }, INTERACTION_TIMEOUT_MS);
-        pendingQueuedActions.set(interaction.message.id, {
-          guildId: interaction.guildId,
-          ownerId: interaction.user.id,
-          trackId: selected.id,
-          trackTitle: selected.title,
-          timeout,
+          },
+          entry: {
+            guildId: interaction.guildId,
+            ownerId: interaction.user.id,
+            trackId: selected.id,
+            trackTitle: selected.title,
+          },
         });
       }
 
@@ -119,8 +123,7 @@ function createSelectMenuInteractionHandler(deps) {
       const [moved] = queue.tracks.splice(sourceIndex - 1, 1);
       queue.tracks.splice(destIndex - 1, 0, moved);
 
-      pendingMoves.delete(interaction.message.id);
-      clearTimeout(pending.timeout);
+      clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
       await interaction.update({ content: `Moved **${moved.title}** to position ${destIndex}.`, components: [] });
 
       const queueView = queueViews.get(pending.queueViewMessageId);
@@ -129,17 +132,10 @@ function createSelectMenuInteractionHandler(deps) {
         queueView.selectedTrackId = moved.id;
         queueView.page = Math.floor((destIndex - 1) / queueView.pageSize) + 1;
         queueView.stale = false;
-        const pageData = formatQueueViewContent(queue, queueView.page, queueView.pageSize, queueView.selectedTrackId, { stale: queueView.stale });
-        queueViews.set(pending.queueViewMessageId, queueView);
-        try {
-          const viewMessage = await interaction.channel.messages.fetch(pending.queueViewMessageId);
-          await viewMessage.edit({
-            content: pageData.content,
-            components: buildQueueViewComponents(queueView, queue),
-          });
-        } catch (error) {
-          logError("Failed to update queue view after move", error);
-        }
+        await queueViewService.editMessage(interaction.channel, pending.queueViewMessageId, queue, queueView, {
+          logError,
+          errorMessage: "Failed to update queue view after move",
+        });
       }
       return;
     }
@@ -160,12 +156,7 @@ function createSelectMenuInteractionHandler(deps) {
       }
       queueView.stale = false;
       const queue = getGuildQueue(interaction.guildId);
-      const pageData = formatQueueViewContent(queue, queueView.page, queueView.pageSize, queueView.selectedTrackId, { stale: queueView.stale });
-      queueViews.set(interaction.message.id, queueView);
-      await interaction.update({
-        content: pageData.content,
-        components: buildQueueViewComponents(queueView, queue),
-      });
+      await queueViewService.updateInteraction(interaction, queue, queueView);
     }
   };
 }

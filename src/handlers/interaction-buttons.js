@@ -1,4 +1,6 @@
 const { DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE, DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
+const { createQueueViewService } = require("./queue-view-service");
+const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
 
 function createButtonInteractionHandler(deps) {
   const {
@@ -28,6 +30,11 @@ function createButtonInteractionHandler(deps) {
   const queueMoveMenuPageSize = Number.isFinite(QUEUE_MOVE_MENU_PAGE_SIZE)
     ? QUEUE_MOVE_MENU_PAGE_SIZE
     : DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE;
+  const queueViewService = createQueueViewService({
+    queueViews,
+    formatQueueViewContent,
+    buildQueueViewComponents,
+  });
 
   return async function handleButtonInteraction(interaction) {
     if (!interaction.guildId) {
@@ -49,8 +56,7 @@ function createButtonInteractionHandler(deps) {
         await interaction.reply({ content: "Only the requester can close this search.", ephemeral: true });
         return;
       }
-      pendingSearches.delete(interaction.message.id);
-      clearTimeout(pending.timeout);
+      clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
       await interaction.update({ content: "Search closed.", components: [] });
       return;
     }
@@ -79,23 +85,13 @@ function createButtonInteractionHandler(deps) {
           return;
         }
         const pageSize = queueViewPageSize;
-        const view = {
-          guildId: interaction.guildId,
+        const view = queueViewService.createFromInteraction(interaction, {
           page: 1,
           pageSize,
-          ownerId: interaction.user.id,
           selectedTrackId: null,
           stale: false,
-        };
-        const pageData = formatQueueViewContent(queue, view.page, view.pageSize, view.selectedTrackId, { stale: view.stale });
-        const message = await interaction.channel.send({
-          content: pageData.content,
-          components: buildQueueViewComponents(view, queue),
         });
-        queueViews.set(message.id, {
-          ...view,
-          page: pageData.page,
-        });
+        await queueViewService.sendToChannel(interaction.channel, queue, view);
       } else if (customId === "np_skip") {
         await announceNowPlayingAction(queue, "skipped the track", interaction.user, member, interaction.message.channel);
         queue.player.stop(true);
@@ -136,23 +132,13 @@ function createButtonInteractionHandler(deps) {
         const page = Math.floor(trackIndex / pageSize) + 1;
         const selectedTrack = queue.tracks[trackIndex];
         ensureTrackId(selectedTrack);
-        const view = {
-          guildId: interaction.guildId,
+        const view = queueViewService.createFromInteraction(interaction, {
           page,
           pageSize,
-          ownerId: interaction.user.id,
           selectedTrackId: selectedTrack.id,
           stale: false,
-        };
-        const pageData = formatQueueViewContent(queue, view.page, view.pageSize, view.selectedTrackId, { stale: view.stale });
-        const message = await interaction.channel.send({
-          content: pageData.content,
-          components: buildQueueViewComponents(view, queue),
         });
-        queueViews.set(message.id, {
-          ...view,
-          page: pageData.page,
-        });
+        await queueViewService.sendToChannel(interaction.channel, queue, view);
         await interaction.deferUpdate();
         return;
       }
@@ -166,27 +152,24 @@ function createButtonInteractionHandler(deps) {
           content: `Move **${pending.trackTitle || "selected track"}** to (page ${moveMenu.page}/${moveMenu.totalPages}):`,
           components: moveMenu.components,
         });
-        const timeout = setTimeout(async () => {
-          try {
-            const entry = pendingMoves.get(moveMessage.id);
-            if (!entry) {
-              return;
-            }
-            pendingMoves.delete(moveMessage.id);
+        setExpiringMapEntry({
+          store: pendingMoves,
+          key: moveMessage.id,
+          timeoutMs: INTERACTION_TIMEOUT_MS,
+          logError,
+          errorMessage: "Failed to expire move request",
+          onExpire: async () => {
             await moveMessage.edit({ content: "Move request expired.", components: [] });
-          } catch (error) {
-            logError("Failed to expire move request", error);
-          }
-        }, INTERACTION_TIMEOUT_MS);
-        pendingMoves.set(moveMessage.id, {
-          guildId: interaction.guildId,
-          ownerId: interaction.user.id,
-          sourceIndex: selectedIndex,
-          trackId: pending.trackId,
-          queueViewMessageId: null,
-          page: moveMenu.page,
-          pageSize,
-          timeout,
+          },
+          entry: {
+            guildId: interaction.guildId,
+            ownerId: interaction.user.id,
+            sourceIndex: selectedIndex,
+            trackId: pending.trackId,
+            queueViewMessageId: null,
+            page: moveMenu.page,
+            pageSize,
+          },
         });
         await interaction.deferUpdate();
         return;
@@ -200,8 +183,7 @@ function createButtonInteractionHandler(deps) {
           content: `Moved **${moved.title}** to position 1.`,
           components: [],
         });
-        pendingQueuedActions.delete(interaction.message.id);
-        clearTimeout(pending.timeout);
+        clearMapEntryWithTimeout(pendingQueuedActions, interaction.message.id);
         return;
       }
 
@@ -212,8 +194,7 @@ function createButtonInteractionHandler(deps) {
           content: `Removed **${removed.title}** from the queue.`,
           components: [],
         });
-        pendingQueuedActions.delete(interaction.message.id);
-        clearTimeout(pending.timeout);
+        clearMapEntryWithTimeout(pendingQueuedActions, interaction.message.id);
         return;
       }
     }
@@ -229,8 +210,7 @@ function createButtonInteractionHandler(deps) {
         return;
       }
       if (customId === "move_close") {
-        pendingMoves.delete(interaction.message.id);
-        clearTimeout(pending.timeout);
+        clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
         await interaction.update({ content: "Move closed.", components: [] });
         return;
       }
@@ -247,8 +227,7 @@ function createButtonInteractionHandler(deps) {
         }
         const [moved] = guildQueue.tracks.splice(currentIndex - 1, 1);
         guildQueue.tracks.unshift(moved);
-        pendingMoves.delete(interaction.message.id);
-        clearTimeout(pending.timeout);
+        clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
         await interaction.update({ content: `Moved **${moved.title}** to position 1.`, components: [] });
 
         const queueView = queueViews.get(pending.queueViewMessageId);
@@ -257,25 +236,17 @@ function createButtonInteractionHandler(deps) {
           queueView.selectedTrackId = moved.id;
           queueView.page = 1;
           queueView.stale = false;
-          const pageData = formatQueueViewContent(guildQueue, queueView.page, queueView.pageSize, queueView.selectedTrackId, { stale: queueView.stale });
-          queueViews.set(pending.queueViewMessageId, queueView);
-          try {
-            const viewMessage = await interaction.channel.messages.fetch(pending.queueViewMessageId);
-            await viewMessage.edit({
-              content: pageData.content,
-              components: buildQueueViewComponents(queueView, guildQueue),
-            });
-          } catch (error) {
-            logError("Failed to update queue view after move to first", error);
-          }
+          await queueViewService.editMessage(interaction.channel, pending.queueViewMessageId, guildQueue, queueView, {
+            logError,
+            errorMessage: "Failed to update queue view after move to first",
+          });
         }
         return;
       }
       const guildQueue = getGuildQueue(interaction.guildId);
       const currentIndex = pending.trackId ? getTrackIndexById(guildQueue, pending.trackId) + 1 : pending.sourceIndex;
       if (!currentIndex || !guildQueue.tracks[currentIndex - 1]) {
-        pendingMoves.delete(interaction.message.id);
-        clearTimeout(pending.timeout);
+        clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
         await interaction.update({ content: "Selected track no longer exists.", components: [] });
         return;
       }
@@ -351,27 +322,24 @@ function createButtonInteractionHandler(deps) {
           content: `Move **${queue.tracks[selectedIndex - 1].title}** to (page ${moveMenu.page}/${moveMenu.totalPages}):`,
           components: moveMenu.components,
         });
-        const timeout = setTimeout(async () => {
-          try {
-            const entry = pendingMoves.get(moveMessage.id);
-            if (!entry) {
-              return;
-            }
-            pendingMoves.delete(moveMessage.id);
+        setExpiringMapEntry({
+          store: pendingMoves,
+          key: moveMessage.id,
+          timeoutMs: INTERACTION_TIMEOUT_MS,
+          logError,
+          errorMessage: "Failed to expire move request",
+          onExpire: async () => {
             await moveMessage.edit({ content: "Move request expired.", components: [] });
-          } catch (error) {
-            logError("Failed to expire move request", error);
-          }
-        }, INTERACTION_TIMEOUT_MS);
-        pendingMoves.set(moveMessage.id, {
-          guildId: interaction.guildId,
-          ownerId: queueView.ownerId,
-          sourceIndex: selectedIndex,
-          trackId: selectedTrack.id,
-          queueViewMessageId: interaction.message.id,
-          page: moveMenu.page,
-          pageSize: movePageSize,
-          timeout,
+          },
+          entry: {
+            guildId: interaction.guildId,
+            ownerId: queueView.ownerId,
+            sourceIndex: selectedIndex,
+            trackId: selectedTrack.id,
+            queueViewMessageId: interaction.message.id,
+            page: moveMenu.page,
+            pageSize: movePageSize,
+          },
         });
       } else if (customId === "queue_remove") {
         const selectedIndex = queueView.selectedTrackId
@@ -400,13 +368,7 @@ function createButtonInteractionHandler(deps) {
       }
 
       queueView.stale = false;
-      const pageData = formatQueueViewContent(queue, queueView.page, queueView.pageSize, queueView.selectedTrackId, { stale: queueView.stale });
-      queueView.page = pageData.page;
-      queueViews.set(interaction.message.id, queueView);
-      await interaction.update({
-        content: pageData.content,
-        components: buildQueueViewComponents(queueView, queue),
-      });
+      await queueViewService.updateInteraction(interaction, queue, queueView);
     }
   };
 }

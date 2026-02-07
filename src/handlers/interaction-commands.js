@@ -1,4 +1,6 @@
 const { DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
+const { createQueueViewService } = require("./queue-view-service");
+const { setExpiringMapEntry } = require("./interaction-helpers");
 
 function createCommandInteractionHandler(deps) {
   const {
@@ -29,6 +31,11 @@ function createCommandInteractionHandler(deps) {
     stopAndLeaveQueue,
   } = deps;
   const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : DEFAULT_QUEUE_VIEW_PAGE_SIZE;
+  const queueViewService = createQueueViewService({
+    queueViews,
+    formatQueueViewContent,
+    buildQueueViewComponents,
+  });
 
   return async function handleCommandInteraction(interaction) {
     if (!interaction.isCommand()) {
@@ -126,25 +133,22 @@ function createCommandInteractionHandler(deps) {
           fetchReply: true,
         });
         if (showQueuedControls) {
-          const timeout = setTimeout(async () => {
-            try {
-              const entry = pendingQueuedActions.get(message.id);
-              if (!entry) {
-                return;
-              }
-              pendingQueuedActions.delete(message.id);
-              await message.edit({ components: [] });
-            } catch (error) {
-              logError("Failed to expire queued action controls", error);
-            }
-          }, INTERACTION_TIMEOUT_MS);
           ensureTrackId(tracks[0]);
-          pendingQueuedActions.set(message.id, {
-            guildId: interaction.guildId,
-            ownerId: interaction.user.id,
-            trackId: tracks[0].id,
-            trackTitle: tracks[0].title,
-            timeout,
+          setExpiringMapEntry({
+            store: pendingQueuedActions,
+            key: message.id,
+            timeoutMs: INTERACTION_TIMEOUT_MS,
+            logError,
+            errorMessage: "Failed to expire queued action controls",
+            onExpire: async () => {
+              await message.edit({ components: [] });
+            },
+            entry: {
+              guildId: interaction.guildId,
+              ownerId: interaction.user.id,
+              trackId: tracks[0].id,
+              trackTitle: tracks[0].title,
+            },
           });
         }
       } else {
@@ -246,24 +250,13 @@ function createCommandInteractionHandler(deps) {
           return;
         }
         const pageSize = queueViewPageSize;
-        const view = {
-          guildId: interaction.guildId,
+        const view = queueViewService.createFromInteraction(interaction, {
           page: 1,
           pageSize,
-          ownerId: interaction.user.id,
           selectedTrackId: null,
           stale: false,
-        };
-        const pageData = formatQueueViewContent(queue, view.page, view.pageSize, view.selectedTrackId, { stale: view.stale });
-        const message = await interaction.reply({
-          content: pageData.content,
-          components: buildQueueViewComponents(view, queue),
-          fetchReply: true,
         });
-        queueViews.set(message.id, {
-          ...view,
-          page: pageData.page,
-        });
+        await queueViewService.reply(interaction, queue, view);
         return;
       }
 

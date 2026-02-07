@@ -186,10 +186,11 @@ function buildQueueViewComponents(queueView, queue) {
   return [selectRow, actionRow, navRow, navRow2];
 }
 
-function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale } = {}) {
+function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale, ownerName } = {}) {
   const pageData = formatQueuePage(queue, page, pageSize, selectedTrackId);
+  const safeOwnerName = sanitizeInlineDiscordText(ownerName || "requester");
   const headerLines = [
-    "_Controls limited to requester._",
+    `_Controls limited to ${safeOwnerName}._`,
   ];
   if (stale) {
     headerLines.unshift("_Queue view may be stale — press Refresh._");
