@@ -17,7 +17,6 @@ function createCommandInteractionHandler(deps) {
     QUEUE_VIEW_TIMEOUT_MS,
     joinVoiceChannel,
     getGuildQueue,
-    isSameVoiceChannel,
     formatQueueViewContent,
     buildQueueViewComponents,
     buildQueuedActionComponents,
@@ -50,6 +49,21 @@ function createCommandInteractionHandler(deps) {
     queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
     logError,
   });
+  function getQueueVoiceChannelId(queue) {
+    return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+  }
+
+  function getVoiceControlMessage(member, queue, action = "control playback") {
+    if (!member?.voice?.channel) {
+      return "Join a voice channel first.";
+    }
+    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+    if (!queueVoiceChannelId || member.voice.channel.id !== queueVoiceChannelId) {
+      return `Join my voice channel to ${action}.`;
+    }
+    return null;
+  }
+
   async function handleResolveErrorReply(interaction, error) {
     const message = String(error?.message || "");
     const isDiscoverError = message.includes("SoundCloud discover links");
@@ -215,6 +229,49 @@ function createCommandInteractionHandler(deps) {
       return;
     }
 
+    if (interaction.commandName === "join") {
+      const voiceChannel = interaction.member?.voice?.channel;
+      if (!voiceChannel) {
+        await interaction.reply({ content: "Join a voice channel first.", ephemeral: true });
+        return;
+      }
+
+      const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+      if (queueVoiceChannelId === voiceChannel.id) {
+        await interaction.reply({ content: "I am already in your voice channel.", ephemeral: true });
+        return;
+      }
+
+      await ensureSodiumReady();
+      if (queue.connection) {
+        try {
+          queue.connection.destroy();
+        } catch (error) {
+          logError("Failed to destroy existing voice connection while joining", error);
+        }
+      }
+
+      queue.voiceChannel = voiceChannel;
+      queue.connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId: voiceChannel.guild.id,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      });
+      queue.connection.on("error", (error) => {
+        logError("Voice connection error", error);
+      });
+      ensurePlayerListeners(queue, interaction.guildId);
+      queue.connection.subscribe(queue.player);
+
+      logInfo("Joined voice channel via command", {
+        guild: interaction.guildId,
+        channel: voiceChannel.id,
+        user: interaction.user.tag,
+      });
+      await interaction.reply(`Joined **${voiceChannel.name}**.`);
+      return;
+    }
+
     if (interaction.commandName === "playing") {
       if (!queue.current) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
@@ -231,8 +288,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
         return;
       }
-      if (!isSameVoiceChannel(interaction.member, queue)) {
-        await interaction.reply({ content: "Join my voice channel to control playback.", ephemeral: true });
+      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
+      if (voiceMessage) {
+        await interaction.reply({ content: voiceMessage, ephemeral: true });
         return;
       }
       queue.player.pause();
@@ -246,8 +304,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
         return;
       }
-      if (!isSameVoiceChannel(interaction.member, queue)) {
-        await interaction.reply({ content: "Join my voice channel to control playback.", ephemeral: true });
+      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
+      if (voiceMessage) {
+        await interaction.reply({ content: voiceMessage, ephemeral: true });
         return;
       }
       queue.player.unpause();
@@ -261,8 +320,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
         return;
       }
-      if (!isSameVoiceChannel(interaction.member, queue)) {
-        await interaction.reply({ content: "Join my voice channel to control playback.", ephemeral: true });
+      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
+      if (voiceMessage) {
+        await interaction.reply({ content: voiceMessage, ephemeral: true });
         return;
       }
       logInfo("Skipping track");
@@ -272,8 +332,9 @@ function createCommandInteractionHandler(deps) {
     }
 
     if (interaction.commandName === "stop") {
-      if (!isSameVoiceChannel(interaction.member, queue)) {
-        await interaction.reply({ content: "Join my voice channel to control playback.", ephemeral: true });
+      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
+      if (voiceMessage) {
+        await interaction.reply({ content: voiceMessage, ephemeral: true });
         return;
       }
       stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
@@ -301,6 +362,11 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "clear") {
+        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
+        if (voiceMessage) {
+          await interaction.reply({ content: voiceMessage, ephemeral: true });
+          return;
+        }
         if (!queue.tracks.length) {
           await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
           return;
@@ -313,6 +379,11 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "shuffle") {
+        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
+        if (voiceMessage) {
+          await interaction.reply({ content: voiceMessage, ephemeral: true });
+          return;
+        }
         if (queue.tracks.length < 2) {
           await interaction.reply({ content: "Need at least two tracks to shuffle.", ephemeral: true });
           return;
@@ -327,6 +398,11 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "remove") {
+        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
+        if (voiceMessage) {
+          await interaction.reply({ content: voiceMessage, ephemeral: true });
+          return;
+        }
         if (!queue.tracks.length) {
           await interaction.reply({ content: "Queue is empty.", ephemeral: true });
           return;
@@ -343,6 +419,11 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "move") {
+        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
+        if (voiceMessage) {
+          await interaction.reply({ content: voiceMessage, ephemeral: true });
+          return;
+        }
         if (queue.tracks.length < 2) {
           await interaction.reply({ content: "Need at least two tracks in the queue.", ephemeral: true });
           return;

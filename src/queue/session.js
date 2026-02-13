@@ -213,11 +213,20 @@ function createQueueSession(deps) {
     queue.voiceChannel = null;
   }
 
+  function getQueueVoiceChannelId(queue) {
+    return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+  }
+
   function isSameVoiceChannel(member, queue) {
-    if (!queue.voiceChannel) {
-      return true;
+    const memberChannelId = member?.voice?.channel?.id;
+    if (!memberChannelId) {
+      return false;
     }
-    return member?.voice?.channel?.id === queue.voiceChannel.id;
+    const queueChannelId = getQueueVoiceChannelId(queue);
+    if (!queueChannelId) {
+      return false;
+    }
+    return memberChannelId === queueChannelId;
   }
 
   return {

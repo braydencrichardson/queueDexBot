@@ -16,6 +16,10 @@ const commands = [
     description: "Show the now playing message with controls",
   },
   {
+    name: "join",
+    description: "Join your current voice channel",
+  },
+  {
     name: "pause",
     description: "Pause playback",
   },
