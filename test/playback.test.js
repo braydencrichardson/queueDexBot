@@ -43,6 +43,49 @@ test("playNext clears state and destroys connection when queue is empty", async 
   assert.equal(queue.voiceChannel, null);
 });
 
+test("playNext notifies channel when queue ends naturally", async () => {
+  const sentMessages = [];
+  const queue = {
+    tracks: [],
+    playing: true,
+    current: { title: "Old" },
+    voiceChannel: { id: "vc-1" },
+    connection: {
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    },
+    player: {
+      play() {
+        throw new Error("should not play");
+      },
+    },
+    textChannel: {
+      async send(content) {
+        sentMessages.push(content);
+        return { delete: async () => {} };
+      },
+    },
+  };
+
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => ({}),
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(sentMessages.includes("Queue finished. Leaving voice channel."), true);
+});
+
 test("playNext plays next track, subscribes connection, marks queue view stale, and sends now playing", async () => {
   const track = { source: "youtube", url: "https://youtu.be/abc", title: "Song" };
   const queue = {

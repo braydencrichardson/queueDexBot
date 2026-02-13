@@ -332,6 +332,10 @@ function createCommandInteractionHandler(deps) {
     }
 
     if (interaction.commandName === "stop") {
+      if (!queue.current && !queue.tracks.length) {
+        await interaction.reply({ content: "Nothing is playing and the queue is empty.", ephemeral: true });
+        return;
+      }
       const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
       if (voiceMessage) {
         await interaction.reply({ content: voiceMessage, ephemeral: true });
@@ -347,7 +351,7 @@ function createCommandInteractionHandler(deps) {
 
       if (sub === "view") {
         if (!queue.current && !queue.tracks.length) {
-          await interaction.reply("Queue is empty.");
+          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
           return;
         }
         const pageSize = queueViewPageSize;
@@ -362,13 +366,13 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "clear") {
+        if (!queue.tracks.length) {
+          await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
+          return;
+        }
         const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
         if (voiceMessage) {
           await interaction.reply({ content: voiceMessage, ephemeral: true });
-          return;
-        }
-        if (!queue.tracks.length) {
-          await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
           return;
         }
         const removedCount = queue.tracks.length;
@@ -379,13 +383,13 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "shuffle") {
+        if (queue.tracks.length < 2) {
+          await interaction.reply({ content: "Need at least two queued tracks to shuffle.", ephemeral: true });
+          return;
+        }
         const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
         if (voiceMessage) {
           await interaction.reply({ content: voiceMessage, ephemeral: true });
-          return;
-        }
-        if (queue.tracks.length < 2) {
-          await interaction.reply({ content: "Need at least two tracks to shuffle.", ephemeral: true });
           return;
         }
         for (let i = queue.tracks.length - 1; i > 0; i -= 1) {
@@ -398,18 +402,18 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "remove") {
+        if (!queue.tracks.length) {
+          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+          return;
+        }
         const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
         if (voiceMessage) {
           await interaction.reply({ content: voiceMessage, ephemeral: true });
           return;
         }
-        if (!queue.tracks.length) {
-          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
-          return;
-        }
         const index = interaction.options.getInteger("index", true);
         if (index < 1 || index > queue.tracks.length) {
-          await interaction.reply({ content: "Invalid queue position.", ephemeral: true });
+          await interaction.reply({ content: `Invalid queue position. Choose 1-${queue.tracks.length}.`, ephemeral: true });
           return;
         }
         const removed = queue.tracks.splice(index - 1, 1)[0];
@@ -419,19 +423,22 @@ function createCommandInteractionHandler(deps) {
       }
 
       if (sub === "move") {
+        if (queue.tracks.length < 2) {
+          await interaction.reply({ content: "Need at least two queued tracks to move.", ephemeral: true });
+          return;
+        }
         const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
         if (voiceMessage) {
           await interaction.reply({ content: voiceMessage, ephemeral: true });
           return;
         }
-        if (queue.tracks.length < 2) {
-          await interaction.reply({ content: "Need at least two tracks in the queue.", ephemeral: true });
-          return;
-        }
         const from = interaction.options.getInteger("from", true);
         const to = interaction.options.getInteger("to", true);
         if (from < 1 || from > queue.tracks.length || to < 1 || to > queue.tracks.length) {
-          await interaction.reply({ content: "Invalid queue positions.", ephemeral: true });
+          await interaction.reply({
+            content: `Invalid queue positions. Choose values between 1 and ${queue.tracks.length}.`,
+            ephemeral: true,
+          });
           return;
         }
         const [moved] = queue.tracks.splice(from - 1, 1);

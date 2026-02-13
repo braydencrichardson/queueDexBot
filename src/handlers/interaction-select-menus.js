@@ -55,7 +55,10 @@ function createSelectMenuInteractionHandler(deps) {
       }
       const index = parseInt(interaction.values?.[0], 10);
       if (!Number.isFinite(index) || index < 0 || index >= pending.options.length) {
-        await interaction.reply({ content: "Invalid selection.", ephemeral: true });
+        await interaction.reply({
+          content: `Invalid selection. Choose an option between 1 and ${pending.options.length}.`,
+          ephemeral: true,
+        });
         return;
       }
       const selected = pending.options[index];
@@ -123,7 +126,10 @@ function createSelectMenuInteractionHandler(deps) {
         return;
       }
       if (!Number.isFinite(destIndex) || destIndex < 1 || destIndex > queue.tracks.length) {
-        await interaction.reply({ content: "Invalid destination.", ephemeral: true });
+        await interaction.reply({
+          content: `Invalid destination. Choose 1-${queue.tracks.length}.`,
+          ephemeral: true,
+        });
         return;
       }
 

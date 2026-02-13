@@ -54,6 +54,10 @@ function createQueuePlayback(deps) {
     return parts.join(" ");
   }
 
+  function buildQueueEndedMessage() {
+    return "Queue finished. Leaving voice channel.";
+  }
+
   async function createTrackResource(track) {
     if (!track?.url) {
       logInfo("Track missing URL", track);
@@ -191,6 +195,8 @@ function createQueuePlayback(deps) {
         const summary = buildSkipSummaryMessage(skipStats, { foundPlayableTrack: false });
         if (summary) {
           await sendPlaybackNotice(queue, summary);
+        } else {
+          await sendPlaybackNotice(queue, buildQueueEndedMessage());
         }
         queue.playing = false;
         queue.current = null;

@@ -52,7 +52,7 @@ function createDeps(overrides = {}) {
   };
 }
 
-test("stop replies ephemerally when user is not in a voice channel", async () => {
+test("stop replies ephemerally when nothing is playing and queue is empty", async () => {
   let replyPayload = null;
   let stopCalled = false;
   const { deps } = createDeps({
@@ -80,7 +80,78 @@ test("stop replies ephemerally when user is not in a voice channel", async () =>
   await handler(interaction);
 
   assert.equal(stopCalled, false);
+  assert.deepEqual(replyPayload, { content: "Nothing is playing and the queue is empty.", ephemeral: true });
+});
+
+test("stop requires caller in voice channel when there is active playback", async () => {
+  let replyPayload = null;
+  let stopCalled = false;
+  const queue = {
+    tracks: [],
+    current: { title: "Now Playing" },
+    voiceChannel: { id: "vc-bot" },
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      stopAndLeaveQueue: () => {
+        stopCalled = true;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: null } },
+    commandName: "stop",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(stopCalled, false);
   assert.deepEqual(replyPayload, { content: "Join a voice channel first.", ephemeral: true });
+});
+
+test("queue clear reports already empty before voice-channel checks", async () => {
+  let replyPayload = null;
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: { id: "vc-bot" },
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({ queue });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: null } },
+    commandName: "queue",
+    options: {
+      getSubcommand: () => "clear",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.deepEqual(replyPayload, { content: "Queue is already empty.", ephemeral: true });
 });
 
 test("queue clear requires user in voice channel before mutating queue", async () => {

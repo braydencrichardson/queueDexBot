@@ -142,6 +142,23 @@ const {
   logInfo,
   logError,
   getPlayNext: () => playNext,
+  resolveNowPlayingChannelById: async (channelId) => {
+    if (!channelId) {
+      return null;
+    }
+    const cached = client.channels?.cache?.get(channelId);
+    if (cached) {
+      return cached;
+    }
+    if (!client.channels?.fetch) {
+      return null;
+    }
+    try {
+      return await client.channels.fetch(channelId);
+    } catch {
+      return null;
+    }
+  },
 });
 
 const { trySendSearchChooser } = createSearchChooser({

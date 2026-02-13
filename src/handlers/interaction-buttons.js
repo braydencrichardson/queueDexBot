@@ -170,7 +170,10 @@ function createButtonInteractionHandler(deps) {
 
     if (customId.startsWith("np_")) {
       if (!queue.nowPlayingMessageId || interaction.message.id !== queue.nowPlayingMessageId) {
-        await interaction.reply({ content: "That now playing message is no longer active.", ephemeral: true });
+        await interaction.reply({
+          content: "That now playing message is no longer active. Use /playing to post a new one.",
+          ephemeral: true,
+        });
         return;
       }
       if (!isSameVoiceChannel(member, queue)) {
@@ -186,6 +189,7 @@ function createButtonInteractionHandler(deps) {
           queue.player.unpause();
           await announceNowPlayingAction(queue, "resumed playback", interaction.user, member, interaction.message.channel);
         }
+        await sendNowPlaying(queue, false);
       } else if (customId === "np_queue") {
         if (!queue.current && !queue.tracks.length) {
           await interaction.reply({ content: "Queue is empty.", ephemeral: true });
@@ -208,8 +212,12 @@ function createButtonInteractionHandler(deps) {
       }
 
       try {
-        const controls = buildNowPlayingControls();
-        await interaction.message.edit({ components: [controls] });
+        if (customId === "np_stop") {
+          await interaction.message.edit({ components: [] });
+        } else {
+          const controls = buildNowPlayingControls();
+          await interaction.message.edit({ components: [controls] });
+        }
       } catch (error) {
         logError("Failed to refresh now playing controls", error);
       }
