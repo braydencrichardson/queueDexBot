@@ -248,6 +248,55 @@ test("sendNowPlaying updates existing now playing message with a single edit", a
   stopAndLeaveQueue(queue, "cleanup");
 });
 
+test("sendNowPlaying with forceNew deletes previous now playing message", async () => {
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession();
+  let previousDeleted = false;
+  let sentPayload = null;
+
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Song",
+    requester: "Requester",
+    duration: 89,
+    url: "https://soundcloud.com/sleepmethods/piggy",
+    source: "soundcloud",
+  };
+  queue.nowPlayingMessageId = "np-old";
+  queue.nowPlayingChannelId = "text-1";
+  queue.textChannel = {
+    id: "text-1",
+    messages: {
+      async fetch(id) {
+        if (id === "np-old") {
+          return {
+            async delete() {
+              previousDeleted = true;
+            },
+          };
+        }
+        throw new Error("unexpected fetch id");
+      },
+    },
+    async send(payload) {
+      sentPayload = payload;
+      return {
+        id: "np-new",
+        channel: { id: "text-1" },
+        async edit() {},
+      };
+    },
+  };
+
+  await sendNowPlaying(queue, true);
+
+  assert.equal(previousDeleted, true);
+  assert.equal(String(sentPayload?.content || "").includes("**Now playing:**"), true);
+  assert.equal(queue.nowPlayingMessageId, "np-new");
+
+  stopAndLeaveQueue(queue, "cleanup");
+});
+
 test("stopAndLeaveQueue clears now playing progress timer state", () => {
   const { stopAndLeaveQueue } = createSession();
   const queue = {

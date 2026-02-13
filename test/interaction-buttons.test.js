@@ -247,3 +247,96 @@ test("np_toggle refreshes now playing content immediately", async () => {
   assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
   assert.equal(deferred, true);
 });
+
+test("queue_nowplaying opens now playing and closes queue view controls", async () => {
+  const queue = {
+    tracks: [{ id: "t1", title: "Song 1" }],
+    current: { id: "c1", title: "Now Playing" },
+    playing: true,
+    player: {
+      state: { status: "playing" },
+    },
+  };
+  const queueViews = new Map();
+  queueViews.set("queue-msg-1", {
+    guildId: "guild-1",
+    ownerId: "user-1",
+    channelId: "text-1",
+    page: 1,
+    pageSize: 10,
+    selectedTrackId: null,
+    stale: false,
+    timeout: setTimeout(() => {}, 60000),
+  });
+
+  let sendNowPlayingArgs = null;
+  let deferred = false;
+  let closedPayload = null;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews,
+    logInfo: () => {},
+    logError: () => {},
+    sendNowPlaying: async (q, forceNew) => {
+      sendNowPlayingArgs = { q, forceNew };
+    },
+    stopAndLeaveQueue: () => {},
+  });
+
+  const interaction = {
+    guildId: "guild-1",
+    customId: "queue_nowplaying",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" } }),
+      },
+    },
+    message: { id: "queue-msg-1" },
+    channel: { id: "text-1" },
+    client: {
+      channels: {
+        cache: new Map([
+          ["text-1", {
+            messages: {
+              fetch: async () => ({
+                edit: async (payload) => {
+                  closedPayload = payload;
+                },
+              }),
+            },
+          }],
+        ]),
+      },
+    },
+    deferUpdate: async () => {
+      deferred = true;
+    },
+    reply: async () => {},
+    update: async () => {
+      throw new Error("should not call update when queue_nowplaying is used");
+    },
+  };
+
+  await handler(interaction);
+
+  assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: true });
+  assert.equal(queue.textChannel, interaction.channel);
+  assert.equal(deferred, true);
+  assert.equal(queueViews.has("queue-msg-1"), false);
+  assert.deepEqual(closedPayload, { content: "Queue view closed (now playing opened).", components: [] });
+});

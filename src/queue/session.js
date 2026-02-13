@@ -279,6 +279,31 @@ function createQueueSession(deps) {
     return String(next.id || `${next.url || ""}|${next.title || ""}|${next.requester || ""}`);
   }
 
+  async function deletePreviousNowPlayingMessage(queue) {
+    const messageId = queue?.nowPlayingMessageId;
+    const channelId = queue?.nowPlayingChannelId;
+    if (!messageId || !channelId) {
+      return;
+    }
+
+    let channel = null;
+    if (queue?.textChannel?.id === channelId && queue.textChannel?.messages?.fetch) {
+      channel = queue.textChannel;
+    } else {
+      channel = await resolveNowPlayingChannelById(channelId);
+    }
+    if (!channel?.messages?.fetch) {
+      return;
+    }
+
+    try {
+      const message = await channel.messages.fetch(messageId);
+      await message.delete();
+    } catch {
+      // ignore stale/missing message cleanup failures
+    }
+  }
+
   async function sendNowPlaying(queue, forceNew = false) {
     if (!queue.textChannel || !queue.current) {
       return null;
@@ -289,6 +314,10 @@ function createQueueSession(deps) {
     const payload = { content, components: [controls] };
     queue.nowPlayingUpNextKey = getUpNextKey(queue);
     let message = null;
+
+    if (forceNew) {
+      await deletePreviousNowPlayingMessage(queue);
+    }
 
     if (!forceNew && queue.nowPlayingMessageId && queue.nowPlayingChannelId === queue.textChannel.id) {
       try {

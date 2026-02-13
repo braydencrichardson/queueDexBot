@@ -436,6 +436,13 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_nowplaying") {
         queue.textChannel = interaction.channel;
         await sendNowPlaying(queue, true);
+        await interaction.deferUpdate();
+        await queueViewService.closeByMessageId(
+          interaction.message.id,
+          interaction,
+          "Queue view closed (now playing opened)."
+        );
+        return;
       } else if (customId === "queue_shuffle") {
         if (queue.tracks.length > 1) {
           for (let i = queue.tracks.length - 1; i > 0; i -= 1) {
