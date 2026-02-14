@@ -1,40 +1,40 @@
 function clearMapEntryWithTimeout(store, key) {
-  const entry = store.get(key);
-  if (!entry) {
+  const existingEntry = store.get(key);
+  if (!existingEntry) {
     return null;
   }
   store.delete(key);
-  if (entry.timeout) {
-    clearTimeout(entry.timeout);
+  if (existingEntry.timeout) {
+    clearTimeout(existingEntry.timeout);
   }
-  return entry;
+  return existingEntry;
 }
 
 function setExpiringMapEntry(options) {
   const {
     store,
     key,
-    entry,
+    entry: entryData,
     timeoutMs,
     onExpire,
     logError,
     errorMessage = "Failed to expire pending interaction",
   } = options;
 
-  const existing = store.get(key);
-  if (existing?.timeout) {
-    clearTimeout(existing.timeout);
+  const existingEntry = store.get(key);
+  if (existingEntry?.timeout) {
+    clearTimeout(existingEntry.timeout);
   }
 
   const timeout = setTimeout(async () => {
     try {
-      const current = store.get(key);
-      if (!current) {
+      const activeEntry = store.get(key);
+      if (!activeEntry) {
         return;
       }
       store.delete(key);
       if (typeof onExpire === "function") {
-        await onExpire(current);
+        await onExpire(activeEntry);
       }
     } catch (error) {
       if (typeof logError === "function") {
@@ -43,12 +43,29 @@ function setExpiringMapEntry(options) {
     }
   }, timeoutMs);
 
-  const nextEntry = { ...entry, timeout };
-  store.set(key, nextEntry);
-  return nextEntry;
+  const storedEntry = { ...entryData, timeout };
+  store.set(key, storedEntry);
+  return storedEntry;
+}
+
+function getQueueVoiceChannelId(queue) {
+  return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+}
+
+function getVoiceChannelCheck(member, queue, action = "control playback") {
+  if (!member?.voice?.channel) {
+    return "Join a voice channel first.";
+  }
+  const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+  if (!queueVoiceChannelId || member.voice.channel.id !== queueVoiceChannelId) {
+    return `Join my voice channel to ${action}.`;
+  }
+  return null;
 }
 
 module.exports = {
   clearMapEntryWithTimeout,
+  getQueueVoiceChannelId,
+  getVoiceChannelCheck,
   setExpiringMapEntry,
 };

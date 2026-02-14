@@ -4,6 +4,7 @@ const {
   getTrackIndexById,
   formatDuration,
 } = require("../queue/utils");
+const { getTrackKey } = require("../queue/track-key");
 const { escapeDiscordMarkdown, sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackPrimary, formatTrackSecondary } = require("./messages");
 const {
@@ -16,13 +17,6 @@ const {
 } = require("../config/constants");
 
 function formatQueuePage(queue, page, pageSize, selectedTrackId) {
-  function getTrackKey(track) {
-    if (!track) {
-      return null;
-    }
-    return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
-  }
-
   function isTrackPreloaded(track) {
     const trackKey = getTrackKey(track);
     if (!trackKey) {

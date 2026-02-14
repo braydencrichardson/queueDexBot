@@ -1,5 +1,6 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constants");
+const { getTrackKey } = require("./track-key");
 
 function createQueuePlayback(deps) {
   const {
@@ -85,18 +86,11 @@ function createQueuePlayback(deps) {
     return resource;
   }
 
-  function getTrackKey(track) {
-    if (!track) {
-      return null;
-    }
-    return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
-  }
-
   function bumpPreloadGeneration(queue) {
     const current = Number.isFinite(queue?.nextTrackPreloadGeneration) ? queue.nextTrackPreloadGeneration : 0;
-    const next = current + 1;
-    queue.nextTrackPreloadGeneration = next;
-    return next;
+    const nextGeneration = current + 1;
+    queue.nextTrackPreloadGeneration = nextGeneration;
+    return nextGeneration;
   }
 
   function disposeResource(resource) {
@@ -255,11 +249,11 @@ function createQueuePlayback(deps) {
     if (typeof formatQueueViewContent !== "function" || typeof buildQueueViewComponents !== "function") {
       return;
     }
-    for (const [messageId, rawView] of queueViews.entries()) {
-      if (rawView.guildId !== guildId) {
+    for (const [messageId, storedView] of queueViews.entries()) {
+      if (storedView.guildId !== guildId) {
         continue;
       }
-      const view = { ...rawView };
+      const view = { ...storedView };
       if (view.selectedTrackId && !queue.tracks.some((track) => track?.id === view.selectedTrackId)) {
         view.selectedTrackId = null;
       }
@@ -337,8 +331,8 @@ function createQueuePlayback(deps) {
     };
 
     while (true) {
-      const next = queue.tracks.shift();
-      if (!next) {
+      const nextTrack = queue.tracks.shift();
+      if (!nextTrack) {
         const summary = buildSkipSummaryMessage(skipStats, { foundPlayableTrack: false });
         if (summary) {
           await sendPlaybackNotice(queue, summary);
@@ -356,18 +350,18 @@ function createQueuePlayback(deps) {
         return;
       }
 
-      if (!next.url) {
+      if (!nextTrack.url) {
         skipStats.malformedCount += 1;
         logInfo("Skipping malformed queued track (missing URL)", {
-          id: next.id,
-          source: next.source,
-          requester: next.requester,
+          id: nextTrack.id,
+          source: nextTrack.source,
+          requester: nextTrack.requester,
         });
         continue;
       }
 
       queue.playing = true;
-      queue.current = next;
+      queue.current = nextTrack;
       markQueueViewsStale(guildId);
       await refreshQueueViews(guildId, queue);
       await refreshPendingMoves(guildId, queue);
@@ -377,7 +371,7 @@ function createQueuePlayback(deps) {
       if (queue.textChannel) {
         loadingTimeout = setTimeout(async () => {
           try {
-            const title = sanitizeInlineDiscordText(next.title || "unknown track");
+            const title = sanitizeInlineDiscordText(nextTrack.title || "unknown track");
             loadingMessage = await queue.textChannel.send(`Loading **${title}**...`);
           } catch (error) {
             logError("Failed to send loading message", error);
@@ -387,7 +381,7 @@ function createQueuePlayback(deps) {
 
       let resource;
       try {
-        resource = await resolveResourceForTrack(queue, next);
+        resource = await resolveResourceForTrack(queue, nextTrack);
       } catch (error) {
         logError("Failed to create audio resource", error);
         skipStats.loadFailureCount += 1;
@@ -421,6 +415,7 @@ function createQueuePlayback(deps) {
         await sendPlaybackNotice(queue, summary);
       }
 
+      queue.suppressNextIdle = false;
       queue.player.play(resource);
 
       if (queue.connection) {

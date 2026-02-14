@@ -1,5 +1,6 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackPrimary, formatTrackSecondary } = require("../ui/messages");
+const { getTrackKey } = require("./track-key");
 const {
   DEFAULT_NOW_PLAYING_PROGRESS_INTERVAL_MS,
   DEFAULT_NOW_PLAYING_PROGRESS_INITIAL_DELAY_MS,
@@ -48,24 +49,14 @@ function createQueueSession(deps) {
         pausedForInactivity: false,
         playing: false,
         playerListenersReady: false,
+        suppressNextIdle: false,
       });
     }
     return queues.get(guildId);
   }
 
   function getCurrentTrackKey(queue) {
-    const track = queue?.current;
-    if (!track) {
-      return null;
-    }
-    return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
-  }
-
-  function getTrackKey(track) {
-    if (!track) {
-      return null;
-    }
-    return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
+    return getTrackKey(queue?.current);
   }
 
   function isTrackPreloaded(queue, track) {
@@ -433,6 +424,10 @@ function createQueueSession(deps) {
     }
 
     queue.player.on(AudioPlayerStatus.Idle, () => {
+      if (queue.suppressNextIdle) {
+        queue.suppressNextIdle = false;
+        return;
+      }
       const playNext = getPlayNext();
       const cleanupContext = {
         messageId: queue.nowPlayingMessageId,
@@ -505,6 +500,7 @@ function createQueueSession(deps) {
     queue.inactivityNoticeChannelId = null;
     clearNowPlayingProgressUpdates(queue);
     if (queue.player) {
+      queue.suppressNextIdle = true;
       queue.player.stop(true);
     }
     if (queue.connection) {

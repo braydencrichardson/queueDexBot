@@ -1,6 +1,6 @@
 const { QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
-const { setExpiringMapEntry } = require("./interaction-helpers");
+const { getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
 const {
   formatQueueClearedNotice,
   formatQueueRemovedNotice,
@@ -9,6 +9,12 @@ const {
   formatQueuedPlaylistMessage,
 } = require("../ui/messages");
 const { formatDuration } = require("../queue/utils");
+const {
+  isValidQueuePosition,
+  moveQueuedTrackToPosition,
+  removeQueuedTrackAt,
+  shuffleQueuedTracks,
+} = require("../queue/operations");
 
 function createCommandInteractionHandler(deps) {
   const {
@@ -49,34 +55,19 @@ function createCommandInteractionHandler(deps) {
     queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
     logError,
   });
-  function getQueueVoiceChannelId(queue) {
-    return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
-  }
-
-  function getVoiceControlMessage(member, queue, action = "control playback") {
-    if (!member?.voice?.channel) {
-      return "Join a voice channel first.";
-    }
-    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
-    if (!queueVoiceChannelId || member.voice.channel.id !== queueVoiceChannelId) {
-      return `Join my voice channel to ${action}.`;
-    }
-    return null;
-  }
-
   async function handleResolveErrorReply(interaction, error) {
-    const message = String(error?.message || "");
-    const isDiscoverError = message.includes("SoundCloud discover links");
+    const errorMessageText = String(error?.message || "");
+    const isDiscoverError = errorMessageText.includes("SoundCloud discover links");
     if (isDiscoverError) {
       await interaction.editReply("Could not load that track or playlist.");
       await interaction.followUp({
-        content: message,
+        content: errorMessageText,
         ephemeral: true,
       });
       return;
     }
-    const isDetailedPublicError = message.includes("Spotify");
-    await interaction.editReply(isDetailedPublicError ? message : "Could not load that track or playlist.");
+    const isDetailedPublicError = errorMessageText.includes("Spotify");
+    await interaction.editReply(isDetailedPublicError ? errorMessageText : "Could not load that track or playlist.");
   }
 
   return async function handleCommandInteraction(interaction) {
@@ -145,8 +136,8 @@ function createCommandInteractionHandler(deps) {
       if (!tracks.length) {
         try {
           const searchOptions = await getSearchOptionsForQuery(query, requester);
-          const handled = await trySendSearchChooser(interaction, query, requesterId, searchOptions);
-          if (handled) {
+          const searchChooserSent = await trySendSearchChooser(interaction, query, requesterId, searchOptions);
+          if (searchChooserSent) {
             return;
           }
         } catch (error) {
@@ -236,7 +227,7 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
-      const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+      const queueVoiceChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
       if (queueVoiceChannelId === voiceChannel.id) {
         await interaction.reply({ content: "I am already in your voice channel.", ephemeral: true });
         return;
@@ -288,9 +279,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
         return;
       }
-      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
-      if (voiceMessage) {
-        await interaction.reply({ content: voiceMessage, ephemeral: true });
+      const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
+      if (voiceChannelCheck) {
+        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
         return;
       }
       queue.player.pause();
@@ -304,9 +295,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
         return;
       }
-      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
-      if (voiceMessage) {
-        await interaction.reply({ content: voiceMessage, ephemeral: true });
+      const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
+      if (voiceChannelCheck) {
+        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
         return;
       }
       queue.player.unpause();
@@ -320,9 +311,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
         return;
       }
-      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
-      if (voiceMessage) {
-        await interaction.reply({ content: voiceMessage, ephemeral: true });
+      const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
+      if (voiceChannelCheck) {
+        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
         return;
       }
       logInfo("Skipping track");
@@ -336,9 +327,9 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: "Nothing is playing and the queue is empty.", ephemeral: true });
         return;
       }
-      const voiceMessage = getVoiceControlMessage(interaction.member, queue, "control playback");
-      if (voiceMessage) {
-        await interaction.reply({ content: voiceMessage, ephemeral: true });
+      const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
+      if (voiceChannelCheck) {
+        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
         return;
       }
       stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
@@ -347,9 +338,9 @@ function createCommandInteractionHandler(deps) {
     }
 
     if (interaction.commandName === "queue") {
-      const sub = interaction.options.getSubcommand();
+      const queueSubcommand = interaction.options.getSubcommand();
 
-      if (sub === "view") {
+      if (queueSubcommand === "view") {
         if (!queue.current && !queue.tracks.length) {
           await interaction.reply({ content: "Queue is empty.", ephemeral: true });
           return;
@@ -365,14 +356,14 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
-      if (sub === "clear") {
+      if (queueSubcommand === "clear") {
         if (!queue.tracks.length) {
           await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
           return;
         }
-        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
-        if (voiceMessage) {
-          await interaction.reply({ content: voiceMessage, ephemeral: true });
+        const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
           return;
         }
         const removedCount = queue.tracks.length;
@@ -382,67 +373,63 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
-      if (sub === "shuffle") {
+      if (queueSubcommand === "shuffle") {
         if (queue.tracks.length < 2) {
           await interaction.reply({ content: "Need at least two queued tracks to shuffle.", ephemeral: true });
           return;
         }
-        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
-        if (voiceMessage) {
-          await interaction.reply({ content: voiceMessage, ephemeral: true });
+        const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
           return;
         }
-        for (let i = queue.tracks.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [queue.tracks[i], queue.tracks[j]] = [queue.tracks[j], queue.tracks[i]];
-        }
+        shuffleQueuedTracks(queue);
         await maybeRefreshNowPlayingUpNext(queue);
         await interaction.reply("Shuffled the queue.");
         return;
       }
 
-      if (sub === "remove") {
+      if (queueSubcommand === "remove") {
         if (!queue.tracks.length) {
           await interaction.reply({ content: "Queue is empty.", ephemeral: true });
           return;
         }
-        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
-        if (voiceMessage) {
-          await interaction.reply({ content: voiceMessage, ephemeral: true });
+        const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
           return;
         }
         const index = interaction.options.getInteger("index", true);
-        if (index < 1 || index > queue.tracks.length) {
+        if (!isValidQueuePosition(queue, index)) {
           await interaction.reply({ content: `Invalid queue position. Choose 1-${queue.tracks.length}.`, ephemeral: true });
           return;
         }
-        const removed = queue.tracks.splice(index - 1, 1)[0];
+        const removed = removeQueuedTrackAt(queue, index);
         await maybeRefreshNowPlayingUpNext(queue);
         await interaction.reply(formatQueueRemovedNotice(removed));
         return;
       }
 
-      if (sub === "move") {
+      if (queueSubcommand === "move") {
         if (queue.tracks.length < 2) {
           await interaction.reply({ content: "Need at least two queued tracks to move.", ephemeral: true });
           return;
         }
-        const voiceMessage = getVoiceControlMessage(interaction.member, queue, "manage the queue");
-        if (voiceMessage) {
-          await interaction.reply({ content: voiceMessage, ephemeral: true });
+        const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
           return;
         }
         const from = interaction.options.getInteger("from", true);
         const to = interaction.options.getInteger("to", true);
-        if (from < 1 || from > queue.tracks.length || to < 1 || to > queue.tracks.length) {
+        if (!isValidQueuePosition(queue, from) || !isValidQueuePosition(queue, to)) {
           await interaction.reply({
             content: `Invalid queue positions. Choose values between 1 and ${queue.tracks.length}.`,
             ephemeral: true,
           });
           return;
         }
-        const [moved] = queue.tracks.splice(from - 1, 1);
-        queue.tracks.splice(to - 1, 0, moved);
+        const moved = moveQueuedTrackToPosition(queue, from, to);
         await maybeRefreshNowPlayingUpNext(queue);
         await interaction.reply(formatMovedMessage(moved, to));
       }

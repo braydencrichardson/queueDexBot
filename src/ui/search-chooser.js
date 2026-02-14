@@ -1,6 +1,7 @@
 const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackSummary } = require("./messages");
+const { setExpiringMapEntry } = require("../handlers/interaction-helpers");
 const {
   DISCORD_SELECT_LABEL_MAX_LENGTH,
   DISCORD_SELECT_LABEL_TRUNCATE_LENGTH,
@@ -81,24 +82,20 @@ function createSearchChooser(deps) {
     );
     const message = await interaction.editReply({ content, components: [selectRow, controlRow], fetchReply: true });
 
-    const timeout = setTimeout(async () => {
-      try {
-        const entry = pendingSearches.get(message.id);
-        if (!entry) {
-          return;
-        }
-        pendingSearches.delete(message.id);
+    setExpiringMapEntry({
+      store: pendingSearches,
+      key: message.id,
+      timeoutMs: interactionTimeoutMs,
+      logError,
+      errorMessage: "Failed to expire search chooser",
+      onExpire: async () => {
         await message.edit({ content: `Search expired for **${sanitizeDiscordText(query)}**.`, components: [] });
-      } catch (error) {
-        logError("Failed to expire search chooser", error);
-      }
-    }, interactionTimeoutMs);
-
-    pendingSearches.set(message.id, {
-      guildId: interaction.guildId,
-      requesterId,
-      options: chooserOptions,
-      timeout,
+      },
+      entry: {
+        guildId: interaction.guildId,
+        requesterId,
+        options: chooserOptions,
+      },
     });
 
     logInfo("Posted search chooser", {

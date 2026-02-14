@@ -3,7 +3,11 @@ const {
   QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE,
 } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
-const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
+const {
+  clearMapEntryWithTimeout,
+  getVoiceChannelCheck,
+  setExpiringMapEntry,
+} = require("./interaction-helpers");
 const {
   formatMovePrompt,
   formatQueueClearedNotice,
@@ -13,6 +17,12 @@ const {
   formatRemovedMessage,
 } = require("../ui/messages");
 const { formatDuration } = require("../queue/utils");
+const {
+  moveQueuedTrackToFront,
+  moveQueuedTrackToPosition,
+  removeQueuedTrackAt,
+  shuffleQueuedTracks,
+} = require("../queue/operations");
 
 function createButtonInteractionHandler(deps) {
   const {
@@ -262,6 +272,11 @@ function createButtonInteractionHandler(deps) {
       }
 
       if (customId === "queued_move") {
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
         const selectedIndex = trackIndex + 1;
         const pageSize = queueMoveMenuPageSize;
         const page = Math.floor(trackIndex / pageSize) + 1;
@@ -295,8 +310,12 @@ function createButtonInteractionHandler(deps) {
       }
 
       if (customId === "queued_first") {
-        const [moved] = queue.tracks.splice(trackIndex, 1);
-        queue.tracks.unshift(moved);
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
+        const moved = moveQueuedTrackToFront(queue, trackIndex + 1);
         await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Moved track to front via queued controls", { title: moved?.title, user: interaction.user.tag });
         await interaction.update({
@@ -308,7 +327,12 @@ function createButtonInteractionHandler(deps) {
       }
 
       if (customId === "queued_remove") {
-        const [removed] = queue.tracks.splice(trackIndex, 1);
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
+        const removed = removeQueuedTrackAt(queue, trackIndex + 1);
         await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Removed track via queued controls", { title: removed?.title, user: interaction.user.tag });
         await sendQueueActionNotice(
@@ -345,13 +369,17 @@ function createButtonInteractionHandler(deps) {
         pending.page += 1;
       } else if (customId === "move_first") {
         const guildQueue = getGuildQueue(interaction.guildId);
+        const voiceChannelCheck = getVoiceChannelCheck(member, guildQueue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
         const currentIndex = pending.trackId ? getTrackIndexById(guildQueue, pending.trackId) + 1 : pending.sourceIndex;
         if (!currentIndex || !guildQueue.tracks[currentIndex - 1]) {
           await interaction.reply({ content: "Selected track no longer exists.", ephemeral: true });
           return;
         }
-        const [moved] = guildQueue.tracks.splice(currentIndex - 1, 1);
-        guildQueue.tracks.unshift(moved);
+        const moved = moveQueuedTrackToFront(guildQueue, currentIndex);
         await maybeRefreshNowPlayingUpNext(guildQueue);
         clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
         await interaction.update({ content: formatMovedMessage(moved, 1), components: [] });
@@ -447,17 +475,22 @@ function createButtonInteractionHandler(deps) {
         );
         return;
       } else if (customId === "queue_shuffle") {
-        if (queue.tracks.length > 1) {
-          for (let i = queue.tracks.length - 1; i > 0; i -= 1) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [queue.tracks[i], queue.tracks[j]] = [queue.tracks[j], queue.tracks[i]];
-          }
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
         }
+        shuffleQueuedTracks(queue);
         await maybeRefreshNowPlayingUpNext(queue);
         queueView.selectedTrackId = null;
       } else if (customId === "queue_clear") {
         if (!queue.tracks.length) {
           await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
+          return;
+        }
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
           return;
         }
         const removedCount = queue.tracks.length;
@@ -470,6 +503,11 @@ function createButtonInteractionHandler(deps) {
           formatQueueClearedNotice(removedCount, getActorName(interaction, member))
         );
       } else if (customId === "queue_move") {
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
@@ -507,6 +545,11 @@ function createButtonInteractionHandler(deps) {
           },
         });
       } else if (customId === "queue_backward" || customId === "queue_forward") {
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
@@ -520,13 +563,17 @@ function createButtonInteractionHandler(deps) {
           await interaction.reply({ content: "Track is already at the edge.", ephemeral: true });
           return;
         }
-        const [moved] = queue.tracks.splice(selectedIndex - 1, 1);
-        queue.tracks.splice(targetIndex - 1, 0, moved);
+        const moved = moveQueuedTrackToPosition(queue, selectedIndex, targetIndex);
         await maybeRefreshNowPlayingUpNext(queue);
         ensureTrackId(moved);
         queueView.selectedTrackId = moved.id || queueView.selectedTrackId;
         queueView.page = Math.floor((targetIndex - 1) / queueView.pageSize) + 1;
       } else if (customId === "queue_remove") {
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
@@ -534,7 +581,7 @@ function createButtonInteractionHandler(deps) {
           await interaction.reply({ content: "Select a track to remove.", ephemeral: true });
           return;
         }
-        const [removed] = queue.tracks.splice(selectedIndex - 1, 1);
+        const removed = removeQueuedTrackAt(queue, selectedIndex);
         await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Removed track via queue view", { title: removed?.title, user: interaction.user.tag });
         await sendQueueActionNotice(
@@ -543,6 +590,11 @@ function createButtonInteractionHandler(deps) {
         );
         queueView.selectedTrackId = null;
       } else if (customId === "queue_front") {
+        const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
@@ -550,8 +602,7 @@ function createButtonInteractionHandler(deps) {
           await interaction.reply({ content: "Select a track to move.", ephemeral: true });
           return;
         }
-        const [moved] = queue.tracks.splice(selectedIndex - 1, 1);
-        queue.tracks.unshift(moved);
+        const moved = moveQueuedTrackToFront(queue, selectedIndex);
         await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Moved track to front via queue view", { title: moved?.title, user: interaction.user.tag });
         queueView.selectedTrackId = moved.id || queueView.selectedTrackId;

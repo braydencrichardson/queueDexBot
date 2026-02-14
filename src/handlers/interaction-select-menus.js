@@ -1,7 +1,8 @@
 const { createQueueViewService } = require("./queue-view-service");
-const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
+const { clearMapEntryWithTimeout, getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
 const { formatMovedMessage, formatQueuedMessage } = require("../ui/messages");
 const { formatDuration } = require("../queue/utils");
+const { isValidQueuePosition, moveQueuedTrackToPosition } = require("../queue/operations");
 
 function createSelectMenuInteractionHandler(deps) {
   const {
@@ -121,11 +122,17 @@ function createSelectMenuInteractionHandler(deps) {
       const queue = getGuildQueue(interaction.guildId);
       const sourceIndex = pending.trackId ? getTrackIndexById(queue, pending.trackId) + 1 : pending.sourceIndex;
       const destIndex = parseInt(interaction.values?.[0], 10);
+      const member = interaction.guild?.members?.resolve(interaction.user.id);
+      const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
+      if (voiceChannelCheck) {
+        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+        return;
+      }
       if (!sourceIndex || !queue.tracks[sourceIndex - 1]) {
         await interaction.reply({ content: "Selected track no longer exists.", ephemeral: true });
         return;
       }
-      if (!Number.isFinite(destIndex) || destIndex < 1 || destIndex > queue.tracks.length) {
+      if (!isValidQueuePosition(queue, destIndex)) {
         await interaction.reply({
           content: `Invalid destination. Choose 1-${queue.tracks.length}.`,
           ephemeral: true,
@@ -133,8 +140,7 @@ function createSelectMenuInteractionHandler(deps) {
         return;
       }
 
-      const [moved] = queue.tracks.splice(sourceIndex - 1, 1);
-      queue.tracks.splice(destIndex - 1, 0, moved);
+      const moved = moveQueuedTrackToPosition(queue, sourceIndex, destIndex);
       await maybeRefreshNowPlayingUpNext(queue);
 
       clearMapEntryWithTimeout(pendingMoves, interaction.message.id);
