@@ -10,5 +10,6 @@ dist/
 build/
 coverage/
 .DS_Store
-.cookies.json
+.youtubecookies.json
+.soundcloudcookies.json
 .venv/

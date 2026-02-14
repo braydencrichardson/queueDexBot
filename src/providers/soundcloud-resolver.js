@@ -2,11 +2,73 @@ function createSoundcloudResolver(deps) {
   const {
     playdl,
     getSoundcloudClientId,
+    getSoundcloudCookieHeader,
     httpGetJson,
+    httpGetText,
+    soundcloudUserAgent,
     resolveRedirect,
+    sendDevAlert,
     logInfo,
     logError,
   } = deps;
+  let soundcloudSessionExpiryAlertedAt = 0;
+  const SOUNDCLOUD_SESSION_EXPIRY_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+  async function maybeAlertLikelyExpiredSoundcloudSession(details = {}) {
+    if (typeof sendDevAlert !== "function") {
+      return;
+    }
+    const now = Date.now();
+    if (now - soundcloudSessionExpiryAlertedAt < SOUNDCLOUD_SESSION_EXPIRY_ALERT_COOLDOWN_MS) {
+      return;
+    }
+    soundcloudSessionExpiryAlertedAt = now;
+    const detailText = details.slug ? ` (slug: ${details.slug})` : "";
+    await sendDevAlert(
+      `SoundCloud session cookies may be expired/invalid${detailText}. Discover fallback could not resolve playable tracks.`
+    );
+  }
+
+  function buildSessionHeaders() {
+    const sessionCookie = getSoundcloudCookieHeader ? getSoundcloudCookieHeader() : null;
+    if (!sessionCookie) {
+      return null;
+    }
+    return {
+      "User-Agent": soundcloudUserAgent || "Mozilla/5.0",
+      Cookie: sessionCookie,
+      "Accept-Language": "en-US,en;q=0.9",
+    };
+  }
+
+  function parseHydrationPayload(pageHtml) {
+    const scriptMarker = "window.__sc_hydration";
+    const markerIndex = pageHtml.indexOf(scriptMarker);
+    if (markerIndex < 0) {
+      return [];
+    }
+    const assignIndex = pageHtml.indexOf("=", markerIndex);
+    if (assignIndex < 0) {
+      return [];
+    }
+    const scriptCloseIndex = pageHtml.indexOf("</script>", assignIndex);
+    if (scriptCloseIndex < 0) {
+      return [];
+    }
+    const payload = pageHtml
+      .slice(assignIndex + 1, scriptCloseIndex)
+      .replace(/;\s*$/, "")
+      .trim();
+    if (!payload) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(payload);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
 
   function toSoundcloudPermalink(value) {
     if (!value) {
@@ -47,6 +109,46 @@ function createSoundcloudResolver(deps) {
     }
     const id = extractTrackId(value);
     return id ? `https://soundcloud.com/tracks/${id}` : value;
+  }
+
+  function toAbsoluteSoundcloudUrl(value) {
+    if (!value || typeof value !== "string") {
+      return value;
+    }
+    if (value.startsWith("//")) {
+      return `https:${value}`;
+    }
+    if (value.startsWith("/")) {
+      return `https://soundcloud.com${value}`;
+    }
+    return value;
+  }
+
+  function isPlayableSoundcloudUrl(value) {
+    if (!value) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      const host = String(parsed.hostname || "").toLowerCase();
+      if (!host.endsWith("soundcloud.com")) {
+        return false;
+      }
+      const path = decodeURIComponent(parsed.pathname || "");
+      if (!path || path === "/") {
+        return false;
+      }
+      if (path.startsWith("/discover/") || path.startsWith("/you/") || path.startsWith("/search/")) {
+        return false;
+      }
+      if (path.startsWith("/tracks/")) {
+        return true;
+      }
+      const parts = path.split("/").filter(Boolean);
+      return parts.length >= 2;
+    } catch {
+      return false;
+    }
   }
 
   function getSoundcloudTrackId(value) {
@@ -121,30 +223,33 @@ function createSoundcloudResolver(deps) {
     if (!soundcloudClientId) {
       return [];
     }
-    const resolveUrl = `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(url)}&client_id=${soundcloudClientId}`;
-    const data = await httpGetJson(resolveUrl);
-    if (data?.kind === "track") {
-      const mapped = toSoundcloudApiTrack(data);
-      return mapped ? [mapped] : [];
-    }
-    if (data?.kind === "playlist") {
-      if (Array.isArray(data.tracks) && data.tracks.length) {
-        const mappedTracks = data.tracks.map(toSoundcloudApiTrack).filter(Boolean);
-        if (mappedTracks.length === data.tracks.length) {
-          return mappedTracks;
-        }
+    const sessionHeaders = buildSessionHeaders();
+    if (!slug) {
+      const resolveUrl = `https://api-v2.soundcloud.com/resolve?url=${encodeURIComponent(url)}&client_id=${soundcloudClientId}`;
+      const data = await httpGetJson(resolveUrl, sessionHeaders || {});
+      if (data?.kind === "track") {
+        const mapped = toSoundcloudApiTrack(data);
+        return mapped ? [mapped] : [];
       }
-      if (data.id) {
-        const playlistUrl = `https://api-v2.soundcloud.com/playlists/${data.id}?client_id=${soundcloudClientId}`;
-        const playlist = await httpGetJson(playlistUrl);
-        if (Array.isArray(playlist?.tracks)) {
-          return playlist.tracks.map(toSoundcloudApiTrack).filter(Boolean);
+      if (data?.kind === "playlist") {
+        if (Array.isArray(data.tracks) && data.tracks.length) {
+          const mappedTracks = data.tracks.map(toSoundcloudApiTrack).filter(Boolean);
+          if (mappedTracks.length === data.tracks.length) {
+            return mappedTracks;
+          }
+        }
+        if (data.id) {
+          const playlistUrl = `https://api-v2.soundcloud.com/playlists/${data.id}?client_id=${soundcloudClientId}`;
+          const playlist = await httpGetJson(playlistUrl, sessionHeaders || {});
+          if (Array.isArray(playlist?.tracks)) {
+            return playlist.tracks.map(toSoundcloudApiTrack).filter(Boolean);
+          }
         }
       }
     }
     if (slug) {
       const discoverUrl = `https://api-v2.soundcloud.com/discover/sets/${encodeURIComponent(slug)}?client_id=${soundcloudClientId}`;
-      const discover = await httpGetJson(discoverUrl);
+      const discover = await httpGetJson(discoverUrl, sessionHeaders || {});
       const tracks = discover?.collection || [];
       if (Array.isArray(tracks) && tracks.length) {
         return tracks
@@ -154,6 +259,144 @@ function createSoundcloudResolver(deps) {
       }
     }
     return [];
+  }
+
+  async function resolveSoundcloudDiscoverViaSessionPage(slug, requester) {
+    const sessionHeaders = buildSessionHeaders();
+    const soundcloudClientId = getSoundcloudClientId();
+    if (!sessionHeaders) {
+      return { tracks: [], discoveredTrackIdsCount: 0, hasHydration: false };
+    }
+    const discoverPageUrl = `https://soundcloud.com/discover/sets/${encodeURIComponent(slug)}`;
+    const pageHtml = await httpGetText(discoverPageUrl, sessionHeaders);
+    const hydration = parseHydrationPayload(pageHtml);
+    logInfo("SoundCloud discover session hydration parse", {
+      slug,
+      hasHydration: hydration.length > 0,
+      hydrationEntries: hydration.length,
+    });
+    if (!hydration.length) {
+      return { tracks: [], discoveredTrackIdsCount: 0, hasHydration: false };
+    }
+    const mapped = [];
+    const seen = new Set();
+    const visited = new Set();
+    const discoveredTrackIds = new Set();
+    const looksLikeTrack = (track) => {
+      if (!track || typeof track !== "object") {
+        return false;
+      }
+      const permalink = track.permalink_url || track.permalinkUrl || track.url || track.uri || "";
+      const title = track.title || track.name || "";
+      const urn = String(track.urn || "");
+      if (!title) {
+        return false;
+      }
+      if (urn.includes("soundcloud:tracks:")) {
+        return true;
+      }
+      if (typeof permalink === "string" && /soundcloud\.com|^\/[^/]/i.test(permalink)) {
+        return true;
+      }
+      return false;
+    };
+    const pushTrack = (track) => {
+      if (!looksLikeTrack(track)) {
+        return;
+      }
+      const fallbackPermalink = track?.permalink
+        && track?.user?.permalink
+        ? `/${track.user.permalink}/${track.permalink}`
+        : null;
+      const permalink = toSoundcloudPermalink(toAbsoluteSoundcloudUrl(
+        track.permalink_url
+          || track.permalinkUrl
+          || track.url
+          || track.uri
+          || fallbackPermalink
+      ));
+      if (!permalink || seen.has(permalink)) {
+        return;
+      }
+      if (!isPlayableSoundcloudUrl(permalink)) {
+        return;
+      }
+      const title = track.title || track.name;
+      if (!title) {
+        return;
+      }
+      seen.add(permalink);
+      mapped.push({
+        title,
+        url: permalink,
+        displayUrl: permalink,
+        artist: track?.user?.username || track?.user?.name || track?.publisher_metadata?.artist || null,
+        channel: track?.user?.username || track?.user?.name || null,
+        source: "soundcloud",
+        duration: Math.round((track.duration || 0) / 1000),
+        requester,
+      });
+    };
+    const collectTracks = (value, depth = 0) => {
+      if (!value || depth > 8) {
+        return;
+      }
+      if (typeof value !== "object") {
+        return;
+      }
+      if (visited.has(value)) {
+        return;
+      }
+      visited.add(value);
+      if (Array.isArray(value)) {
+        value.forEach((item) => collectTracks(item, depth + 1));
+        return;
+      }
+      const urnMatch = String(value.urn || "").match(/soundcloud:tracks:(\d+)/);
+      if (urnMatch?.[1]) {
+        discoveredTrackIds.add(urnMatch[1]);
+      }
+      if (value.kind === "track" && Number.isFinite(value.id)) {
+        discoveredTrackIds.add(String(value.id));
+      }
+      if (Array.isArray(value.track_urns)) {
+        value.track_urns.forEach((urnValue) => {
+          const match = String(urnValue || "").match(/soundcloud:tracks:(\d+)/);
+          if (match?.[1]) {
+            discoveredTrackIds.add(match[1]);
+          }
+        });
+      }
+      pushTrack(value);
+      Object.values(value).forEach((next) => collectTracks(next, depth + 1));
+    };
+    hydration.forEach((entry) => {
+      collectTracks(entry);
+    });
+    if (soundcloudClientId && discoveredTrackIds.size) {
+      const idsToHydrate = Array.from(discoveredTrackIds).slice(0, 100);
+      for (const trackId of idsToHydrate) {
+        try {
+          const trackInfo = await httpGetJson(
+            `https://api-v2.soundcloud.com/tracks/${trackId}?client_id=${soundcloudClientId}`,
+            sessionHeaders
+          );
+          pushTrack(trackInfo);
+        } catch {
+          // Skip tracks that are not available to this session.
+        }
+      }
+    }
+    logInfo("SoundCloud discover session mapped tracks", {
+      slug,
+      trackCount: mapped.length,
+      discoveredTrackIds: discoveredTrackIds.size,
+    });
+    return {
+      tracks: mapped,
+      discoveredTrackIdsCount: discoveredTrackIds.size,
+      hasHydration: true,
+    };
   }
 
   async function resolveSoundcloudCandidate(candidate, requester) {
@@ -281,18 +524,39 @@ function createSoundcloudResolver(deps) {
           "SoundCloud discover links require API access and cannot be resolved without a SoundCloud client id."
         );
       }
+      let apiTracks = [];
       try {
-        const apiTracks = await resolveSoundcloudDiscover(queryToResolve, soundcloudDiscoverSlug, requester);
+        apiTracks = await resolveSoundcloudDiscover(queryToResolve, soundcloudDiscoverSlug, requester);
         if (apiTracks.length) {
           return { isSoundcloudUrl, tracks: apiTracks, discoverFailed };
         }
-        throw new Error(
-          "SoundCloud discover links are personalized and cannot be resolved by the public API. Use a direct playlist link instead."
-        );
       } catch (error) {
-        discoverFailed = true;
-        logError("SoundCloud discover resolve failed", error);
+        logError("SoundCloud discover API resolve failed", error);
       }
+      try {
+        const sessionResult = await resolveSoundcloudDiscoverViaSessionPage(soundcloudDiscoverSlug, requester);
+        if (sessionResult.tracks.length) {
+          logInfo("SoundCloud discover resolved via session page", {
+            slug: soundcloudDiscoverSlug,
+            trackCount: sessionResult.tracks.length,
+          });
+          return { isSoundcloudUrl, tracks: sessionResult.tracks, discoverFailed };
+        }
+        const hasSessionCookie = Boolean(buildSessionHeaders());
+        if (hasSessionCookie && sessionResult.hasHydration && sessionResult.discoveredTrackIdsCount === 0) {
+          await maybeAlertLikelyExpiredSoundcloudSession({ slug: soundcloudDiscoverSlug });
+        }
+      } catch (error) {
+        if (Boolean(buildSessionHeaders()) && /HTTP 401|HTTP 403/i.test(String(error?.message || ""))) {
+          await maybeAlertLikelyExpiredSoundcloudSession({ slug: soundcloudDiscoverSlug });
+        }
+        logError("SoundCloud discover session resolve failed", error);
+      }
+      discoverFailed = true;
+      logInfo("SoundCloud discover resolve exhausted", {
+        slug: soundcloudDiscoverSlug,
+        apiTrackCount: apiTracks.length,
+      });
     }
 
     if (isSoundcloudUrl && uniqueSoundcloudCandidates.length) {

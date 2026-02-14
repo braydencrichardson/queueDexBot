@@ -7,9 +7,9 @@ function createResolverHttpClient(deps) {
     youtubeUserAgent,
   } = deps;
 
-  function httpGetJson(url) {
+  function httpGetJson(url, headers = {}) {
     return new Promise((resolve, reject) => {
-      const req = httpsModule.get(url, (res) => {
+      const req = httpsModule.get(url, { headers }, (res) => {
         let data = "";
         res.on("data", (chunk) => {
           data += chunk;

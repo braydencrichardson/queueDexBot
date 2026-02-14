@@ -70,7 +70,7 @@ function createCommandInteractionHandler(deps) {
     if (isDiscoverError) {
       await interaction.editReply("Could not load that track or playlist.");
       await interaction.followUp({
-        content: errorMessageText,
+        content: "That SoundCloud discover link could not be loaded. Try a direct track or playlist link instead.",
         ephemeral: true,
       });
       return;

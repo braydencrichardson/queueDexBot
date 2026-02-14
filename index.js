@@ -23,6 +23,7 @@ const {
   QUEUE_VIEW_TIMEOUT_MS,
   SEARCH_CHOOSER_MAX_RESULTS,
   SOUND_CLOUD_REDIRECT_MAX_HOPS,
+  PROVIDER_REINIT_INTERVAL_MS,
   SPOTIFY_MARKET,
   SPOTIFY_DEFER_RESOLVE_BACKGROUND_INTERVAL_MS,
   TRACK_RESOLVER_HTTP_TIMEOUT_MS,
@@ -80,6 +81,7 @@ const { logInfo, logError, sendDevAlert } = createDevLogger({
 
 const {
   getSoundcloudClientId,
+  getSoundcloudCookieHeader,
   getYoutubeCookiesNetscapePath,
   hasSpotifyCredentials,
   tryCheckYoutubeCookiesOnFailure,
@@ -87,6 +89,7 @@ const {
   ensureSpotifyReady,
   ensureYoutubeReady,
   warmupProviders,
+  reinitializeProviders,
 } = createProviderBootstrap({
   playdl,
   logInfo,
@@ -96,6 +99,8 @@ const {
     youtubeCookies: env.youtubeCookies,
     youtubeCookiesPath: env.youtubeCookiesPath,
     youtubeUserAgent: env.youtubeUserAgent,
+    soundcloudCookies: env.soundcloudCookies,
+    soundcloudCookiesPath: env.soundcloudCookiesPath,
     soundcloudUserAgent: env.soundcloudUserAgent,
     spotifyClientId: env.spotifyClientId,
     spotifyClientSecret: env.spotifyClientSecret,
@@ -124,6 +129,8 @@ const {
   ensureSpotifyReady,
   hasSpotifyCredentials,
   getSoundcloudClientId,
+  getSoundcloudCookieHeader,
+  sendDevAlert,
   searchChooserMaxResults: SEARCH_CHOOSER_MAX_RESULTS,
   soundcloudUserAgent: env.soundcloudUserAgent,
   youtubeUserAgent: env.youtubeUserAgent,
@@ -248,6 +255,7 @@ const { createSoundcloudResource } = createSoundcloudResourceFactory({
 }));
 
 let deferredResolveCursor = 0;
+let providerReinitInterval = null;
 const deferredResolveInterval = setInterval(() => {
   const entries = Array.from(queues.entries())
     .filter(([, queue]) => Array.isArray(queue?.tracks) && queue.tracks.some((track) => track?.pendingResolve));
@@ -282,6 +290,24 @@ registerReadyHandler(client, {
   },
   onReady: async () => {
     await warmupProviders();
+    if (providerReinitInterval) {
+      clearInterval(providerReinitInterval);
+    }
+    providerReinitInterval = setInterval(() => {
+      reinitializeProviders()
+        .then((status) => {
+          logInfo("Periodic provider re-initialization completed", status);
+          if (!status?.soundcloudReady || !status?.youtubeReady || (status?.hasSpotifyCredentials && !status?.spotifyReady)) {
+            void sendDevAlert(`Periodic provider re-initialization reported degraded status: ${JSON.stringify(status)}`);
+          }
+        })
+        .catch((error) => {
+          logError("Periodic provider re-initialization failed", error);
+        });
+    }, PROVIDER_REINIT_INTERVAL_MS);
+    if (typeof providerReinitInterval.unref === "function") {
+      providerReinitInterval.unref();
+    }
   },
 });
 registerVoiceStateHandler(client, {

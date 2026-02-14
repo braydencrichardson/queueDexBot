@@ -36,6 +36,8 @@ function createTrackResolver(deps) {
     ensureSpotifyReady,
     hasSpotifyCredentials,
     getSoundcloudClientId,
+    getSoundcloudCookieHeader,
+    sendDevAlert,
     searchChooserMaxResults,
     soundcloudUserAgent,
     youtubeUserAgent,
@@ -101,8 +103,12 @@ function createTrackResolver(deps) {
   const soundcloudResolver = createSoundcloudResolver({
     playdl,
     getSoundcloudClientId,
+    getSoundcloudCookieHeader,
     httpGetJson,
+    httpGetText,
+    soundcloudUserAgent,
     resolveRedirect,
+    sendDevAlert,
     logInfo,
     logError,
   });

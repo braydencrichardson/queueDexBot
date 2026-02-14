@@ -4,6 +4,8 @@ function loadEnvVars(sourceEnv = process.env) {
     youtubeCookies: sourceEnv.YOUTUBE_COOKIES,
     youtubeCookiesPath: sourceEnv.YOUTUBE_COOKIES_PATH,
     youtubeUserAgent: sourceEnv.YOUTUBE_USER_AGENT,
+    soundcloudCookies: sourceEnv.SOUNDCLOUD_COOKIES,
+    soundcloudCookiesPath: sourceEnv.SOUNDCLOUD_COOKIES_PATH,
     soundcloudUserAgent: sourceEnv.SOUNDCLOUD_USER_AGENT,
     ytdlpPath: sourceEnv.YTDLP_PATH || "yt-dlp",
     ytdlpPlayerClient: sourceEnv.YTDLP_PLAYER_CLIENT || "web",

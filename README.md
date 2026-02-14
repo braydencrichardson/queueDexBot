@@ -66,6 +66,11 @@ yt-dlp / YouTube:
 - `YOUTUBE_COOKIES`: Optional cookie header or JSON cookie array.
 - `YOUTUBE_COOKIES_PATH`: Optional path to YouTube cookies file.
 - `YOUTUBE_USER_AGENT`: Optional user agent for YouTube and metadata HTTP requests.
+
+SoundCloud:
+
+- `SOUNDCLOUD_COOKIES`: Optional SoundCloud cookie header or JSON cookie array.
+- `SOUNDCLOUD_COOKIES_PATH`: Optional path to SoundCloud cookies JSON file.
 - `SOUNDCLOUD_USER_AGENT`: Optional user agent for SoundCloud requests.
 
 Spotify:
@@ -170,6 +175,47 @@ npm run verify-commands -- --guild
 npm start
 ```
 
+## Commands
+
+- `/play query:<url or search>`: Resolve and queue one or more tracks.
+- `/join`: Join your current voice channel.
+- `/playing`: Post now-playing controls in channel.
+- `/pause`, `/resume`, `/skip`, `/stop`: Playback controls.
+- `/queue view|clear|shuffle|remove|move`: Queue management.
+
+## Expected Behavior
+
+### Resolution
+
+- `/play` tries direct resolution first.
+- If direct resolution fails, it can post an interactive search chooser (owner-only, time-limited) and queue your selection.
+- Spotify `track` links work with or without Spotify credentials.
+- Spotify `playlist`/`album` resolution requires Spotify credentials.
+- Spotify playlist/album failures do not fall back to generic URL search to avoid unrelated tracks.
+- SoundCloud discover links (`/discover/sets/...`) use API first, then a session-cookie fallback parser when configured.
+- SoundCloud discover failures are shown to users as a generic message
+
+### Playback And Queue
+
+- Queue entries missing URLs or failing to load are skipped, and playback continues to next playable item.
+- The bot preloads the next track when possible to reduce transition gaps.
+- Now-playing includes progress and up-next, with message refresh while playing.
+- Queue/selection controls are requester-scoped (other users cannot operate owner-only controls).
+
+### Voice And Inactivity
+
+- If a voice channel becomes empty, playback is paused and an inactivity timer starts.
+- If nobody rejoins before timeout, queue is cleared and the bot disconnects.
+- If someone rejoins before timeout, playback resumes (when it was paused for inactivity).
+
+### Provider Lifecycle And Alerts
+
+- Providers warm up on startup (SoundCloud, YouTube, and Spotify when credentials exist).
+- A full provider re-initialization runs every 12 hours.
+- Re-init updates provider auth/session state and does not intentionally stop currently playing audio.
+- `DEV_LOG_CHANNEL_ID` receives verbose operational logs.
+- `DEV_ALERT_CHANNEL_ID` receives alerts for resolver/provider failures, including likely expired YouTube/SoundCloud cookies and degraded provider re-init status.
+
 ## YouTube Cookies
 
 If YouTube requires cookies, export them with `yt-dlp` in **JSON format** and point the bot at the file.
@@ -185,6 +231,25 @@ Set in `.env`:
 ```
 YOUTUBE_COOKIES_PATH=/path/to/youtube-cookies.json
 ```
+
+## SoundCloud Cookies Refresh
+
+If SoundCloud discover links stop resolving, refresh your SoundCloud cookies.
+
+1. Open your browser and sign in to the SoundCloud account you want the bot to use.
+2. Use the **Export cookie JSON file for Puppeteer** extension to export cookies as JSON.
+3. Save the file on the bot host (file-based cookies are easier to maintain than inline env values).
+4. Point `.env` to that file:
+
+```env
+SOUNDCLOUD_COOKIES_PATH=/path/to/.soundcloudcookies.json
+```
+
+5. Restart the bot.
+
+Notes:
+- Keep `soundcloud.com` cookies in the exported file, including `oauth_token`.
+- Session cookies expire/rotate, so periodic re-export is expected.
 
 ## Notes
 

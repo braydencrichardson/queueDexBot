@@ -15,6 +15,8 @@ function createProviderBootstrap(deps) {
     youtubeCookies,
     youtubeCookiesPath,
     youtubeUserAgent,
+    soundcloudCookies,
+    soundcloudCookiesPath,
     soundcloudUserAgent,
     spotifyClientId,
     spotifyClientSecret,
@@ -24,6 +26,7 @@ function createProviderBootstrap(deps) {
 
   let soundcloudReady = false;
   let soundcloudClientId = null;
+  let soundcloudCookieHeader = null;
   let youtubeReady = false;
   let youtubeCookieWarned = false;
   let youtubeCookieHeader = null;
@@ -155,6 +158,19 @@ function createProviderBootstrap(deps) {
     return parseCookiesInput(youtubeCookies);
   }
 
+  function loadSoundcloudCookies() {
+    if (soundcloudCookiesPath) {
+      try {
+        const fileContents = fs.readFileSync(soundcloudCookiesPath, "utf8");
+        return parseCookiesInput(fileContents);
+      } catch (error) {
+        logError("Failed to read SOUNDCLOUD_COOKIES_PATH", error);
+        return null;
+      }
+    }
+    return parseCookiesInput(soundcloudCookies);
+  }
+
   async function ensureSoundcloudReady() {
     if (soundcloudReady) {
       return;
@@ -167,8 +183,17 @@ function createProviderBootstrap(deps) {
         },
       });
       soundcloudClientId = clientId;
+      const soundcloudCookiesInput = loadSoundcloudCookies();
+      soundcloudCookieHeader = cookiesToHeader(soundcloudCookiesInput);
       soundcloudReady = true;
-      logInfo("SoundCloud client ID initialized");
+      logInfo("SoundCloud client ID initialized", {
+        hasSessionCookie: Boolean(soundcloudCookieHeader),
+        cookieSource: soundcloudCookiesPath
+          ? "SOUNDCLOUD_COOKIES_PATH"
+          : soundcloudCookies
+            ? "SOUNDCLOUD_COOKIES"
+            : null,
+      });
     } catch (error) {
       logError("SoundCloud initialization failed", error);
     }
@@ -241,6 +266,17 @@ function createProviderBootstrap(deps) {
     logInfo("Spotify API initialized");
   }
 
+  function resetProviderState() {
+    soundcloudReady = false;
+    soundcloudClientId = null;
+    soundcloudCookieHeader = null;
+    youtubeReady = false;
+    youtubeCookieHeader = null;
+    youtubeCookiesNetscapePath = null;
+    youtubeCookieCheckOnFailure = false;
+    spotifyReady = false;
+  }
+
   function checkYoutubeCookiesLoggedIn(cookieHeader) {
     if (!cookieHeader) {
       return Promise.resolve({ ok: false, reason: "missing_cookie_header" });
@@ -306,7 +342,12 @@ function createProviderBootstrap(deps) {
     const spotifyCredentialState = getSpotifyCredentialState();
     if (!hasSpotifyCredentials()) {
       logInfo("Spotify credentials not fully configured; Spotify track/playlist API features disabled.", spotifyCredentialState);
-      return;
+      return {
+        soundcloudReady,
+        youtubeReady,
+        spotifyReady,
+        hasSpotifyCredentials: false,
+      };
     }
     logInfo("Spotify credentials detected; validating Spotify API token.");
     try {
@@ -315,10 +356,22 @@ function createProviderBootstrap(deps) {
       logError("Spotify initialization failed", error);
       await sendDevAlert("Spotify credentials detected but initialization failed. Check logs for details.");
     }
+    return {
+      soundcloudReady,
+      youtubeReady,
+      spotifyReady,
+      hasSpotifyCredentials: true,
+    };
+  }
+
+  async function reinitializeProviders() {
+    resetProviderState();
+    return warmupProviders();
   }
 
   return {
     getSoundcloudClientId: () => soundcloudClientId,
+    getSoundcloudCookieHeader: () => soundcloudCookieHeader,
     getYoutubeCookiesNetscapePath: () => youtubeCookiesNetscapePath,
     hasSpotifyCredentials,
     tryCheckYoutubeCookiesOnFailure,
@@ -326,6 +379,7 @@ function createProviderBootstrap(deps) {
     ensureSpotifyReady,
     ensureYoutubeReady,
     warmupProviders,
+    reinitializeProviders,
   };
 }
 
