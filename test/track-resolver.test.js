@@ -249,6 +249,78 @@ test("resolveTracks treats Spotify track without credentials as non-direct when 
   assert.equal(searchOptionsCalls >= 1, true);
 });
 
+test("resolveTracks picks Spotify-derived YouTube candidate closest to track duration", async () => {
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: () => "track",
+      yt_validate: () => null,
+      video_basic_info: async () => ({ video_details: {} }),
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async () => ({
+        type: "track",
+        name: "Song",
+        artists: [{ name: "Artist" }],
+        album: { name: "Album" },
+        durationInSec: 200,
+      }),
+      setToken: async () => {},
+    },
+    hasSpotifyCredentials: () => true,
+    searchYouTubeOptions: async () => [
+      { title: "Far Match", url: "https://youtu.be/farMatch001", source: "youtube", duration: 172, requester: "Requester" },
+      { title: "Close Match", url: "https://youtu.be/closeMatch1", source: "youtube", duration: 202, requester: "Requester" },
+    ],
+    searchYouTubePreferred: async () => null,
+  });
+
+  const tracks = await resolver.resolveTracks("https://open.spotify.com/track/abc123", "Requester");
+
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].title, "Close Match");
+  assert.equal(tracks[0].duration, 202);
+});
+
+test("resolveTracks keeps Spotify fallback behavior when no duration-close candidate exists", async () => {
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: () => "track",
+      yt_validate: () => null,
+      video_basic_info: async () => ({ video_details: {} }),
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async () => ({
+        type: "track",
+        name: "Song",
+        artists: [{ name: "Artist" }],
+        album: { name: "Album" },
+        durationInSec: 200,
+      }),
+      setToken: async () => {},
+    },
+    hasSpotifyCredentials: () => true,
+    searchYouTubeOptions: async () => [
+      { title: "Fallback First", url: "https://youtu.be/fallback001", source: "youtube", duration: 280, requester: "Requester" },
+      { title: "Fallback Second", url: "https://youtu.be/fallback002", source: "youtube", duration: 290, requester: "Requester" },
+    ],
+    searchYouTubePreferred: async () => null,
+  });
+
+  const tracks = await resolver.resolveTracks("https://open.spotify.com/track/abc123", "Requester");
+
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].title, "Fallback First");
+  assert.equal(tracks[0].duration, 280);
+});
+
 test("resolveTracks falls back to searchYouTubePreferred for plain queries", async () => {
   const expected = {
     title: "Best Match",
