@@ -11,6 +11,22 @@ const playdl = require("play-dl");
 const sodium = require("libsodium-wrappers");
 const dotenv = require("dotenv");
 const { loadEnvVars } = require("./src/config/env");
+const {
+  BOT_ACTIVITY_NAME,
+  BOT_ACTIVITY_TYPE,
+  BOT_STATUS,
+  INTERACTION_TIMEOUT_MS,
+  PLAYBACK_LOADING_MESSAGE_DELAY_MS,
+  QUEUE_INACTIVITY_TIMEOUT_MS,
+  QUEUE_MOVE_MENU_PAGE_SIZE,
+  QUEUE_VIEW_PAGE_SIZE,
+  QUEUE_VIEW_TIMEOUT_MS,
+  SEARCH_CHOOSER_MAX_RESULTS,
+  SOUND_CLOUD_REDIRECT_MAX_HOPS,
+  SPOTIFY_MARKET,
+  TRACK_RESOLVER_HTTP_TIMEOUT_MS,
+  YTDLP_STREAM_TIMEOUT_MS,
+} = require("./src/config/constants");
 const { createRuntimeState } = require("./src/bot/runtime-state");
 const { createDevLogger } = require("./src/logging/dev-logger");
 const { searchYouTubeOptions, searchYouTubePreferred, getYoutubeId, toShortYoutubeUrl } = require("./src/providers/youtube-search");
@@ -82,7 +98,7 @@ const {
     spotifyClientId: env.spotifyClientId,
     spotifyClientSecret: env.spotifyClientSecret,
     spotifyRefreshToken: env.spotifyRefreshToken,
-    spotifyMarket: env.spotifyMarket,
+    spotifyMarket: SPOTIFY_MARKET,
   },
 });
 
@@ -103,11 +119,11 @@ const {
   ensureSpotifyReady,
   hasSpotifyCredentials,
   getSoundcloudClientId,
-  searchChooserMaxResults: env.searchChooserMaxResults,
+  searchChooserMaxResults: SEARCH_CHOOSER_MAX_RESULTS,
   soundcloudUserAgent: env.soundcloudUserAgent,
   youtubeUserAgent: env.youtubeUserAgent,
-  httpTimeoutMs: env.trackResolverHttpTimeoutMs,
-  soundcloudRedirectMaxHops: env.soundcloudRedirectMaxHops,
+  httpTimeoutMs: TRACK_RESOLVER_HTTP_TIMEOUT_MS,
+  soundcloudRedirectMaxHops: SOUND_CLOUD_REDIRECT_MAX_HOPS,
   logInfo,
   logError,
 });
@@ -165,7 +181,7 @@ const {
 
 const { trySendSearchChooser } = createSearchChooser({
   formatDuration,
-  interactionTimeoutMs: env.interactionTimeoutMs,
+  interactionTimeoutMs: INTERACTION_TIMEOUT_MS,
   pendingSearches,
   logInfo,
   logError,
@@ -186,7 +202,7 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
     ytdlpRemoteComponents: env.ytdlpRemoteComponents,
     ytdlpStream: env.ytdlpStream,
     ytdlpConcurrentFragments: env.ytdlpConcurrentFragments,
-    ytdlpStreamTimeoutMs: env.ytdlpStreamTimeoutMs,
+    ytdlpStreamTimeoutMs: YTDLP_STREAM_TIMEOUT_MS,
     youtubeUserAgent: env.youtubeUserAgent,
   },
 });
@@ -205,7 +221,7 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
   buildMoveMenu,
   formatMovePrompt,
   sendNowPlaying,
-  loadingMessageDelayMs: env.playbackLoadingMessageDelayMs,
+  loadingMessageDelayMs: PLAYBACK_LOADING_MESSAGE_DELAY_MS,
   logInfo,
   logError,
 }));
@@ -214,9 +230,9 @@ registerReadyHandler(client, {
   logInfo,
   logError,
   presence: {
-    status: env.botStatus,
-    activityName: env.botActivityName,
-    activityType: env.botActivityType,
+    status: BOT_STATUS,
+    activityName: BOT_ACTIVITY_NAME,
+    activityType: BOT_ACTIVITY_TYPE,
   },
   onReady: async () => {
     await warmupProviders();
@@ -228,7 +244,7 @@ registerVoiceStateHandler(client, {
   logInfo,
   logError,
   AudioPlayerStatus,
-  inactivityTimeoutMs: env.queueInactivityTimeoutMs,
+  inactivityTimeoutMs: QUEUE_INACTIVITY_TIMEOUT_MS,
 });
 
 client.on("error", (error) => {
@@ -241,10 +257,10 @@ client.on("shardError", (error) => {
 
 registerInteractionHandler(client, {
   AudioPlayerStatus,
-  INTERACTION_TIMEOUT_MS: env.interactionTimeoutMs,
-  QUEUE_VIEW_PAGE_SIZE: env.queueViewPageSize,
-  QUEUE_VIEW_TIMEOUT_MS: env.queueViewTimeoutMs,
-  QUEUE_MOVE_MENU_PAGE_SIZE: env.queueMoveMenuPageSize,
+  INTERACTION_TIMEOUT_MS,
+  QUEUE_VIEW_PAGE_SIZE,
+  QUEUE_VIEW_TIMEOUT_MS,
+  QUEUE_MOVE_MENU_PAGE_SIZE,
   joinVoiceChannel,
   getGuildQueue,
   isSameVoiceChannel,

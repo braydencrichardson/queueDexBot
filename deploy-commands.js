@@ -23,7 +23,7 @@ if (!applicationId) {
   process.exit(1);
 }
 
-const rest = new REST({ version: "9" }).setToken(token);
+const rest = new REST({ version: "10" }).setToken(token);
 
 async function deploy() {
   try {

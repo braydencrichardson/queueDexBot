@@ -7,7 +7,7 @@ const {
 const { escapeDiscordMarkdown, sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackPrimary, formatTrackSecondary } = require("./messages");
 const {
-  DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE,
+  QUEUE_MOVE_MENU_PAGE_SIZE,
   DISCORD_MESSAGE_SAFE_MAX_LENGTH,
   DISCORD_SELECT_LABEL_MAX_LENGTH,
   DISCORD_SELECT_LABEL_TRUNCATE_LENGTH,
@@ -319,7 +319,7 @@ function formatQueueViewContent(queue, page, pageSize, selectedTrackId, { stale,
   return { ...pageData, content: `${headerLines.join("\n")}\n${pageData.content}` };
 }
 
-function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE) {
+function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = QUEUE_MOVE_MENU_PAGE_SIZE) {
   const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
   const safePage = Math.min(Math.max(page, 1), totalPages);
   const startIndex = (safePage - 1) * pageSize;

@@ -1,4 +1,7 @@
-const { DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE, DEFAULT_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
+const {
+  QUEUE_MOVE_MENU_PAGE_SIZE: CONFIG_QUEUE_MOVE_MENU_PAGE_SIZE,
+  QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE,
+} = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
 const { clearMapEntryWithTimeout, setExpiringMapEntry } = require("./interaction-helpers");
 const {
@@ -40,10 +43,10 @@ function createButtonInteractionHandler(deps) {
     maybeRefreshNowPlayingUpNext = async () => {},
     stopAndLeaveQueue,
   } = deps;
-  const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : DEFAULT_QUEUE_VIEW_PAGE_SIZE;
+  const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : CONFIG_QUEUE_VIEW_PAGE_SIZE;
   const queueMoveMenuPageSize = Number.isFinite(QUEUE_MOVE_MENU_PAGE_SIZE)
     ? QUEUE_MOVE_MENU_PAGE_SIZE
-    : DEFAULT_QUEUE_MOVE_MENU_PAGE_SIZE;
+    : CONFIG_QUEUE_MOVE_MENU_PAGE_SIZE;
   const queueViewService = createQueueViewService({
     queueViews,
     formatQueueViewContent,

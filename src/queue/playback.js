@@ -1,5 +1,5 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
-const { DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constants");
+const { PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constants");
 
 function createQueuePlayback(deps) {
   const {
@@ -22,7 +22,7 @@ function createQueuePlayback(deps) {
   } = deps;
   const loadingDelayMs = Number.isFinite(loadingMessageDelayMs) && loadingMessageDelayMs >= 0
     ? loadingMessageDelayMs
-    : DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS;
+    : PLAYBACK_LOADING_MESSAGE_DELAY_MS;
   const RESOURCE_DISPOSE_KEY = "__queueDexDispose";
 
   async function sendPlaybackNotice(queue, content) {

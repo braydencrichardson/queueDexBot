@@ -1,8 +1,8 @@
 const https = require("https");
 const { normalizeIncomingUrl } = require("../utils/url-normalization");
 const {
-  DEFAULT_SOUND_CLOUD_REDIRECT_MAX_HOPS,
-  DEFAULT_TRACK_RESOLVER_HTTP_TIMEOUT_MS,
+  SOUND_CLOUD_REDIRECT_MAX_HOPS: CONFIG_SOUND_CLOUD_REDIRECT_MAX_HOPS,
+  TRACK_RESOLVER_HTTP_TIMEOUT_MS: CONFIG_TRACK_RESOLVER_HTTP_TIMEOUT_MS,
   SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO,
   SPOTIFY_YOUTUBE_MIN_TITLE_RATIO,
 } = require("../config/constants");
@@ -31,10 +31,10 @@ function createTrackResolver(deps) {
 
   const requestTimeoutMs = Number.isFinite(httpTimeoutMs) && httpTimeoutMs > 0
     ? httpTimeoutMs
-    : DEFAULT_TRACK_RESOLVER_HTTP_TIMEOUT_MS;
+    : CONFIG_TRACK_RESOLVER_HTTP_TIMEOUT_MS;
   const redirectMaxHops = Number.isFinite(soundcloudRedirectMaxHops) && soundcloudRedirectMaxHops > 0
     ? soundcloudRedirectMaxHops
-    : DEFAULT_SOUND_CLOUD_REDIRECT_MAX_HOPS;
+    : CONFIG_SOUND_CLOUD_REDIRECT_MAX_HOPS;
 
   function toSoundcloudPermalink(value) {
     if (!value) {
