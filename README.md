@@ -123,6 +123,27 @@ DEPLOY_COMMANDS_TARGET=guild
 
 Global commands can take up to an hour to propagate.
 
+## Verify Registered Commands
+
+```bash
+# verify both global and guild commands
+node verify-commands.js
+
+# verify global only
+node verify-commands.js --global
+
+# verify guild only
+node verify-commands.js --guild
+```
+
+You can also run via npm:
+
+```bash
+npm run verify-commands
+npm run verify-commands -- --global
+npm run verify-commands -- --guild
+```
+
 ## Run the Bot
 
 ```bash

@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "deploy-commands": "node deploy-commands.js",
+    "verify-commands": "node verify-commands.js",
     "start": "node index.js",
     "test": "node --test"
   },
