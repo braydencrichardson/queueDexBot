@@ -17,6 +17,13 @@ const {
 } = require("../config/constants");
 
 function formatQueuePage(queue, page, pageSize, selectedTrackId) {
+  function getTrackMarker(track, isSelected) {
+    if (isSelected) {
+      return "▶ ";
+    }
+    return track?.pendingResolve ? "ⓟ  " : "•  ";
+  }
+
   function isTrackPreloaded(track) {
     const trackKey = getTrackKey(track);
     if (!trackKey) {
@@ -57,7 +64,7 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
       .map((track, index) => {
         ensureTrackId(track);
         const number = startIndex + index + 1;
-        const selectedMark = track.id && track.id === selectedTrackId ? "▶ " : "•  ";
+        const selectedMark = getTrackMarker(track, Boolean(track.id && track.id === selectedTrackId));
         const primary = formatTrackPrimary(track, {
           formatDuration,
           includeRequester: true,
@@ -80,7 +87,7 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
           ensureTrackId(track);
           const number = startIndex + index + 1;
           const isSelected = Boolean(track.id && track.id === selectedTrackId);
-          const selectedMark = isSelected ? "▶ " : "•  ";
+          const selectedMark = getTrackMarker(track, isSelected);
           const primary = formatTrackPrimary(track, {
             formatDuration,
             includeRequester: true,
@@ -108,7 +115,7 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
           ensureTrackId(track);
           const number = startIndex + index + 1;
           const isSelected = Boolean(track.id && track.id === selectedTrackId);
-          const selectedMark = isSelected ? "▶ " : "•  ";
+          const selectedMark = getTrackMarker(track, isSelected);
           const primary = formatTrackPrimary(track, {
             formatDuration,
             includeRequester: true,

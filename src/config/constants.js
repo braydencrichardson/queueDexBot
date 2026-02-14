@@ -9,15 +9,64 @@ const DEV_LOG_INSPECT_BREAK_LENGTH = 80;
 
 const YOUTUBE_SEARCH_DEFAULT_LIMIT = 5;
 const YOUTUBE_SEARCH_MIN_SECONDS = 30;
+const YOUTUBE_SEARCH_QUERY_VARIANTS = [
+  "{query} official audio",
+  "{query} official music video",
+  "{query} audio",
+  "{query} lyrics",
+  "{query}",
+];
 const YOUTUBE_MATCH_DEFAULT_MIN_TITLE_RATIO = 0.5;
 const YOUTUBE_MATCH_DEFAULT_MIN_ARTIST_RATIO = 0.5;
+const YOUTUBE_SCORE_TITLE_MATCH_WEIGHT = 2;
+const YOUTUBE_SCORE_ARTIST_MATCH_WEIGHT = 3;
+const YOUTUBE_TITLE_BLOCK_TERMS = [
+  "earrape",
+  "bass boosted earrape",
+  "bass boosted",
+];
+const YOUTUBE_TITLE_WEIGHT_RULES = [
+  { term: "official audio", score: 5 },
+  { term: "provided to youtube", score: 4 },
+  { term: "official music video", score: 4 },
+  { term: "official", score: 3 },
+  { term: "audio", score: 2 },
+  { term: "music video", score: 3 },
+  { term: "lyric", score: 2 },
+  { term: "live", score: -2 },
+  { term: "cover", score: -2 },
+  { term: "slowed", score: -3 },
+  { term: "reverb", score: -2 },
+  { term: "slowed + reverb", score: -4 },
+  { term: "nightcore", score: -3 },
+  { term: "instrumental", score: -3 },
+  { term: "radio edit", score: -3 },  
+  { term: "sped up", score: -2 },
+  { term: "8d", score: -1 },
+  { term: "bass boosted", score: -3 },
+  { term: "tiktok", score: -1 },
+  { term: "tutorial", score: -2 },
+  { term: "guitar lesson", score: -3 },
+  { term: "how to play", score: -3 },
+  { term: "reaction", score: -3 },
+];
+const YOUTUBE_CHANNEL_WEIGHT_RULES = [
+  { term: "vevo", score: 2 },
+  { term: " - topic", score: 2 },
+  { term: "official", score: 1 },
+];
 const SPOTIFY_YOUTUBE_MIN_TITLE_RATIO = 0.6;
-const SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO = 1;
+const SPOTIFY_YOUTUBE_MIN_ARTIST_RATIO = 0.6;
 const SPOTIFY_YOUTUBE_DURATION_STRICT_MAX_DELTA_SECONDS = 8;
 const SPOTIFY_YOUTUBE_DURATION_MAX_DELTA_SECONDS = 25;
 const SPOTIFY_YOUTUBE_CANDIDATE_LIMIT = 8;
+const SPOTIFY_DEFER_RESOLVE_MIN_TRACKS = 10;
+const SPOTIFY_DEFER_RESOLVE_EAGER_COUNT = 2;
+const SPOTIFY_DEFER_RESOLVE_LOOKAHEAD = 5;
+const SPOTIFY_DEFER_RESOLVE_BACKGROUND_INTERVAL_MS = 2000;
+const SPOTIFY_DEFER_METADATA_PREFETCH_COUNT = 20;
 const TRACK_RESOLVER_HTTP_TIMEOUT_MS = 12000;
-const YTDLP_STREAM_TIMEOUT_MS = 12000;
+const YTDLP_STREAM_TIMEOUT_MS = 6000;
 const SOUND_CLOUD_REDIRECT_MAX_HOPS = 5;
 const PLAYBACK_LOADING_MESSAGE_DELAY_MS = 1000;
 const DEFAULT_NOW_PLAYING_PROGRESS_INTERVAL_MS = 4000;
@@ -62,8 +111,19 @@ module.exports = {
   SPOTIFY_YOUTUBE_DURATION_STRICT_MAX_DELTA_SECONDS,
   SPOTIFY_YOUTUBE_DURATION_MAX_DELTA_SECONDS,
   SPOTIFY_YOUTUBE_CANDIDATE_LIMIT,
+  SPOTIFY_DEFER_RESOLVE_MIN_TRACKS,
+  SPOTIFY_DEFER_RESOLVE_EAGER_COUNT,
+  SPOTIFY_DEFER_RESOLVE_LOOKAHEAD,
+  SPOTIFY_DEFER_RESOLVE_BACKGROUND_INTERVAL_MS,
+  SPOTIFY_DEFER_METADATA_PREFETCH_COUNT,
   YOUTUBE_MATCH_DEFAULT_MIN_ARTIST_RATIO,
   YOUTUBE_MATCH_DEFAULT_MIN_TITLE_RATIO,
+  YOUTUBE_SCORE_TITLE_MATCH_WEIGHT,
+  YOUTUBE_SCORE_ARTIST_MATCH_WEIGHT,
+  YOUTUBE_TITLE_BLOCK_TERMS,
+  YOUTUBE_TITLE_WEIGHT_RULES,
+  YOUTUBE_CHANNEL_WEIGHT_RULES,
+  YOUTUBE_SEARCH_QUERY_VARIANTS,
   YOUTUBE_SEARCH_DEFAULT_LIMIT,
   YOUTUBE_SEARCH_MIN_SECONDS,
 };

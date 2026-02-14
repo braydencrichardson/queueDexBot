@@ -28,7 +28,8 @@ function formatTruncatedClickableUrl(track, { startChars = 12, endChars = 8 } = 
 }
 
 function getTrackTitle(track) {
-  return escapeDiscordMarkdown(track?.title) || "unknown track";
+  const spotifyMetaTitle = track?.pendingResolve ? track?.spotifyMeta?.name : null;
+  return escapeDiscordMarkdown(track?.title || spotifyMetaTitle) || "unknown track";
 }
 
 function getTrackRequester(track) {
@@ -36,6 +37,13 @@ function getTrackRequester(track) {
 }
 
 function getTrackArtist(track) {
+  if (track?.pendingResolve) {
+    const spotifyMetaArtists = Array.isArray(track?.spotifyMeta?.artists)
+      ? track.spotifyMeta.artists.filter(Boolean).join(", ")
+      : "";
+    // For pending Spotify rows, avoid falling back to generic "Spotify" channel labels.
+    return escapeDiscordMarkdown(spotifyMetaArtists) || "";
+  }
   return escapeDiscordMarkdown(
     track?.artist || track?.channel || track?.author || track?.uploader || track?.channelName
   ) || "";
@@ -52,7 +60,7 @@ function formatTrackPrimary(track, { formatDuration, includeRequester = true } =
   const title = getTrackTitle(track);
   const duration = getTrackDuration(track, formatDuration);
   const requester = includeRequester ? getTrackRequester(track) : "";
-  let text = title;
+  let text = track?.pendingResolve ? `*${title}*` : title;
   if (duration) {
     text += ` (**${duration}**)`;
   }

@@ -19,12 +19,16 @@ function createQueuePlayback(deps) {
     formatMovePrompt,
     sendNowPlaying,
     loadingMessageDelayMs,
+    deferredResolveLookahead = 0,
+    hydrateDeferredTrackMetadata = async () => null,
+    resolveDeferredTrack = async () => null,
     logInfo,
     logError,
   } = deps;
   const loadingDelayMs = Number.isFinite(loadingMessageDelayMs) && loadingMessageDelayMs >= 0
     ? loadingMessageDelayMs
     : PLAYBACK_LOADING_MESSAGE_DELAY_MS;
+  const deferredLookahead = Math.max(0, Number(deferredResolveLookahead) || 0);
   const RESOURCE_DISPOSE_KEY = "__queueDexDispose";
 
   async function sendPlaybackNotice(queue, content) {
@@ -61,13 +65,13 @@ function createQueuePlayback(deps) {
     return "Queue finished. Leaving voice channel.";
   }
 
-  async function createTrackResource(track) {
+  async function createTrackResource(track, options = {}) {
     if (!track?.url) {
       logInfo("Track missing URL", track);
       throw new Error("Track URL missing");
     }
     if (track.source === "youtube") {
-      return createYoutubeResource(track.url);
+      return createYoutubeResource(track.url, options);
     }
     if (track.source === "soundcloud" && typeof createSoundcloudResource === "function") {
       return createSoundcloudResource(track.url);
@@ -88,6 +92,116 @@ function createQueuePlayback(deps) {
       };
     }
     return resource;
+  }
+
+  async function resolveTrackIfPending(queue, track, { context = "playback" } = {}) {
+    if (!track?.pendingResolve) {
+      return track;
+    }
+    const resolved = await resolveDeferredTrack(track, track?.requester || null);
+    if (!resolved?.url) {
+      return null;
+    }
+    const merged = {
+      ...track,
+      ...resolved,
+      id: track.id || resolved.id,
+      requester: track.requester || resolved.requester,
+      pendingResolve: false,
+      source: resolved.source || track.source,
+      spotifyMeta: track.spotifyMeta || resolved.spotifyMeta,
+    };
+    Object.assign(track, merged);
+    logInfo("Resolved deferred queued track", {
+      title: track.title,
+      source: track.source,
+      context,
+    });
+    return track;
+  }
+
+  async function resolveUpcomingPendingTracks(queue) {
+    if (!deferredLookahead || !Array.isArray(queue?.tracks) || !queue.tracks.length) {
+      return;
+    }
+    const upcoming = queue.tracks.slice(0, deferredLookahead);
+    let changed = false;
+    for (const track of upcoming) {
+      if (!track?.pendingResolve) {
+        continue;
+      }
+      try {
+        // Resolve sequentially to avoid burst rate limiting.
+        const resolved = await resolveTrackIfPending(queue, track, { context: "lookahead" });
+        if (resolved && !resolved.pendingResolve) {
+          changed = true;
+        }
+      } catch (error) {
+        logInfo("Deferred lookahead resolve failed", {
+          title: track?.title,
+          source: track?.source,
+          error,
+        });
+      }
+    }
+    if (changed && queue?.guildId) {
+      markQueueViewsStale(queue.guildId);
+      await refreshQueueViews(queue.guildId, queue);
+      await refreshPendingMoves(queue.guildId, queue);
+    }
+  }
+
+  async function resolveOneDeferredTrack(queue, { context = "background" } = {}) {
+    if (!queue || queue.deferredResolveInFlight) {
+      return false;
+    }
+    const pendingTrack = Array.isArray(queue.tracks) ? queue.tracks.find((track) => track?.pendingResolve) : null;
+    if (!pendingTrack) {
+      return false;
+    }
+    queue.deferredResolveInFlight = true;
+    try {
+      const resolved = await resolveTrackIfPending(queue, pendingTrack, { context });
+      if (resolved && !resolved.pendingResolve && queue?.guildId) {
+        markQueueViewsStale(queue.guildId);
+        await refreshQueueViews(queue.guildId, queue);
+        await refreshPendingMoves(queue.guildId, queue);
+        return true;
+      }
+      return false;
+    } finally {
+      queue.deferredResolveInFlight = false;
+    }
+  }
+
+  async function hydrateOneDeferredTrackMetadata(queue, { context = "background-meta" } = {}) {
+    if (!queue || queue.deferredResolveInFlight) {
+      return false;
+    }
+    const pendingTrack = Array.isArray(queue.tracks)
+      ? queue.tracks.find((track) => track?.pendingResolve && !track?.spotifyMeta?.name)
+      : null;
+    if (!pendingTrack) {
+      return false;
+    }
+    queue.deferredResolveInFlight = true;
+    try {
+      const hydrated = await hydrateDeferredTrackMetadata(pendingTrack);
+      if (hydrated?.spotifyMeta?.name && queue?.guildId) {
+        logInfo("Hydrated deferred track metadata", {
+          title: hydrated.title,
+          source: hydrated.source,
+          context,
+        });
+        markQueueViewsStale(queue.guildId);
+        await refreshQueueViews(queue.guildId, queue);
+        await refreshPendingMoves(queue.guildId, queue);
+        return true;
+      }
+      return false;
+    } finally {
+      queue.deferredResolveInFlight = false;
+    }
   }
 
   function bumpPreloadGeneration(queue) {
@@ -138,52 +252,69 @@ function createQueuePlayback(deps) {
     const nextTrack = queue?.tracks?.[0];
     const nextTrackKey = getTrackKey(nextTrack);
     if (!nextTrack?.url || !nextTrackKey) {
+      if (deferredLookahead > 0) {
+        await resolveUpcomingPendingTracks(queue);
+      }
+      const refreshedNextTrack = queue?.tracks?.[0];
+      const refreshedNextTrackKey = getTrackKey(refreshedNextTrack);
+      if (!refreshedNextTrack?.url || !refreshedNextTrackKey) {
+        clearPreloadedResource(queue);
+        return null;
+      }
+      return ensureNextTrackPreload(queue);
+    }
+    if (deferredLookahead > 0) {
+      await resolveUpcomingPendingTracks(queue);
+    }
+    const currentNextTrack = queue?.tracks?.[0];
+    const currentNextTrackKey = getTrackKey(currentNextTrack);
+    if (!currentNextTrack?.url || !currentNextTrackKey) {
       clearPreloadedResource(queue);
       return null;
     }
-    if (queue.preloadedNextTrackKey === nextTrackKey && queue.preloadedNextResource) {
+    if (queue.preloadedNextTrackKey === currentNextTrackKey && queue.preloadedNextResource) {
       return queue.preloadedNextResource;
     }
-    if (queue.nextTrackPreloadInFlightKey === nextTrackKey && queue.nextTrackPreloadPromise) {
+    if (queue.nextTrackPreloadInFlightKey === currentNextTrackKey && queue.nextTrackPreloadPromise) {
       return queue.nextTrackPreloadPromise;
     }
-    if (queue.preloadedNextTrackKey && queue.preloadedNextTrackKey !== nextTrackKey && queue.preloadedNextResource) {
+    if (queue.preloadedNextTrackKey && queue.preloadedNextTrackKey !== currentNextTrackKey && queue.preloadedNextResource) {
       disposeResource(queue.preloadedNextResource);
       queue.preloadedNextTrackKey = null;
       queue.preloadedNextResource = null;
     }
 
     const generation = bumpPreloadGeneration(queue);
-    queue.nextTrackPreloadInFlightKey = nextTrackKey;
-    const preloadPromise = createTrackResource(nextTrack)
+    queue.nextTrackPreloadInFlightKey = currentNextTrackKey;
+    const preloadPromise = createTrackResource(currentNextTrack)
       .then((resource) => {
         const isStillCurrentPreload = queue.nextTrackPreloadGeneration === generation
-          && queue.nextTrackPreloadInFlightKey === nextTrackKey;
+          && queue.nextTrackPreloadInFlightKey === currentNextTrackKey;
         if (!isStillCurrentPreload) {
           return null;
         }
-        queue.preloadedNextTrackKey = nextTrackKey;
+        queue.preloadedNextTrackKey = currentNextTrackKey;
         queue.preloadedNextResource = resource;
-        logInfo("Preloaded next track resource", { title: nextTrack.title, source: nextTrack.source });
+        logInfo("Preloaded next track resource", { title: currentNextTrack.title, source: currentNextTrack.source });
         return resource;
       })
       .catch((error) => {
         const isStillCurrentPreload = queue.nextTrackPreloadGeneration === generation
-          && queue.nextTrackPreloadInFlightKey === nextTrackKey;
+          && queue.nextTrackPreloadInFlightKey === currentNextTrackKey;
         if (isStillCurrentPreload) {
           queue.preloadedNextTrackKey = null;
           queue.preloadedNextResource = null;
         }
         logInfo("Failed to preload next track resource", {
-          title: nextTrack.title,
-          source: nextTrack.source,
+          title: currentNextTrack.title,
+          source: currentNextTrack.source,
           error,
         });
         return null;
       })
       .finally(() => {
         const isStillCurrentPreload = queue.nextTrackPreloadGeneration === generation
-          && queue.nextTrackPreloadInFlightKey === nextTrackKey;
+          && queue.nextTrackPreloadInFlightKey === currentNextTrackKey;
         if (isStillCurrentPreload) {
           queue.nextTrackPreloadInFlightKey = null;
           queue.nextTrackPreloadPromise = null;
@@ -193,7 +324,11 @@ function createQueuePlayback(deps) {
     return preloadPromise;
   }
 
-  async function resolveResourceForTrack(queue, track) {
+  async function resolveResourceForTrack(queue, track, options = {}) {
+    const resolvedTrack = await resolveTrackIfPending(queue, track, { context: "playback" });
+    if (!resolvedTrack?.url) {
+      throw new Error("Deferred track resolution failed");
+    }
     const trackKey = getTrackKey(track);
     if (trackKey && queue.preloadedNextTrackKey === trackKey && queue.preloadedNextResource) {
       const resource = queue.preloadedNextResource;
@@ -218,7 +353,7 @@ function createQueuePlayback(deps) {
         return resource;
       }
     }
-    const resource = await createTrackResource(track);
+    const resource = await createTrackResource(track, options);
     clearPreloadedResource(queue);
     return resource;
   }
@@ -372,20 +507,36 @@ function createQueuePlayback(deps) {
 
       let loadingTimeout = null;
       let loadingMessage = null;
+      let loadingMessagePending = false;
+
+      async function ensureLoadingMessage() {
+        if (!queue.textChannel || loadingMessage || loadingMessagePending) {
+          return;
+        }
+        loadingMessagePending = true;
+        try {
+          const title = sanitizeInlineDiscordText(nextTrack.title || "unknown track");
+          loadingMessage = await queue.textChannel.send(`Loading **${title}**...`);
+        } catch (error) {
+          logError("Failed to send loading message", error);
+        } finally {
+          loadingMessagePending = false;
+        }
+      }
+
       if (queue.textChannel) {
         loadingTimeout = setTimeout(async () => {
-          try {
-            const title = sanitizeInlineDiscordText(nextTrack.title || "unknown track");
-            loadingMessage = await queue.textChannel.send(`Loading **${title}**...`);
-          } catch (error) {
-            logError("Failed to send loading message", error);
-          }
+          await ensureLoadingMessage();
         }, loadingDelayMs);
       }
 
       let resource;
       try {
-        resource = await resolveResourceForTrack(queue, nextTrack);
+        resource = await resolveResourceForTrack(queue, nextTrack, {
+          onStartupSleep: async () => {
+            await ensureLoadingMessage();
+          },
+        });
       } catch (error) {
         logError("Failed to create audio resource", error);
         skipStats.loadFailureCount += 1;
@@ -437,7 +588,9 @@ function createQueuePlayback(deps) {
   return {
     createTrackResource,
     ensureNextTrackPreload,
+    hydrateOneDeferredTrackMetadata,
     playNext,
+    resolveOneDeferredTrack,
   };
 }
 

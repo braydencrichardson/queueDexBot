@@ -486,3 +486,166 @@ test("resolveTracks hydrates SoundCloud playlist when resolve payload has partia
   assert.equal(tracks[0].requester, "Requester");
   assert.equal(tracks[1].requester, "Requester");
 });
+
+test("resolveTracks normalizes Spotify playlist URL before validation and API resolve", async () => {
+  let seenValidateQuery = null;
+  let seenSpotifyQuery = null;
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: (query) => {
+        seenValidateQuery = query;
+        return "playlist";
+      },
+      yt_validate: () => null,
+      video_basic_info: async () => ({ video_details: {} }),
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async (query) => {
+        seenSpotifyQuery = query;
+        return {
+          type: "playlist",
+          name: "My List",
+          total_tracks: 0,
+          all_tracks: async () => [],
+        };
+      },
+      setToken: async () => {},
+    },
+    hasSpotifyCredentials: () => true,
+  });
+
+  const tracks = await resolver.resolveTracks(
+    "https://open.spotify.com/playlist/7VvecG5jaX2SmLZPTN4Y2K?si=d50fcf90e4ed46cf",
+    "Requester"
+  );
+
+  assert.deepEqual(tracks, []);
+  assert.equal(seenValidateQuery, "https://open.spotify.com/playlist/7VvecG5jaX2SmLZPTN4Y2K");
+  assert.equal(seenSpotifyQuery, "https://open.spotify.com/playlist/7VvecG5jaX2SmLZPTN4Y2K");
+});
+
+test("resolveTracks does not fall back to generic YouTube search when Spotify playlist resolve fails", async () => {
+  let searchPreferredCalls = 0;
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: () => "playlist",
+      yt_validate: () => null,
+      video_basic_info: async () => ({ video_details: {} }),
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async () => {
+        throw new TypeError("Cannot read properties of undefined (reading 'total')");
+      },
+      setToken: async () => {},
+    },
+    hasSpotifyCredentials: () => true,
+    searchYouTubePreferred: async () => {
+      searchPreferredCalls += 1;
+      return {
+        title: "Random fallback video",
+        url: "https://youtu.be/random00001",
+        source: "youtube",
+      };
+    },
+  });
+
+  const tracks = await resolver.resolveTracks(
+    "https://open.spotify.com/playlist/7vecG5jaX2SmlZPTN4X2K?si=d50fcf90e4ed46cf",
+    "Requester"
+  );
+
+  assert.deepEqual(tracks, []);
+  assert.equal(searchPreferredCalls, 0);
+});
+
+test("resolveTracks uses Spotify Web API playlist tracks before play-dl fallback", async () => {
+  let spotifyApiCalls = 0;
+  let playDlSpotifyCalls = 0;
+  const resolver = buildResolver({
+    playdl: {
+      so_validate: async () => null,
+      soundcloud: async () => {
+        throw new Error("not used");
+      },
+      search: async () => [],
+      sp_validate: () => "playlist",
+      yt_validate: () => null,
+      video_basic_info: async () => ({ video_details: {} }),
+      playlist_info: async () => ({ async fetch() {}, videos: [] }),
+      spotify: async () => {
+        playDlSpotifyCalls += 1;
+        return {
+          type: "playlist",
+          name: "play-dl list",
+          total_tracks: 0,
+          all_tracks: async () => [],
+        };
+      },
+      setToken: async () => {},
+    },
+    spotifyClientId: "client",
+    spotifyClientSecret: "secret",
+    spotifyRefreshToken: "refresh",
+    spotifyMarket: "US",
+    httpsModule: {
+      request(options, callback) {
+        const req = new EventEmitter();
+        req.setTimeout = () => {};
+        req.write = () => {};
+        req.end = () => {
+          process.nextTick(() => {
+            const res = new EventEmitter();
+            if (String(options.hostname).includes("accounts.spotify.com")) {
+              res.statusCode = 200;
+              callback(res);
+              res.emit("data", JSON.stringify({ access_token: "token", expires_in: 3600 }));
+              res.emit("end");
+              return;
+            }
+            spotifyApiCalls += 1;
+            res.statusCode = 200;
+            callback(res);
+            res.emit("data", JSON.stringify({
+              items: [
+                {
+                  track: {
+                    name: "Dire, Dire Docks",
+                    duration_ms: 222000,
+                    artists: [{ name: "Fether" }],
+                    album: { name: "Dire, Dire Docks - Breakcore" },
+                  },
+                },
+              ],
+              next: null,
+            }));
+            res.emit("end");
+          });
+        };
+        req.on = () => req;
+        return req;
+      },
+      get() {
+        throw new Error("not expected");
+      },
+    },
+    hasSpotifyCredentials: () => true,
+    searchYouTubeOptions: async () => [
+      { title: "Match", url: "https://youtu.be/match000001", source: "youtube", duration: 222, requester: "Requester" },
+    ],
+  });
+
+  const tracks = await resolver.resolveTracks("https://open.spotify.com/playlist/abc123?si=share", "Requester");
+
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].title, "Match");
+  assert.equal(spotifyApiCalls, 1);
+  assert.equal(playDlSpotifyCalls, 0);
+});

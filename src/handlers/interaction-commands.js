@@ -57,6 +57,15 @@ function createCommandInteractionHandler(deps) {
   });
   async function handleResolveErrorReply(interaction, error) {
     const errorMessageText = String(error?.message || "");
+    const isHttp302Error = errorMessageText.toLowerCase().includes("http status: 302");
+    if (isHttp302Error) {
+      await interaction.editReply("Could not load that track or playlist.");
+      await interaction.followUp({
+        content: "That link redirected in a way the resolver could not follow. Try the final/canonical URL directly.",
+        ephemeral: true,
+      });
+      return;
+    }
     const isDiscoverError = errorMessageText.includes("SoundCloud discover links");
     if (isDiscoverError) {
       await interaction.editReply("Could not load that track or playlist.");
@@ -66,8 +75,29 @@ function createCommandInteractionHandler(deps) {
       });
       return;
     }
-    const isDetailedPublicError = errorMessageText.includes("Spotify");
-    await interaction.editReply(isDetailedPublicError ? errorMessageText : "Could not load that track or playlist.");
+    const isSpotifyAccessDenied = error?.code === "SPOTIFY_PLAYLIST_ACCESS_DENIED";
+    if (isSpotifyAccessDenied) {
+      await interaction.editReply("Could not load that track or playlist.");
+      const hasPrivateShareToken = Boolean(error?.spotifyAccess?.hasPrivateShareToken);
+      const guidance = hasPrivateShareToken
+        ? "That Spotify playlist link uses a private/collaborative share token and cannot be resolved reliably by bot-side API/web fallback. Try a public playlist link or queue individual tracks."
+        : "That Spotify playlist appears private/collaborative or otherwise restricted for bot-side resolution. Try a public playlist link or queue individual tracks.";
+      await interaction.followUp({
+        content: guidance,
+        ephemeral: true,
+      });
+      return;
+    }
+    const isSpotifyCredentialsMissing = error?.code === "SPOTIFY_CREDENTIALS_MISSING";
+    if (isSpotifyCredentialsMissing) {
+      await interaction.editReply("Could not load that track or playlist.");
+      await interaction.followUp({
+        content: "Spotify playlist/album support is not configured. Add `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `SPOTIFY_REFRESH_TOKEN` in `.env`.",
+        ephemeral: true,
+      });
+      return;
+    }
+    await interaction.editReply("Could not load that track or playlist.");
   }
 
   return async function handleCommandInteraction(interaction) {
@@ -108,6 +138,47 @@ function createCommandInteractionHandler(deps) {
       const requester = interaction.member?.displayName || interaction.user.tag;
       const requesterId = interaction.user.id;
       const hadAnythingQueuedBeforePlay = Boolean(queue.current) || queue.tracks.length > 0;
+      let lastProgressUpdateAt = 0;
+      let lastProgressProcessed = -1;
+
+      async function updateResolveProgress(progress) {
+        if (!progress || progress.source !== "spotify") {
+          return;
+        }
+        const processed = Number.isFinite(progress.processed) ? progress.processed : 0;
+        const matched = Number.isFinite(progress.matched) ? progress.matched : 0;
+        const total = Number.isFinite(progress.total) ? progress.total : null;
+        const now = Date.now();
+        const shouldUpdate = Boolean(progress.done)
+          || progress.stage === "fallback"
+          || processed <= 1
+          || processed - lastProgressProcessed >= 10
+          || now - lastProgressUpdateAt >= 1750;
+        if (!shouldUpdate) {
+          return;
+        }
+        lastProgressProcessed = processed;
+        lastProgressUpdateAt = now;
+
+        let content = "Resolving Spotify tracks...";
+        if (progress.stage === "fallback") {
+          content = "Spotify API blocked this playlist; using web fallback...";
+        } else if (total && total > 0) {
+          content = `Resolving Spotify ${progress.type || "playlist"}: matched ${matched}/${total} (${processed} checked)...`;
+        } else if (processed > 0) {
+          content = `Resolving Spotify ${progress.type || "playlist"}: matched ${matched} (${processed} checked)...`;
+        }
+        if (progress.done) {
+          content = total
+            ? `Resolved Spotify ${progress.type || "playlist"}: matched ${matched}/${total}.`
+            : `Resolved Spotify ${progress.type || "playlist"}: matched ${matched}.`;
+        }
+        try {
+          await interaction.editReply(content);
+        } catch (error) {
+          logError("Failed to send Spotify resolve progress update", error);
+        }
+      }
 
       queue.voiceChannel = voiceChannel;
 
@@ -126,7 +197,10 @@ function createCommandInteractionHandler(deps) {
 
       let tracks;
       try {
-        tracks = await resolveTracks(query, requester, { allowSearchFallback: false });
+        tracks = await resolveTracks(query, requester, {
+          allowSearchFallback: false,
+          onProgress: updateResolveProgress,
+        });
       } catch (error) {
         logError("Failed to resolve tracks", error);
         await handleResolveErrorReply(interaction, error);
@@ -145,7 +219,9 @@ function createCommandInteractionHandler(deps) {
         }
 
         try {
-          tracks = await resolveTracks(query, requester);
+          tracks = await resolveTracks(query, requester, {
+            onProgress: updateResolveProgress,
+          });
         } catch (error) {
           logError("Failed to resolve tracks", error);
           await handleResolveErrorReply(interaction, error);

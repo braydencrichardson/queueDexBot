@@ -3,7 +3,13 @@ const {
   YOUTUBE_MATCH_DEFAULT_MIN_ARTIST_RATIO,
   YOUTUBE_MATCH_DEFAULT_MIN_TITLE_RATIO,
   YOUTUBE_SEARCH_DEFAULT_LIMIT,
+  YOUTUBE_SEARCH_QUERY_VARIANTS,
   YOUTUBE_SEARCH_MIN_SECONDS,
+  YOUTUBE_SCORE_TITLE_MATCH_WEIGHT,
+  YOUTUBE_SCORE_ARTIST_MATCH_WEIGHT,
+  YOUTUBE_TITLE_BLOCK_TERMS,
+  YOUTUBE_TITLE_WEIGHT_RULES,
+  YOUTUBE_CHANNEL_WEIGHT_RULES,
 } = require("../config/constants");
 
 function getYoutubeId(value) {
@@ -60,8 +66,70 @@ function parseQueryParts(query) {
   return { title: raw.trim() };
 }
 
+function isBlockedTitle(title) {
+  const lowered = String(title || "").toLowerCase();
+  if (!lowered) {
+    return false;
+  }
+  return Array.isArray(YOUTUBE_TITLE_BLOCK_TERMS)
+    && YOUTUBE_TITLE_BLOCK_TERMS.some((term) => typeof term === "string" && term && lowered.includes(term.toLowerCase()));
+}
+
+function applyTitleWeightRules(title) {
+  if (!title || !Array.isArray(YOUTUBE_TITLE_WEIGHT_RULES)) {
+    return 0;
+  }
+  let score = 0;
+  YOUTUBE_TITLE_WEIGHT_RULES.forEach((rule) => {
+    const term = String(rule?.term || "").toLowerCase().trim();
+    const weight = Number(rule?.score);
+    if (!term || !Number.isFinite(weight)) {
+      return;
+    }
+    if (title.includes(term)) {
+      score += weight;
+    }
+  });
+  return score;
+}
+
+function applyChannelWeightRules(channelName) {
+  if (!channelName || !Array.isArray(YOUTUBE_CHANNEL_WEIGHT_RULES)) {
+    return 0;
+  }
+  let score = 0;
+  YOUTUBE_CHANNEL_WEIGHT_RULES.forEach((rule) => {
+    const term = String(rule?.term || "").toLowerCase().trim();
+    const weight = Number(rule?.score);
+    if (!term || !Number.isFinite(weight)) {
+      return;
+    }
+    if (channelName.includes(term)) {
+      score += weight;
+    }
+  });
+  return score;
+}
+
+function buildSearchQueryVariants(query) {
+  const baseQuery = String(query || "").trim();
+  const templates = Array.isArray(YOUTUBE_SEARCH_QUERY_VARIANTS) && YOUTUBE_SEARCH_QUERY_VARIANTS.length
+    ? YOUTUBE_SEARCH_QUERY_VARIANTS
+    : [
+        "{query} official audio",
+        "{query} official music video",
+        "{query} audio",
+        "{query} lyrics",
+        "{query}",
+      ];
+  return templates
+    .map((template) => String(template || "").replaceAll("{query}", baseQuery).trim())
+    .filter(Boolean);
+}
+
 function scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions) {
   const title = String(video.title || "").toLowerCase();
+  const channelName = String(video.author?.name || video.channel?.name || "").toLowerCase();
   const titleTokens = new Set(tokenizeQuery(title));
   const requiredMatches = requiredTokens.filter((token) => titleTokens.has(token)).length;
   const artistMatches = artistTokens.filter((token) => titleTokens.has(token)).length;
@@ -73,15 +141,9 @@ function scoreYouTubeVideo(video, requiredTokens, artistTokens, matchOptions) {
   if (artistTokens.length && artistMatches / artistTokens.length < minArtistRatio) {
     return -Infinity;
   }
-  let score = requiredMatches * 2 + artistMatches * 3;
-  if (title.includes("official audio")) score += 3;
-  if (title.includes("official music video")) score += 3;
-  if (title.includes("official")) score += 1;
-  if (title.includes("audio")) score += 2;
-  if (title.includes("music video")) score += 2;
-  if (title.includes("lyric")) score += 1;
-  if (title.includes("live")) score -= 2;
-  if (title.includes("cover")) score -= 2;
+  let score = requiredMatches * YOUTUBE_SCORE_TITLE_MATCH_WEIGHT + artistMatches * YOUTUBE_SCORE_ARTIST_MATCH_WEIGHT;
+  score += applyTitleWeightRules(title);
+  score += applyChannelWeightRules(channelName);
   return score;
 }
 
@@ -89,10 +151,14 @@ function pickYouTubeVideo(videos, query, matchOptions) {
   if (!Array.isArray(videos) || !videos.length) {
     return null;
   }
+  const candidateVideos = videos.filter((video) => !isBlockedTitle(video?.title));
+  if (!candidateVideos.length) {
+    return null;
+  }
   const parsed = parseQueryParts(query);
   const requiredTokens = tokenizeQuery(parsed.title || query);
   const artistTokens = tokenizeQuery(parsed.artist || "");
-  const scored = videos
+  const scored = candidateVideos
     .filter((video) => typeof video.seconds === "number" && video.seconds > YOUTUBE_SEARCH_MIN_SECONDS)
     .map((video) => ({
       video,
@@ -105,17 +171,21 @@ function pickYouTubeVideo(videos, query, matchOptions) {
     return scored[0].video;
   }
 
-  return videos[0];
+  return candidateVideos[0];
 }
 
 function rankYouTubeVideos(videos, query, matchOptions) {
   if (!Array.isArray(videos) || !videos.length) {
     return [];
   }
+  const candidateVideos = videos.filter((video) => !isBlockedTitle(video?.title));
+  if (!candidateVideos.length) {
+    return [];
+  }
   const parsed = parseQueryParts(query);
   const requiredTokens = tokenizeQuery(parsed.title || query);
   const artistTokens = tokenizeQuery(parsed.artist || "");
-  const scored = videos
+  const scored = candidateVideos
     .filter((video) => typeof video.seconds === "number" && video.seconds > YOUTUBE_SEARCH_MIN_SECONDS)
     .map((video) => ({
       video,
@@ -125,17 +195,11 @@ function rankYouTubeVideos(videos, query, matchOptions) {
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.video);
 
-  return scored.length ? scored : videos;
+  return scored.length ? scored : candidateVideos;
 }
 
 async function searchYouTubeOptions(query, requester, matchOptions, limit = YOUTUBE_SEARCH_DEFAULT_LIMIT) {
-  const variants = [
-    `${query} official audio`,
-    `${query} official music video`,
-    `${query} audio`,
-    `${query} lyrics`,
-    query,
-  ];
+  const variants = buildSearchQueryVariants(query);
   const baseQuery = String(query || "");
   for (const searchQuery of variants) {
     const results = await yts(searchQuery);
@@ -156,13 +220,7 @@ async function searchYouTubeOptions(query, requester, matchOptions, limit = YOUT
 }
 
 async function searchYouTubePreferred(query, requester, matchOptions) {
-  const variants = [
-    `${query} official audio`,
-    `${query} official music video`,
-    `${query} audio`,
-    `${query} lyrics`,
-    query,
-  ];
+  const variants = buildSearchQueryVariants(query);
   const baseQuery = String(query || "");
   for (const searchQuery of variants) {
     const results = await yts(searchQuery);

@@ -72,6 +72,42 @@ Spotify:
 
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`: Required together for Spotify playlist/album resolution.
 
+### Getting a New Spotify Refresh Token
+
+Use this when `SPOTIFY_REFRESH_TOKEN` expires/revokes or you want to rotate credentials.
+
+1. In the Spotify Developer Dashboard app settings, add a redirect URI (example: `https://localhost:8080/callback`).
+2. Open this URL in your browser (replace placeholders first):
+
+```text
+https://accounts.spotify.com/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=https%3A%2F%2F127.0.0.1%3A8888%2Fcallback&scope=playlist-read-private%20playlist-read-collaborative
+```
+
+3. Approve access. Copy the `code` value from the callback URL.
+4. Exchange that `code` for tokens:
+
+```bash
+curl -X POST https://accounts.spotify.com/api/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "YOUR_CLIENT_ID:YOUR_CLIENT_SECRET" \
+  -d "grant_type=authorization_code" \
+  -d "code=PASTE_CODE_HERE" \
+  -d "redirect_uri=https://127.0.0.1:8888/callback"
+```
+
+5. Copy `refresh_token` from the JSON response into `.env`:
+
+```env
+SPOTIFY_CLIENT_ID=...
+SPOTIFY_CLIENT_SECRET=...
+SPOTIFY_REFRESH_TOKEN=...
+```
+
+Notes:
+- `redirect_uri` must exactly match the value in your Spotify app settings and in the token request.
+- Keep `SPOTIFY_CLIENT_SECRET` and `SPOTIFY_REFRESH_TOKEN` private.
+- If Spotify returns `invalid_client`, re-check client ID/secret and ensure you are using the same app that generated the `code`.
+
 Code constants (not `.env`):
 
 - Presence (`status`, `activityName`, `activityType`), queue/search tuning, resolver timeouts, stream timeout, and Spotify market are in `src/config/constants.js`.

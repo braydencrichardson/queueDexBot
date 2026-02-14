@@ -27,6 +27,7 @@ function createQueueSession(deps) {
   function getGuildQueue(guildId) {
     if (!queues.has(guildId)) {
       queues.set(guildId, {
+        guildId,
         textChannel: null,
         voiceChannel: null,
         connection: null,
@@ -50,6 +51,7 @@ function createQueueSession(deps) {
         playing: false,
         playerListenersReady: false,
         suppressNextIdle: false,
+        deferredResolveInFlight: false,
       });
     }
     return queues.get(guildId);

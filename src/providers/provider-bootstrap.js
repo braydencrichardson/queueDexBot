@@ -32,8 +32,22 @@ function createProviderBootstrap(deps) {
   let youtubeCookieAlerted = false;
   let spotifyReady = false;
 
+  function hasNonEmptyString(value) {
+    return typeof value === "string" && value.trim().length > 0;
+  }
+
   function hasSpotifyCredentials() {
-    return Boolean(spotifyClientId && spotifyClientSecret && spotifyRefreshToken);
+    return hasNonEmptyString(spotifyClientId)
+      && hasNonEmptyString(spotifyClientSecret)
+      && hasNonEmptyString(spotifyRefreshToken);
+  }
+
+  function getSpotifyCredentialState() {
+    return {
+      clientId: hasNonEmptyString(spotifyClientId),
+      clientSecret: hasNonEmptyString(spotifyClientSecret),
+      refreshToken: hasNonEmptyString(spotifyRefreshToken),
+    };
   }
 
   function parseCookiesInput(rawInput) {
@@ -212,18 +226,19 @@ function createProviderBootstrap(deps) {
     if (spotifyReady) {
       return;
     }
-    if (!spotifyClientId || !spotifyClientSecret || !spotifyRefreshToken) {
+    if (!hasSpotifyCredentials()) {
       throw new Error("Spotify credentials missing. Set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, and SPOTIFY_REFRESH_TOKEN.");
     }
     await playdl.setToken({
       spotify: {
-        client_id: spotifyClientId,
-        client_secret: spotifyClientSecret,
-        refresh_token: spotifyRefreshToken,
+        client_id: spotifyClientId.trim(),
+        client_secret: spotifyClientSecret.trim(),
+        refresh_token: spotifyRefreshToken.trim(),
         market: spotifyMarket,
       },
     });
     spotifyReady = true;
+    logInfo("Spotify API initialized");
   }
 
   function checkYoutubeCookiesLoggedIn(cookieHeader) {
@@ -288,6 +303,18 @@ function createProviderBootstrap(deps) {
 
   async function warmupProviders() {
     await Promise.all([ensureSoundcloudReady(), ensureYoutubeReady()]);
+    const spotifyCredentialState = getSpotifyCredentialState();
+    if (!hasSpotifyCredentials()) {
+      logInfo("Spotify credentials not fully configured; Spotify track/playlist API features disabled.", spotifyCredentialState);
+      return;
+    }
+    logInfo("Spotify credentials detected; validating Spotify API token.");
+    try {
+      await ensureSpotifyReady();
+    } catch (error) {
+      logError("Spotify initialization failed", error);
+      await sendDevAlert("Spotify credentials detected but initialization failed. Check logs for details.");
+    }
   }
 
   return {

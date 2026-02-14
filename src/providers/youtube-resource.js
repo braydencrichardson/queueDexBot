@@ -149,23 +149,94 @@ function createYoutubeResourceFactory(deps) {
     return { process: ytdlp, stderrRef: () => stderr };
   }
 
-  async function createYoutubeStreamResource(url, attempt, playerClient, useCookies) {
+  async function createYoutubeStreamResource(url, attempt, playerClient, useCookies, options = {}) {
+    const { onStartupSleep } = options;
     const { process: ytdlp, stderrRef } = spawnYoutubeStream(url, playerClient, useCookies);
     const passthrough = new PassThrough();
     const stream = ytdlp.stdout;
     let started = false;
+    let stderrProbeBuffer = "";
+    const baseStartupTimeoutMs = Number.isFinite(ytdlpStreamTimeoutMs) ? ytdlpStreamTimeoutMs : 12000;
 
     const startPromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (!started) {
-          reject(new Error("yt-dlp stream timeout"));
+      const startTimeMs = Date.now();
+      let effectiveTimeoutMs = baseStartupTimeoutMs;
+      let timeoutHandle = null;
+      let longestSleepMs = 0;
+
+      function scheduleTimeout() {
+        const elapsedMs = Date.now() - startTimeMs;
+        const remainingMs = Math.max(1, effectiveTimeoutMs - elapsedMs);
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
         }
-      }, Number.isFinite(ytdlpStreamTimeoutMs) ? ytdlpStreamTimeoutMs : 12000);
+        timeoutHandle = setTimeout(() => {
+          if (!started) {
+            reject(new Error("yt-dlp stream timeout"));
+          }
+        }, remainingMs);
+      }
+
+      function clearStartupWaitState() {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        ytdlp.stderr?.off?.("data", onStderrData);
+      }
+
+      function onStderrData(chunk) {
+        if (started) {
+          return;
+        }
+        stderrProbeBuffer += chunk.toString();
+        if (stderrProbeBuffer.length > 1000) {
+          stderrProbeBuffer = stderrProbeBuffer.slice(-1000);
+        }
+        const sleepMatches = [...stderrProbeBuffer.matchAll(/Sleeping\s+(\d+(?:\.\d+)?)\s+seconds/gi)];
+        if (!sleepMatches.length) {
+          return;
+        }
+        const lastSleep = sleepMatches[sleepMatches.length - 1];
+        const sleepSeconds = parseFloat(lastSleep[1]);
+        if (!Number.isFinite(sleepSeconds) || sleepSeconds <= 0) {
+          return;
+        }
+        const sleepMs = Math.ceil(sleepSeconds * 1000);
+        if (sleepMs <= longestSleepMs) {
+          return;
+        }
+        longestSleepMs = sleepMs;
+        const extendedTimeoutMs = Math.max(baseStartupTimeoutMs, sleepMs + 5000);
+        if (extendedTimeoutMs > effectiveTimeoutMs) {
+          effectiveTimeoutMs = extendedTimeoutMs;
+          scheduleTimeout();
+          logInfo("yt-dlp requested startup sleep; extending stream startup wait", {
+            attempt,
+            playerClient,
+            sleepSeconds,
+            startupTimeoutMs: effectiveTimeoutMs,
+          });
+          if (typeof onStartupSleep === "function") {
+            Promise.resolve(
+              onStartupSleep({
+                url,
+                attempt,
+                playerClient,
+                sleepSeconds,
+                startupTimeoutMs: effectiveTimeoutMs,
+              })
+            ).catch((error) => {
+              logInfo("onStartupSleep callback failed", { error });
+            });
+          }
+        }
+      }
 
       const onData = (chunk) => {
         if (!started) {
           started = true;
-          clearTimeout(timeout);
+          clearStartupWaitState();
           passthrough.write(chunk);
           stream.pipe(passthrough);
           resolve();
@@ -174,18 +245,20 @@ function createYoutubeResourceFactory(deps) {
 
       const onError = (error) => {
         if (!started) {
-          clearTimeout(timeout);
+          clearStartupWaitState();
           reject(error);
         }
       };
 
       const onClose = (code) => {
         if (!started) {
-          clearTimeout(timeout);
+          clearStartupWaitState();
           reject(new Error(`yt-dlp stream closed early (${code})`));
         }
       };
 
+      scheduleTimeout();
+      ytdlp.stderr?.on?.("data", onStderrData);
       stream.once("data", onData);
       stream.once("error", onError);
       ytdlp.once("close", onClose);
@@ -223,7 +296,7 @@ function createYoutubeResourceFactory(deps) {
     return resource;
   }
 
-  async function createYoutubeResource(url) {
+  async function createYoutubeResource(url, options = {}) {
     const clients = [ytdlpPlayerClient];
     if (ytdlpFallbackPlayerClient && ytdlpFallbackPlayerClient !== ytdlpPlayerClient) {
       clients.push(ytdlpFallbackPlayerClient);
@@ -234,7 +307,7 @@ function createYoutubeResourceFactory(deps) {
         const useCookies = client === ytdlpPlayerClient;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           try {
-            return await createYoutubeStreamResource(url, attempt, client, useCookies);
+            return await createYoutubeStreamResource(url, attempt, client, useCookies, options);
           } catch (error) {
             logInfo("yt-dlp stream attempt failed", { attempt, client, error });
             await tryCheckYoutubeCookiesOnFailure();

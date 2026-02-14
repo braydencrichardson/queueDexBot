@@ -24,6 +24,7 @@ const {
   SEARCH_CHOOSER_MAX_RESULTS,
   SOUND_CLOUD_REDIRECT_MAX_HOPS,
   SPOTIFY_MARKET,
+  SPOTIFY_DEFER_RESOLVE_BACKGROUND_INTERVAL_MS,
   TRACK_RESOLVER_HTTP_TIMEOUT_MS,
   YTDLP_STREAM_TIMEOUT_MS,
 } = require("./src/config/constants");
@@ -108,6 +109,9 @@ const {
   getSpotifySearchOptions,
   isProbablyUrl,
   isSpotifyUrl,
+  deferredResolveLookahead,
+  hydrateDeferredTrackMetadata,
+  resolveDeferredTrack,
   resolveTracks,
 } = createTrackResolver({
   playdl,
@@ -123,6 +127,10 @@ const {
   searchChooserMaxResults: SEARCH_CHOOSER_MAX_RESULTS,
   soundcloudUserAgent: env.soundcloudUserAgent,
   youtubeUserAgent: env.youtubeUserAgent,
+  spotifyClientId: env.spotifyClientId,
+  spotifyClientSecret: env.spotifyClientSecret,
+  spotifyRefreshToken: env.spotifyRefreshToken,
+  spotifyMarket: SPOTIFY_MARKET,
   httpTimeoutMs: TRACK_RESOLVER_HTTP_TIMEOUT_MS,
   soundcloudRedirectMaxHops: SOUND_CLOUD_REDIRECT_MAX_HOPS,
   logInfo,
@@ -141,6 +149,8 @@ let playNext = async () => {
   throw new Error("playNext not initialized");
 };
 let ensureNextTrackPreload = async () => null;
+let hydrateOneDeferredTrackMetadata = async () => false;
+let resolveOneDeferredTrack = async () => false;
 
 const {
   announceNowPlayingAction,
@@ -214,7 +224,7 @@ const { createSoundcloudResource } = createSoundcloudResourceFactory({
   StreamType,
 });
 
-({ playNext, ensureNextTrackPreload } = createQueuePlayback({
+({ playNext, ensureNextTrackPreload, hydrateOneDeferredTrackMetadata, resolveOneDeferredTrack } = createQueuePlayback({
   client,
   playdl,
   createAudioResource,
@@ -230,9 +240,37 @@ const { createSoundcloudResource } = createSoundcloudResourceFactory({
   formatMovePrompt,
   sendNowPlaying,
   loadingMessageDelayMs: PLAYBACK_LOADING_MESSAGE_DELAY_MS,
+  deferredResolveLookahead,
+  hydrateDeferredTrackMetadata,
+  resolveDeferredTrack,
   logInfo,
   logError,
 }));
+
+let deferredResolveCursor = 0;
+const deferredResolveInterval = setInterval(() => {
+  const entries = Array.from(queues.entries())
+    .filter(([, queue]) => Array.isArray(queue?.tracks) && queue.tracks.some((track) => track?.pendingResolve));
+  if (!entries.length) {
+    return;
+  }
+  deferredResolveCursor %= entries.length;
+  const [guildId, queue] = entries[deferredResolveCursor];
+  deferredResolveCursor = (deferredResolveCursor + 1) % entries.length;
+  hydrateOneDeferredTrackMetadata(queue, { context: "background-meta" })
+    .then((hydrated) => {
+      if (hydrated) {
+        return null;
+      }
+      return resolveOneDeferredTrack(queue, { context: "background" });
+    })
+    .catch((error) => {
+    logError("Background deferred track resolve failed", { guildId, error });
+  });
+}, SPOTIFY_DEFER_RESOLVE_BACKGROUND_INTERVAL_MS);
+if (typeof deferredResolveInterval.unref === "function") {
+  deferredResolveInterval.unref();
+}
 
 registerReadyHandler(client, {
   logInfo,
