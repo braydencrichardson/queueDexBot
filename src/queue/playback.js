@@ -9,6 +9,7 @@ function createQueuePlayback(deps) {
     createAudioResource,
     StreamType,
     createYoutubeResource,
+    createSoundcloudResource,
     getGuildQueue,
     queueViews,
     pendingMoves,
@@ -67,6 +68,9 @@ function createQueuePlayback(deps) {
     }
     if (track.source === "youtube") {
       return createYoutubeResource(track.url);
+    }
+    if (track.source === "soundcloud" && typeof createSoundcloudResource === "function") {
+      return createSoundcloudResource(track.url);
     }
 
     const stream = await playdl.stream(track.url);

@@ -32,6 +32,7 @@ const { createDevLogger } = require("./src/logging/dev-logger");
 const { searchYouTubeOptions, searchYouTubePreferred, getYoutubeId, toShortYoutubeUrl } = require("./src/providers/youtube-search");
 const { createProviderBootstrap } = require("./src/providers/provider-bootstrap");
 const { createYoutubeResourceFactory } = require("./src/providers/youtube-resource");
+const { createSoundcloudResourceFactory } = require("./src/providers/soundcloud-resource");
 const { createTrackResolver } = require("./src/providers/track-resolver");
 const { enqueueTracks, ensureTrackId, getTrackIndexById, getQueuedTrackIndex, formatDuration } = require("./src/queue/utils");
 const { createQueuePlayback } = require("./src/queue/playback");
@@ -207,12 +208,19 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
   },
 });
 
+const { createSoundcloudResource } = createSoundcloudResourceFactory({
+  playdl,
+  createAudioResource,
+  StreamType,
+});
+
 ({ playNext, ensureNextTrackPreload } = createQueuePlayback({
   client,
   playdl,
   createAudioResource,
   StreamType,
   createYoutubeResource,
+  createSoundcloudResource,
   getGuildQueue,
   queueViews,
   pendingMoves,

@@ -294,6 +294,53 @@ test("playNext uses preloaded resource for current track when cache key matches"
   assert.equal(queue.preloadedNextResource, null);
 });
 
+test("playNext uses soundcloud resource provider for soundcloud tracks", async () => {
+  const track = { source: "soundcloud", url: "https://soundcloud.com/example/track", title: "Song" };
+  const queue = {
+    tracks: [track],
+    playing: false,
+    current: null,
+    connection: {
+      subscribedWith: null,
+      subscribe(player) {
+        this.subscribedWith = player;
+      },
+      destroy() {},
+    },
+    player: {
+      played: null,
+      play(resource) {
+        this.played = resource;
+      },
+    },
+    textChannel: null,
+  };
+
+  let soundcloudCreateCalls = 0;
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => {
+      throw new Error("youtube provider should not be used for soundcloud track");
+    },
+    createSoundcloudResource: async () => {
+      soundcloudCreateCalls += 1;
+      return "sc-resource";
+    },
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(soundcloudCreateCalls, 1);
+  assert.equal(queue.player.played, "sc-resource");
+});
+
 test("playNext preloads the next track immediately after current playback starts", async () => {
   const currentTrack = { id: "current", source: "youtube", url: "https://youtu.be/current", title: "Current", duration: 12 };
   const upNextTrack = { id: "next", source: "youtube", url: "https://youtu.be/next", title: "Next" };
