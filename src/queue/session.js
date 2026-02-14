@@ -20,6 +20,7 @@ function createQueueSession(deps) {
     logInfo,
     logError,
     getPlayNext,
+    ensureNextTrackPreload = async () => null,
     resolveNowPlayingChannelById = async () => null,
   } = deps;
   function getGuildQueue(guildId) {
@@ -58,6 +59,21 @@ function createQueueSession(deps) {
       return null;
     }
     return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
+  }
+
+  function getTrackKey(track) {
+    if (!track) {
+      return null;
+    }
+    return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
+  }
+
+  function isTrackPreloaded(queue, track) {
+    const trackKey = getTrackKey(track);
+    if (!trackKey) {
+      return false;
+    }
+    return queue?.preloadedNextTrackKey === trackKey && Boolean(queue?.preloadedNextResource);
   }
 
   function getPlaybackElapsedSeconds(queue) {
@@ -239,7 +255,8 @@ function createQueueSession(deps) {
         includeLink: true,
         embeddableLink: false,
       });
-      lines.push(`**Up next:** ${nextPrimary}`);
+      const preloadMarker = isTrackPreloaded(queue, nextTrack) ? "● " : "";
+      lines.push(`**Up next:** ${preloadMarker}${nextPrimary}`);
       if (nextSecondary) {
         lines.push(`↳ ${nextSecondary}`);
       }
@@ -377,6 +394,10 @@ function createQueueSession(deps) {
   }
 
   async function maybeRefreshNowPlayingUpNext(queue) {
+    ensureNextTrackPreload(queue).catch((error) => {
+      logError("Failed to refresh next-track preload", error);
+    });
+
     if (!queue?.current || !queue?.nowPlayingMessageId || !queue?.textChannel) {
       return;
     }

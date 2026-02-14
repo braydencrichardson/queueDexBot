@@ -123,6 +123,7 @@ async function ensureSodiumReady() {
 let playNext = async () => {
   throw new Error("playNext not initialized");
 };
+let ensureNextTrackPreload = async () => null;
 
 const {
   announceNowPlayingAction,
@@ -142,6 +143,7 @@ const {
   logInfo,
   logError,
   getPlayNext: () => playNext,
+  ensureNextTrackPreload: (queue) => ensureNextTrackPreload(queue),
   resolveNowPlayingChannelById: async (channelId) => {
     if (!channelId) {
       return null;
@@ -189,7 +191,7 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
   },
 });
 
-({ playNext } = createQueuePlayback({
+({ playNext, ensureNextTrackPreload } = createQueuePlayback({
   client,
   playdl,
   createAudioResource,
@@ -203,7 +205,6 @@ const { createYoutubeResource } = createYoutubeResourceFactory({
   buildMoveMenu,
   formatMovePrompt,
   sendNowPlaying,
-  maybeRefreshNowPlayingUpNext,
   loadingMessageDelayMs: env.playbackLoadingMessageDelayMs,
   logInfo,
   logError,

@@ -23,6 +23,7 @@ function createQueuePlayback(deps) {
   const loadingDelayMs = Number.isFinite(loadingMessageDelayMs) && loadingMessageDelayMs >= 0
     ? loadingMessageDelayMs
     : DEFAULT_PLAYBACK_LOADING_MESSAGE_DELAY_MS;
+  const RESOURCE_DISPOSE_KEY = "__queueDexDispose";
 
   async function sendPlaybackNotice(queue, content) {
     if (!queue?.textChannel || !content) {
@@ -68,7 +69,7 @@ function createQueuePlayback(deps) {
     }
 
     const stream = await playdl.stream(track.url);
-    return createAudioResource(stream.stream, {
+    const resource = createAudioResource(stream.stream, {
       inputType: stream.type ?? StreamType.Arbitrary,
       metadata: {
         source: track.source || "unknown",
@@ -76,6 +77,152 @@ function createQueuePlayback(deps) {
         inputType: stream.type ?? StreamType.Arbitrary,
       },
     });
+    if (typeof stream.stream?.destroy === "function") {
+      resource[RESOURCE_DISPOSE_KEY] = () => {
+        stream.stream.destroy();
+      };
+    }
+    return resource;
+  }
+
+  function getTrackKey(track) {
+    if (!track) {
+      return null;
+    }
+    return String(track.id || `${track.url || ""}|${track.title || ""}|${track.requester || ""}`);
+  }
+
+  function bumpPreloadGeneration(queue) {
+    const current = Number.isFinite(queue?.nextTrackPreloadGeneration) ? queue.nextTrackPreloadGeneration : 0;
+    const next = current + 1;
+    queue.nextTrackPreloadGeneration = next;
+    return next;
+  }
+
+  function disposeResource(resource) {
+    if (!resource) {
+      return;
+    }
+    const dispose = resource[RESOURCE_DISPOSE_KEY];
+    if (typeof dispose === "function") {
+      try {
+        dispose();
+      } catch (error) {
+        logError("Failed to dispose preloaded resource", error);
+      }
+      return;
+    }
+    if (typeof resource.playStream?.destroy === "function") {
+      try {
+        resource.playStream.destroy();
+      } catch (error) {
+        logError("Failed to destroy preloaded resource stream", error);
+      }
+    }
+  }
+
+  function clearPreloadedResource(queue, { dispose = true } = {}) {
+    if (dispose && queue?.preloadedNextResource) {
+      disposeResource(queue.preloadedNextResource);
+    }
+    bumpPreloadGeneration(queue);
+    queue.preloadedNextTrackKey = null;
+    queue.preloadedNextResource = null;
+    queue.nextTrackPreloadInFlightKey = null;
+    queue.nextTrackPreloadPromise = null;
+  }
+
+  async function ensureNextTrackPreload(queue) {
+    if (!queue?.current) {
+      clearPreloadedResource(queue);
+      return null;
+    }
+    const nextTrack = queue?.tracks?.[0];
+    const nextTrackKey = getTrackKey(nextTrack);
+    if (!nextTrack?.url || !nextTrackKey) {
+      clearPreloadedResource(queue);
+      return null;
+    }
+    if (queue.preloadedNextTrackKey === nextTrackKey && queue.preloadedNextResource) {
+      return queue.preloadedNextResource;
+    }
+    if (queue.nextTrackPreloadInFlightKey === nextTrackKey && queue.nextTrackPreloadPromise) {
+      return queue.nextTrackPreloadPromise;
+    }
+    if (queue.preloadedNextTrackKey && queue.preloadedNextTrackKey !== nextTrackKey && queue.preloadedNextResource) {
+      disposeResource(queue.preloadedNextResource);
+      queue.preloadedNextTrackKey = null;
+      queue.preloadedNextResource = null;
+    }
+
+    const generation = bumpPreloadGeneration(queue);
+    queue.nextTrackPreloadInFlightKey = nextTrackKey;
+    const preloadPromise = createTrackResource(nextTrack)
+      .then((resource) => {
+        const isStillCurrentPreload = queue.nextTrackPreloadGeneration === generation
+          && queue.nextTrackPreloadInFlightKey === nextTrackKey;
+        if (!isStillCurrentPreload) {
+          return null;
+        }
+        queue.preloadedNextTrackKey = nextTrackKey;
+        queue.preloadedNextResource = resource;
+        logInfo("Preloaded next track resource", { title: nextTrack.title, source: nextTrack.source });
+        return resource;
+      })
+      .catch((error) => {
+        const isStillCurrentPreload = queue.nextTrackPreloadGeneration === generation
+          && queue.nextTrackPreloadInFlightKey === nextTrackKey;
+        if (isStillCurrentPreload) {
+          queue.preloadedNextTrackKey = null;
+          queue.preloadedNextResource = null;
+        }
+        logInfo("Failed to preload next track resource", {
+          title: nextTrack.title,
+          source: nextTrack.source,
+          error,
+        });
+        return null;
+      })
+      .finally(() => {
+        const isStillCurrentPreload = queue.nextTrackPreloadGeneration === generation
+          && queue.nextTrackPreloadInFlightKey === nextTrackKey;
+        if (isStillCurrentPreload) {
+          queue.nextTrackPreloadInFlightKey = null;
+          queue.nextTrackPreloadPromise = null;
+        }
+      });
+    queue.nextTrackPreloadPromise = preloadPromise;
+    return preloadPromise;
+  }
+
+  async function resolveResourceForTrack(queue, track) {
+    const trackKey = getTrackKey(track);
+    if (trackKey && queue.preloadedNextTrackKey === trackKey && queue.preloadedNextResource) {
+      const resource = queue.preloadedNextResource;
+      clearPreloadedResource(queue, { dispose: false });
+      logInfo("Using preloaded track resource", { title: track.title, source: track.source });
+      return resource;
+    }
+
+    if (trackKey && queue.nextTrackPreloadInFlightKey === trackKey && queue.nextTrackPreloadPromise) {
+      logInfo("Waiting for in-flight preload before playback transition", {
+        title: track.title,
+        source: track.source,
+      });
+      const inFlightResource = await queue.nextTrackPreloadPromise;
+      if (inFlightResource && queue.preloadedNextTrackKey === trackKey && queue.preloadedNextResource) {
+        const resource = queue.preloadedNextResource;
+        clearPreloadedResource(queue, { dispose: false });
+        logInfo("Using preloaded track resource after waiting for in-flight preload", {
+          title: track.title,
+          source: track.source,
+        });
+        return resource;
+      }
+    }
+    const resource = await createTrackResource(track);
+    clearPreloadedResource(queue);
+    return resource;
   }
 
   function markQueueViewsStale(guildId) {
@@ -200,6 +347,7 @@ function createQueuePlayback(deps) {
         }
         queue.playing = false;
         queue.current = null;
+        clearPreloadedResource(queue);
         if (queue.connection) {
           queue.connection.destroy();
           queue.connection = null;
@@ -239,7 +387,7 @@ function createQueuePlayback(deps) {
 
       let resource;
       try {
-        resource = await createTrackResource(next);
+        resource = await resolveResourceForTrack(queue, next);
       } catch (error) {
         logError("Failed to create audio resource", error);
         skipStats.loadFailureCount += 1;
@@ -280,12 +428,16 @@ function createQueuePlayback(deps) {
       }
 
       await sendNowPlaying(queue, true);
+      ensureNextTrackPreload(queue).catch((error) => {
+        logInfo("Failed to preload next track after playback start", error);
+      });
       return;
     }
   }
 
   return {
     createTrackResource,
+    ensureNextTrackPreload,
     playNext,
   };
 }

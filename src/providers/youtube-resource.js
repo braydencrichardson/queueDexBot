@@ -5,6 +5,7 @@ const { PassThrough } = require("stream");
 
 const YT_AUDIO_FORMAT_SELECTOR =
   "bestaudio[vcodec=none][channels=2]/bestaudio[vcodec=none]/bestaudio[channels=2]/bestaudio/best";
+const RESOURCE_DISPOSE_KEY = "__queueDexDispose";
 
 function createYoutubeResourceFactory(deps) {
   const {
@@ -205,7 +206,7 @@ function createYoutubeResourceFactory(deps) {
     });
 
     logInfo("yt-dlp stream started", { attempt, stderr: stderrRef() });
-    return createAudioResource(passthrough, {
+    const resource = createAudioResource(passthrough, {
       inputType: StreamType.Arbitrary,
       metadata: {
         source: "youtube",
@@ -213,6 +214,13 @@ function createYoutubeResourceFactory(deps) {
         inputType: StreamType.Arbitrary,
       },
     });
+    resource[RESOURCE_DISPOSE_KEY] = () => {
+      passthrough.destroy();
+      if (!ytdlp.killed) {
+        ytdlp.kill("SIGKILL");
+      }
+    };
+    return resource;
   }
 
   async function createYoutubeResource(url) {
@@ -241,10 +249,17 @@ function createYoutubeResourceFactory(deps) {
       try {
         const filePath = await downloadYoutubeAudio(url, client, useCookies);
         const stream = fs.createReadStream(filePath);
-        stream.on("close", () => {
+        let cleaned = false;
+        const cleanupFile = () => {
+          if (cleaned) {
+            return;
+          }
+          cleaned = true;
           fs.unlink(filePath, () => {});
-        });
-        return createAudioResource(stream, {
+        };
+        stream.on("close", cleanupFile);
+        stream.on("error", cleanupFile);
+        const resource = createAudioResource(stream, {
           inputType: StreamType.OggOpus,
           metadata: {
             source: "youtube",
@@ -252,6 +267,11 @@ function createYoutubeResourceFactory(deps) {
             inputType: StreamType.OggOpus,
           },
         });
+        resource[RESOURCE_DISPOSE_KEY] = () => {
+          stream.destroy();
+          cleanupFile();
+        };
+        return resource;
       } catch (error) {
         lastError = error;
         logInfo("yt-dlp download failed for client", { client, error });

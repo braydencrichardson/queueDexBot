@@ -244,3 +244,227 @@ test("playNext notifies channel and leaves when no playable tracks remain", asyn
   assert.equal(queue.voiceChannel, null);
   assert.equal(sentMessages.some((text) => String(text).includes("No playable tracks remain; leaving voice channel.")), true);
 });
+
+test("playNext uses preloaded resource for current track when cache key matches", async () => {
+  const track = { id: "abc", source: "youtube", url: "https://youtu.be/abc", title: "Song" };
+  const preloadedResource = { id: "preloaded-resource" };
+  const queue = {
+    tracks: [track],
+    preloadedNextTrackKey: "abc",
+    preloadedNextResource: preloadedResource,
+    playing: false,
+    current: null,
+    connection: {
+      subscribedWith: null,
+      subscribe(player) {
+        this.subscribedWith = player;
+      },
+      destroy() {},
+    },
+    player: {
+      played: null,
+      play(resource) {
+        this.played = resource;
+      },
+    },
+    textChannel: null,
+  };
+
+  let youtubeCreateCalls = 0;
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => {
+      youtubeCreateCalls += 1;
+      return "yt-resource";
+    },
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(queue.player.played, preloadedResource);
+  assert.equal(youtubeCreateCalls, 0);
+  assert.equal(queue.preloadedNextTrackKey, null);
+  assert.equal(queue.preloadedNextResource, null);
+});
+
+test("playNext preloads the next track immediately after current playback starts", async () => {
+  const currentTrack = { id: "current", source: "youtube", url: "https://youtu.be/current", title: "Current", duration: 12 };
+  const upNextTrack = { id: "next", source: "youtube", url: "https://youtu.be/next", title: "Next" };
+  const queue = {
+    tracks: [currentTrack, upNextTrack],
+    playing: false,
+    current: null,
+    connection: {
+      subscribe() {},
+      destroy() {},
+    },
+    player: {
+      play() {},
+    },
+    textChannel: null,
+  };
+
+  const createdResources = [];
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async (url) => {
+      const resource = { url };
+      createdResources.push(resource);
+      return resource;
+    },
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(createdResources.length, 2);
+  assert.equal(createdResources[0].url, currentTrack.url);
+  assert.equal(queue.preloadedNextTrackKey, "next");
+  assert.deepEqual(queue.preloadedNextResource, createdResources[1]);
+});
+
+test("ensureNextTrackPreload ignores stale in-flight preload results after queue reorder", async () => {
+  const currentTrack = { id: "current", source: "youtube", url: "https://youtu.be/current", title: "Current" };
+  const firstTrack = { id: "first", source: "youtube", url: "https://youtu.be/first", title: "First" };
+  const secondTrack = { id: "second", source: "youtube", url: "https://youtu.be/second", title: "Second" };
+  const queue = {
+    current: currentTrack,
+    tracks: [firstTrack, secondTrack],
+  };
+
+  const resolvers = new Map();
+  const { ensureNextTrackPreload } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async (url) => new Promise((resolve) => {
+      resolvers.set(url, resolve);
+    }),
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  const preloadFirstPromise = ensureNextTrackPreload(queue);
+  queue.tracks = [secondTrack, firstTrack];
+  const preloadSecondPromise = ensureNextTrackPreload(queue);
+
+  resolvers.get(firstTrack.url)({ id: "resource-first" });
+  await preloadFirstPromise;
+  assert.equal(queue.preloadedNextTrackKey ?? null, null);
+
+  resolvers.get(secondTrack.url)({ id: "resource-second" });
+  await preloadSecondPromise;
+
+  assert.equal(queue.preloadedNextTrackKey, "second");
+  assert.deepEqual(queue.preloadedNextResource, { id: "resource-second" });
+});
+
+test("playNext reuses in-flight preload when skipped before preload completes", async () => {
+  const currentTrack = { id: "current", source: "youtube", url: "https://youtu.be/current", title: "Current" };
+  const nextTrack = { id: "next", source: "youtube", url: "https://youtu.be/next", title: "Next" };
+  const queue = {
+    tracks: [currentTrack, nextTrack],
+    playing: false,
+    current: null,
+    connection: {
+      subscribe() {},
+      destroy() {},
+    },
+    player: {
+      played: [],
+      play(resource) {
+        this.played.push(resource);
+      },
+    },
+    textChannel: null,
+  };
+
+  let resolveNextResource;
+  let nextLoadCalls = 0;
+  const logMessages = [];
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async (url) => {
+      if (url === currentTrack.url) {
+        return { id: "resource-current" };
+      }
+      if (url === nextTrack.url) {
+        nextLoadCalls += 1;
+        return new Promise((resolve) => {
+          resolveNextResource = resolve;
+        });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    },
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: (message) => {
+      logMessages.push(message);
+    },
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+  const skipTransition = playNext("guild-1");
+  resolveNextResource({ id: "resource-next" });
+  await skipTransition;
+
+  assert.equal(nextLoadCalls, 1);
+  assert.equal(queue.player.played.length, 2);
+  assert.deepEqual(queue.player.played[1], { id: "resource-next" });
+  assert.equal(logMessages.includes("Waiting for in-flight preload before playback transition"), true);
+});
+
+test("ensureNextTrackPreload disposes stale cached resource when preload target changes", async () => {
+  const queue = {
+    current: { id: "current", source: "youtube", url: "https://youtu.be/current", title: "Current" },
+    tracks: [{ id: "next", source: "youtube", url: "https://youtu.be/next", title: "Next" }],
+    preloadedNextTrackKey: "old",
+    preloadedNextResource: {
+      __queueDexDispose: () => {},
+    },
+  };
+
+  let disposed = 0;
+  queue.preloadedNextResource.__queueDexDispose = () => {
+    disposed += 1;
+  };
+
+  const { ensureNextTrackPreload } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => ({ id: "resource-next" }),
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await ensureNextTrackPreload(queue);
+
+  assert.equal(disposed, 1);
+  assert.equal(queue.preloadedNextTrackKey, "next");
+  assert.deepEqual(queue.preloadedNextResource, { id: "resource-next" });
+});
