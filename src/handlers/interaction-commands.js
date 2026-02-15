@@ -15,6 +15,7 @@ const {
   removeQueuedTrackAt,
   shuffleQueuedTracks,
 } = require("../queue/operations");
+const { setQueueLoopMode } = require("../queue/loop");
 
 function createCommandInteractionHandler(deps) {
   const {
@@ -462,6 +463,30 @@ function createCommandInteractionHandler(deps) {
         shuffleQueuedTracks(queue);
         await maybeRefreshNowPlayingUpNext(queue);
         await interaction.reply("Shuffled the queue.");
+        return;
+      }
+
+      if (queueSubcommand === "loop") {
+        const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          return;
+        }
+        const selectedMode = interaction.options.getString("mode", true);
+        const loopResult = setQueueLoopMode(queue, selectedMode, ensureTrackId);
+        logInfo("Loop mode updated via queue command", {
+          guildId: interaction.guildId,
+          user: interaction.user?.tag,
+          previousMode: loopResult.previousMode,
+          mode: loopResult.mode,
+          inserted: loopResult.inserted,
+          removed: loopResult.removed,
+        });
+        await maybeRefreshNowPlayingUpNext(queue);
+        if (loopResult.inserted || loopResult.removed) {
+          await queueViewService.refreshGuildViews(interaction.guildId, queue, interaction.client);
+        }
+        await interaction.reply(`Loop mode set to **${loopResult.mode}**.`);
         return;
       }
 

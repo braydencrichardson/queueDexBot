@@ -183,6 +183,40 @@ function createQueueViewService(deps) {
     }
   }
 
+  async function refreshGuildViews(guildId, queue, client) {
+    if (!guildId || !queue || !client) {
+      return 0;
+    }
+    let refreshedCount = 0;
+    for (const [messageId, storedView] of queueViews.entries()) {
+      if (storedView.guildId !== guildId) {
+        continue;
+      }
+      const view = { ...storedView, stale: false };
+      if (view.selectedTrackId && !queue.tracks.some((track) => track?.id === view.selectedTrackId)) {
+        view.selectedTrackId = null;
+      }
+      const channel = await resolveChannel(client, view.channelId);
+      if (!channel?.messages?.fetch) {
+        queueViews.set(messageId, { ...view, stale: true });
+        continue;
+      }
+      const edited = await editMessage(channel, messageId, queue, view, {
+        logError,
+        errorMessage: "Failed to refresh queue view",
+      });
+      if (!edited) {
+        const current = queueViews.get(messageId);
+        if (current) {
+          queueViews.set(messageId, { ...current, stale: true });
+        }
+        continue;
+      }
+      refreshedCount += 1;
+    }
+    return refreshedCount;
+  }
+
   return {
     closeByMessageId,
     createFromInteraction,
@@ -190,6 +224,7 @@ function createQueueViewService(deps) {
     reply,
     updateInteraction,
     editMessage,
+    refreshGuildViews,
   };
 }
 

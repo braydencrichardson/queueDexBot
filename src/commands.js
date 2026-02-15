@@ -86,6 +86,24 @@ const commands = [
           },
         ],
       },
+      {
+        type: 1,
+        name: "loop",
+        description: "Set queue loop mode",
+        options: [
+          {
+            name: "mode",
+            description: "Loop behavior",
+            type: 3,
+            required: true,
+            choices: [
+              { name: "Off", value: "off" },
+              { name: "Single Track", value: "single" },
+              { name: "Entire Queue", value: "queue" },
+            ],
+          },
+        ],
+      },
     ],
   },
 ];

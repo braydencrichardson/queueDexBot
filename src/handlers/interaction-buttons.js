@@ -23,6 +23,7 @@ const {
   removeQueuedTrackAt,
   shuffleQueuedTracks,
 } = require("../queue/operations");
+const { LOOP_MODES, getQueueLoopMode, setQueueLoopMode } = require("../queue/loop");
 
 function createButtonInteractionHandler(deps) {
   const {
@@ -76,6 +77,16 @@ function createButtonInteractionHandler(deps) {
   }
   function getActorName(interaction, member) {
     return member?.displayName || interaction.user?.username || interaction.user?.tag || "Someone";
+  }
+
+  function getNextLoopMode(currentMode) {
+    if (currentMode === LOOP_MODES.SINGLE) {
+      return LOOP_MODES.OFF;
+    }
+    if (currentMode === LOOP_MODES.QUEUE) {
+      return LOOP_MODES.SINGLE;
+    }
+    return LOOP_MODES.QUEUE;
   }
 
   return async function handleButtonInteraction(interaction) {
@@ -219,6 +230,24 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "np_skip") {
         await announceNowPlayingAction(queue, "skipped the track", interaction.user, member, interaction.message.channel);
         queue.player.stop(true);
+      } else if (customId === "np_loop") {
+        const currentMode = getQueueLoopMode(queue);
+        const nextMode = getNextLoopMode(currentMode);
+        const loopResult = setQueueLoopMode(queue, nextMode, ensureTrackId);
+        logInfo("Loop mode updated via now playing button", {
+          guildId: interaction.guildId,
+          user: interaction.user?.tag,
+          previousMode: loopResult.previousMode,
+          mode: loopResult.mode,
+          inserted: loopResult.inserted,
+          removed: loopResult.removed,
+        });
+        await maybeRefreshNowPlayingUpNext(queue);
+        if (loopResult.inserted || loopResult.removed) {
+          await queueViewService.refreshGuildViews(interaction.guildId, queue, interaction.client);
+        }
+        await announceNowPlayingAction(queue, `set loop mode to **${loopResult.mode}**`, interaction.user, member, interaction.message.channel);
+        await sendNowPlaying(queue, false);
       } else if (customId === "np_stop") {
         await announceNowPlayingAction(queue, "stopped playback and cleared the queue", interaction.user, member, interaction.message.channel);
         stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
@@ -228,7 +257,7 @@ function createButtonInteractionHandler(deps) {
         if (customId === "np_stop") {
           await interaction.message.edit({ components: [] });
         } else {
-          const controls = buildNowPlayingControls();
+          const controls = buildNowPlayingControls({ loopMode: getQueueLoopMode(queue) });
           await interaction.message.edit({ components: [controls] });
         }
       } catch (error) {

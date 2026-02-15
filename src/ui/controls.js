@@ -1,4 +1,5 @@
 const { MessageActionRow, MessageButton } = require("discord.js");
+const { LOOP_MODES } = require("../queue/loop");
 
 function buildQueuedActionComponents(options = {}) {
   const { includeMoveControls = true } = options;
@@ -34,7 +35,28 @@ function buildQueuedActionComponents(options = {}) {
   return [row];
 }
 
-function buildNowPlayingControls() {
+function normalizeLoopMode(loopMode) {
+  const value = String(loopMode || "").trim().toLowerCase();
+  if (value === LOOP_MODES.SINGLE || value === LOOP_MODES.QUEUE) {
+    return value;
+  }
+  return LOOP_MODES.OFF;
+}
+
+function getLoopButtonConfig(loopMode) {
+  const normalized = normalizeLoopMode(loopMode);
+  if (normalized === LOOP_MODES.SINGLE) {
+    return { label: "Loop", style: "PRIMARY", emoji: "🔂" };
+  }
+  if (normalized === LOOP_MODES.QUEUE) {
+    return { label: "Loop", style: "SUCCESS", emoji: "🔁" };
+  }
+  return { label: "Loop", style: "SECONDARY", emoji: "❌" };
+}
+
+function buildNowPlayingControls(options = {}) {
+  const { loopMode = LOOP_MODES.OFF } = options;
+  const loopButton = getLoopButtonConfig(loopMode);
   return new MessageActionRow().addComponents(
     new MessageButton()
       .setCustomId("np_queue")
@@ -46,6 +68,11 @@ function buildNowPlayingControls() {
       .setLabel("Play/Pause")
       .setEmoji("⏯️")
       .setStyle("SECONDARY"),
+    new MessageButton()
+      .setCustomId("np_loop")
+      .setLabel(loopButton.label)
+      .setEmoji(loopButton.emoji)
+      .setStyle(loopButton.style),
     new MessageButton()
       .setCustomId("np_skip")
       .setLabel("Skip")

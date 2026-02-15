@@ -1,6 +1,8 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constants");
 const { getTrackKey } = require("./track-key");
+const { ensureTrackId } = require("./utils");
+const { prepareQueueForNextTrack, syncLoopState } = require("./loop");
 
 function createQueuePlayback(deps) {
   const {
@@ -468,6 +470,7 @@ function createQueuePlayback(deps) {
       malformedCount: 0,
       loadFailureCount: 0,
     };
+    prepareQueueForNextTrack(queue, ensureTrackId);
 
     while (true) {
       const nextTrack = queue.tracks.shift();
@@ -501,6 +504,7 @@ function createQueuePlayback(deps) {
 
       queue.playing = true;
       queue.current = nextTrack;
+      syncLoopState(queue, ensureTrackId);
       markQueueViewsStale(guildId);
       await refreshQueueViews(guildId, queue);
       await refreshPendingMoves(guildId, queue);

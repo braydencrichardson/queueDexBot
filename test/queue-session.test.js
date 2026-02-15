@@ -248,6 +248,97 @@ test("sendNowPlaying updates existing now playing message with a single edit", a
   stopAndLeaveQueue(queue, "cleanup");
 });
 
+test("sendNowPlaying shows queue-loop marker for loop-generated up-next tracks", async () => {
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession();
+  let sentPayload = null;
+  const message = {
+    id: "np-1",
+    channel: { id: "text-1" },
+    async edit() {},
+  };
+
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Current",
+    requester: "Requester",
+    duration: 180,
+    url: "https://soundcloud.com/sleepmethods/piggy",
+    source: "soundcloud",
+  };
+  queue.tracks = [
+    {
+      id: "track-2",
+      title: "Looped",
+      requester: "Requester",
+      duration: 180,
+      url: "https://soundcloud.com/sleepmethods/piggy",
+      source: "soundcloud",
+      loopTag: "queue",
+      loopSourceTrackKey: "track-1",
+    },
+  ];
+  queue.textChannel = {
+    id: "text-1",
+    messages: {
+      async fetch() {
+        throw new Error("not used in forceNew mode");
+      },
+    },
+    async send(payload) {
+      sentPayload = payload;
+      return message;
+    },
+  };
+
+  await sendNowPlaying(queue, true);
+
+  assert.equal(String(sentPayload?.content || "").includes("**Up next:** ↺"), true);
+  stopAndLeaveQueue(queue, "cleanup");
+});
+
+test("sendNowPlaying shows current track as up next for single-track queue loop", async () => {
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession();
+  let sentPayload = null;
+  const message = {
+    id: "np-1",
+    channel: { id: "text-1" },
+    async edit() {},
+  };
+
+  const queue = getGuildQueue("guild-1");
+  queue.loopMode = "queue";
+  queue.current = {
+    id: "track-1",
+    title: "Current",
+    requester: "Requester",
+    duration: 180,
+    url: "https://soundcloud.com/sleepmethods/piggy",
+    source: "soundcloud",
+  };
+  queue.tracks = [];
+  queue.textChannel = {
+    id: "text-1",
+    messages: {
+      async fetch() {
+        throw new Error("not used in forceNew mode");
+      },
+    },
+    async send(payload) {
+      sentPayload = payload;
+      return message;
+    },
+  };
+
+  await sendNowPlaying(queue, true);
+
+  const content = String(sentPayload?.content || "");
+  assert.equal(content.includes("**Up next:** ↺ Current"), true);
+  assert.equal(content.includes("**Up next:** (empty)"), false);
+  assert.equal(content.includes("**Loop:**"), false);
+  stopAndLeaveQueue(queue, "cleanup");
+});
+
 test("sendNowPlaying with forceNew deletes previous now playing message", async () => {
   const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession();
   let previousDeleted = false;

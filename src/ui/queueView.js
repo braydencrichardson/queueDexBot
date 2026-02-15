@@ -32,6 +32,16 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
     return queue?.preloadedNextTrackKey === trackKey && Boolean(queue?.preloadedNextResource);
   }
 
+  function getLoopMarker(track) {
+    if (track?.loopTag === "single") {
+      return "↺ ";
+    }
+    if (track?.loopTag === "queue") {
+      return "↺ ";
+    }
+    return "";
+  }
+
   const totalPages = Math.max(1, Math.ceil(queue.tracks.length / pageSize));
   const safePage = Math.min(Math.max(page, 1), totalPages);
   const startIndex = (safePage - 1) * pageSize;
@@ -73,8 +83,9 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
           includeArtist: true,
           includeLink: true,
         });
+        const loopMarker = getLoopMarker(track);
         const preloadMarker = isTrackPreloaded(track) ? "● " : "";
-        const firstLine = `${selectedMark}**${number}.** ${preloadMarker}${primary}`;
+        const firstLine = `${selectedMark}**${number}.** ${loopMarker}${preloadMarker}${primary}`;
         return secondary ? [firstLine, `   ↳ ${secondary}`] : [firstLine];
       });
     const maxLength = DISCORD_MESSAGE_SAFE_MAX_LENGTH;
@@ -97,8 +108,9 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
             includeLink: true,
             truncateLinkDisplay: !isSelected,
           });
+          const loopMarker = getLoopMarker(track);
           const preloadMarker = isTrackPreloaded(track) ? "● " : "";
-          const firstLine = `${selectedMark}**${number}.** ${preloadMarker}${primary}`;
+          const firstLine = `${selectedMark}**${number}.** ${loopMarker}${preloadMarker}${primary}`;
           return secondary ? [firstLine, `   ↳ ${secondary}`] : [firstLine];
         });
       const truncatedPreviewLines = previewWithTruncatedLinks.flat();
@@ -125,8 +137,9 @@ function formatQueuePage(queue, page, pageSize, selectedTrackId) {
             includeArtist: true,
             includeLink: keepLink,
           });
+          const loopMarker = getLoopMarker(track);
           const preloadMarker = isTrackPreloaded(track) ? "● " : "";
-          const firstLine = `${selectedMark}**${number}.** ${preloadMarker}${primary}`;
+          const firstLine = `${selectedMark}**${number}.** ${loopMarker}${preloadMarker}${primary}`;
           return secondary ? [firstLine, `   ↳ ${secondary}`] : [firstLine];
         });
       const priorityPreviewLines = previewWithPriorityLinks.flat();

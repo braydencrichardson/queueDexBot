@@ -248,6 +248,206 @@ test("np_toggle refreshes now playing content immediately", async () => {
   assert.equal(deferred, true);
 });
 
+test("np_loop cycles loop mode and refreshes controls with the new mode", async () => {
+  const queue = {
+    nowPlayingMessageId: "msg-1",
+    tracks: [{ id: "next-1", title: "Next", url: "https://youtu.be/next" }],
+    current: { id: "now-1", title: "Now", url: "https://youtu.be/now" },
+    loopMode: "off",
+    playing: true,
+    player: {
+      state: { status: "playing" },
+      pause() {},
+      unpause() {},
+    },
+    connection: { destroy() {} },
+  };
+
+  let announcedAction = null;
+  let sendNowPlayingArgs = null;
+  let refreshCalledWith = null;
+  let buildControlsLoopMode = null;
+  let editedComponents = null;
+  let deferred = false;
+  let generatedId = 1;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async (_queue, action) => {
+      announcedAction = action;
+    },
+    buildNowPlayingControls: ({ loopMode }) => {
+      buildControlsLoopMode = loopMode;
+      return { type: "row", loopMode };
+    },
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: (track) => {
+      if (!track.id) {
+        track.id = `generated-${generatedId++}`;
+      }
+    },
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews: new Map(),
+    logInfo: () => {},
+    logError: () => {},
+    maybeRefreshNowPlayingUpNext: async (q) => {
+      refreshCalledWith = q;
+    },
+    sendNowPlaying: async (q, forceNew) => {
+      sendNowPlayingArgs = { q, forceNew };
+    },
+    stopAndLeaveQueue: () => {},
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "np_loop",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" } }),
+      },
+    },
+    message: {
+      id: "msg-1",
+      channel: {},
+      edit: async ({ components }) => {
+        editedComponents = components;
+      },
+    },
+    deferUpdate: async () => {
+      deferred = true;
+    },
+    reply: async () => {},
+    channel: { send: async () => ({ id: "x" }) },
+  });
+
+  assert.equal(queue.loopMode, "queue");
+  assert.equal(queue.tracks[0].loopTag, undefined);
+  assert.equal(queue.tracks[0].loopSourceTrackKey, undefined);
+  assert.equal(refreshCalledWith, queue);
+  assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
+  assert.equal(buildControlsLoopMode, "queue");
+  assert.deepEqual(editedComponents, [{ type: "row", loopMode: "queue" }]);
+  assert.equal(String(announcedAction).includes("set loop mode to **queue**"), true);
+  assert.equal(deferred, true);
+});
+
+test("np_loop refreshes active queue views when loop-generated tracks are removed", async () => {
+  const queue = {
+    nowPlayingMessageId: "np-msg-1",
+    tracks: [
+      {
+        id: "loop-1",
+        title: "Now",
+        url: "https://youtu.be/now",
+        loopTag: "single",
+        loopSourceTrackKey: "now-1",
+      },
+      { id: "next-1", title: "Next", url: "https://youtu.be/next" },
+    ],
+    current: { id: "now-1", title: "Now", url: "https://youtu.be/now" },
+    loopMode: "single",
+    playing: true,
+    player: {
+      state: { status: "playing" },
+      pause() {},
+      unpause() {},
+    },
+    connection: { destroy() {} },
+  };
+  const queueViews = new Map([
+    ["queue-view-1", {
+      guildId: "guild-1",
+      ownerId: "user-1",
+      ownerName: "User",
+      page: 1,
+      pageSize: 10,
+      selectedTrackId: "loop-1",
+      stale: false,
+      channelId: "text-1",
+      timeout: setTimeout(() => {}, 5000),
+    }],
+  ]);
+
+  let queueViewEditPayload = null;
+  let deferred = false;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: ({ loopMode }) => ({ type: "row", loopMode }),
+    formatQueueViewContent: (guildQueue) => ({ content: `tracks:${guildQueue.tracks.length}`, page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews,
+    logInfo: () => {},
+    logError: () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    sendNowPlaying: async () => {},
+    stopAndLeaveQueue: () => {},
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "np_loop",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" } }),
+      },
+    },
+    client: {
+      channels: {
+        cache: new Map([
+          ["text-1", {
+            messages: {
+              fetch: async (messageId) => ({
+                id: messageId,
+                edit: async (payload) => {
+                  queueViewEditPayload = payload;
+                },
+              }),
+            },
+          }],
+        ]),
+      },
+    },
+    message: {
+      id: "np-msg-1",
+      channel: {},
+      edit: async () => {},
+    },
+    deferUpdate: async () => {
+      deferred = true;
+    },
+    reply: async () => {},
+    channel: { send: async () => ({ id: "x" }) },
+  });
+
+  assert.equal(queue.loopMode, "off");
+  assert.equal(queue.tracks.length, 1);
+  assert.equal(queueViewEditPayload?.content, "tracks:1");
+  assert.equal(deferred, true);
+  clearTimeout(queueViews.get("queue-view-1")?.timeout);
+});
+
 test("queue_nowplaying opens now playing and closes queue view controls", async () => {
   const queue = {
     tracks: [{ id: "t1", title: "Song 1" }],

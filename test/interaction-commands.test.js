@@ -247,3 +247,193 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(subscribeCalledWith, queue.player);
   assert.equal(replyPayload, "Joined **General**.");
 });
+
+test("queue loop single injects a tagged loop item at position 1", async () => {
+  let refreshedQueue = null;
+  let replyPayload = null;
+  const queue = {
+    tracks: [{ id: "next-1", title: "Next", url: "https://youtu.be/next" }],
+    current: { id: "now-1", title: "Now", url: "https://youtu.be/now" },
+    voiceChannel: { id: "vc-1" },
+    connection: null,
+    player: { id: "player-1" },
+    loopMode: "off",
+  };
+  let generatedId = 1;
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      ensureTrackId: (track) => {
+        if (!track.id) {
+          track.id = `generated-${generatedId++}`;
+        }
+      },
+      maybeRefreshNowPlayingUpNext: async (guildQueue) => {
+        refreshedQueue = guildQueue;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1" } } },
+    commandName: "queue",
+    options: {
+      getSubcommand: () => "loop",
+      getString: () => "single",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(queue.loopMode, "single");
+  assert.equal(queue.tracks[0].loopTag, "single");
+  assert.equal(queue.tracks[0].loopSourceTrackKey, "now-1");
+  assert.equal(refreshedQueue, queue);
+  assert.equal(String(replyPayload).includes("Loop mode set to **single**"), true);
+});
+
+test("queue loop off removes generated loop entries", async () => {
+  let replyPayload = null;
+  const queue = {
+    tracks: [
+      {
+        id: "loop-1",
+        title: "Now",
+        url: "https://youtu.be/now",
+        loopTag: "single",
+        loopSourceTrackKey: "now-1",
+      },
+      {
+        id: "loop-2",
+        title: "Now",
+        url: "https://youtu.be/now",
+        loopTag: "queue",
+        loopSourceTrackKey: "now-1",
+      },
+      { id: "next-1", title: "Next", url: "https://youtu.be/next" },
+    ],
+    current: { id: "now-1", title: "Now", url: "https://youtu.be/now" },
+    voiceChannel: { id: "vc-1" },
+    connection: null,
+    player: { id: "player-1" },
+    loopMode: "single",
+  };
+  const { deps } = createDeps({ queue });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1" } } },
+    commandName: "queue",
+    options: {
+      getSubcommand: () => "loop",
+      getString: () => "off",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(queue.loopMode, "off");
+  assert.equal(queue.tracks.length, 1);
+  assert.equal(replyPayload, "Loop mode set to **off**.");
+});
+
+test("queue loop updates active queue view when loop-generated tracks are removed", async () => {
+  let replyPayload = null;
+  let editedPayload = null;
+  const queue = {
+    tracks: [
+      {
+        id: "loop-1",
+        title: "Now",
+        url: "https://youtu.be/now",
+        loopTag: "single",
+        loopSourceTrackKey: "now-1",
+      },
+      { id: "next-1", title: "Next", url: "https://youtu.be/next" },
+    ],
+    current: { id: "now-1", title: "Now", url: "https://youtu.be/now" },
+    voiceChannel: { id: "vc-1" },
+    connection: null,
+    player: { id: "player-1" },
+    loopMode: "single",
+  };
+  const queueViews = new Map([
+    ["queue-view-1", {
+      guildId: "guild-1",
+      ownerId: "user-1",
+      ownerName: "User",
+      page: 1,
+      pageSize: 10,
+      selectedTrackId: "loop-1",
+      stale: false,
+      channelId: "text-1",
+      timeout: setTimeout(() => {}, 5000),
+    }],
+  ]);
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      queueViews,
+      formatQueueViewContent: (guildQueue) => ({
+        content: `tracks:${guildQueue.tracks.length}`,
+        page: 1,
+      }),
+      buildQueueViewComponents: () => [],
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    client: {
+      channels: {
+        cache: new Map([
+          ["text-1", {
+            messages: {
+              fetch: async () => ({
+                edit: async (payload) => {
+                  editedPayload = payload;
+                },
+              }),
+            },
+          }],
+        ]),
+      },
+    },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1" } } },
+    commandName: "queue",
+    options: {
+      getSubcommand: () => "loop",
+      getString: () => "off",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(queue.loopMode, "off");
+  assert.equal(queue.tracks.length, 1);
+  assert.equal(String(replyPayload).includes("Loop mode set to **off**"), true);
+  assert.equal(editedPayload?.content, "tracks:1");
+  clearTimeout(queueViews.get("queue-view-1")?.timeout);
+});

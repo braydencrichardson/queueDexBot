@@ -515,3 +515,133 @@ test("ensureNextTrackPreload disposes stale cached resource when preload target 
   assert.equal(queue.preloadedNextTrackKey, "next");
   assert.deepEqual(queue.preloadedNextResource, { id: "resource-next" });
 });
+
+test("playNext with queue loop re-appends the finished track to the end", async () => {
+  const previousTrack = { id: "a", source: "youtube", url: "https://youtu.be/a", title: "A" };
+  const nextTrack = { id: "b", source: "youtube", url: "https://youtu.be/b", title: "B" };
+  const queue = {
+    loopMode: "queue",
+    current: previousTrack,
+    tracks: [nextTrack],
+    playing: true,
+    connection: {
+      subscribe() {},
+      destroy() {},
+    },
+    player: {
+      played: null,
+      play(resource) {
+        this.played = resource;
+      },
+    },
+    textChannel: null,
+  };
+
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async (url) => ({ url }),
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(queue.current.id, "b");
+  assert.equal(queue.tracks.length, 1);
+  assert.equal(queue.tracks[0].title, "A");
+  assert.notEqual(queue.tracks[0].id, "a");
+  assert.equal(queue.tracks[0].loopTag, "queue");
+  assert.equal(queue.tracks[0].loopSourceTrackKey, "a");
+});
+
+test("playNext with single loop keeps next position primed with another loop clone", async () => {
+  const currentTrack = { id: "a", source: "youtube", url: "https://youtu.be/a", title: "A" };
+  const nextTrack = { id: "b", source: "youtube", url: "https://youtu.be/b", title: "B" };
+  const queue = {
+    loopMode: "single",
+    current: currentTrack,
+    tracks: [nextTrack],
+    playing: true,
+    connection: {
+      subscribe() {},
+      destroy() {},
+    },
+    player: {
+      played: null,
+      play(resource) {
+        this.played = resource;
+      },
+    },
+    textChannel: null,
+  };
+
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async (url) => ({ url }),
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(queue.current.title, "A");
+  assert.equal(queue.current.loopTag, "single");
+  assert.equal(queue.current.loopSourceTrackKey, "a");
+  assert.notEqual(queue.current.id, "a");
+  assert.equal(queue.tracks[0].loopTag, "single");
+  assert.equal(queue.tracks[0].loopSourceTrackKey, "a");
+  assert.notEqual(queue.tracks[0].id, queue.current.id);
+  assert.equal(queue.tracks[1].id, "b");
+});
+
+test("single loop survives repeated skip transitions without losing the loop slot", async () => {
+  const currentTrack = { id: "a", source: "youtube", url: "https://youtu.be/a", title: "A" };
+  const queue = {
+    loopMode: "single",
+    current: currentTrack,
+    tracks: [],
+    playing: true,
+    connection: {
+      subscribe() {},
+      destroy() {},
+    },
+    player: {
+      played: [],
+      play(resource) {
+        this.played.push(resource);
+      },
+    },
+    textChannel: null,
+  };
+
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async (url) => ({ url }),
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+  const firstLoopCurrentId = queue.current.id;
+  assert.equal(queue.tracks[0].loopTag, "single");
+
+  await playNext("guild-1");
+  assert.notEqual(queue.current.id, firstLoopCurrentId);
+  assert.equal(queue.current.loopTag, "single");
+  assert.equal(queue.tracks[0].loopTag, "single");
+});

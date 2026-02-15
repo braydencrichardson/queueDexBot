@@ -1,6 +1,8 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackPrimary, formatTrackSecondary } = require("../ui/messages");
 const { getTrackKey } = require("./track-key");
+const { ensureTrackId } = require("./utils");
+const { LOOP_MODES, clearLoopState, getQueueLoopMode, syncLoopState } = require("./loop");
 const {
   DEFAULT_NOW_PLAYING_PROGRESS_INTERVAL_MS,
   DEFAULT_NOW_PLAYING_PROGRESS_INITIAL_DELAY_MS,
@@ -52,6 +54,7 @@ function createQueueSession(deps) {
         playerListenersReady: false,
         suppressNextIdle: false,
         deferredResolveInFlight: false,
+        loopMode: LOOP_MODES.OFF,
       });
     }
     return queues.get(guildId);
@@ -219,7 +222,7 @@ function createQueueSession(deps) {
       return "Nothing is playing.";
     }
     const remaining = queue.tracks.length;
-    const nextTrack = queue.tracks[0];
+    const { track: nextTrack, isVirtualQueueLoop } = getDisplayUpNext(queue);
     const lines = [];
     const nowPrimary = formatTrackPrimary(queue.current, {
       formatDuration,
@@ -248,8 +251,10 @@ function createQueueSession(deps) {
         includeLink: true,
         embeddableLink: false,
       });
-      const preloadMarker = isTrackPreloaded(queue, nextTrack) ? "● " : "";
-      lines.push(`**Up next:** ${preloadMarker}${nextPrimary}`);
+      const isLoopTrack = isVirtualQueueLoop || nextTrack?.loopTag === "single" || nextTrack?.loopTag === "queue";
+      const loopMarker = isLoopTrack ? "↺ " : "";
+      const preloadMarker = !isVirtualQueueLoop && isTrackPreloaded(queue, nextTrack) ? "● " : "";
+      lines.push(`**Up next:** ${loopMarker}${preloadMarker}${nextPrimary}`);
       if (nextSecondary) {
         lines.push(`↳ ${nextSecondary}`);
       }
@@ -281,12 +286,25 @@ function createQueueSession(deps) {
     return lines.join("\n");
   }
 
+  function getDisplayUpNext(queue) {
+    const queuedNext = queue?.tracks?.[0] || null;
+    if (queuedNext) {
+      return { track: queuedNext, isVirtualQueueLoop: false };
+    }
+    const loopMode = getQueueLoopMode(queue);
+    if (loopMode === LOOP_MODES.QUEUE && queue?.current?.url) {
+      return { track: queue.current, isVirtualQueueLoop: true };
+    }
+    return { track: null, isVirtualQueueLoop: false };
+  }
+
   function getUpNextKey(queue) {
-    const next = queue?.tracks?.[0];
+    const { track: next, isVirtualQueueLoop } = getDisplayUpNext(queue);
     if (!next) {
       return "empty";
     }
-    return String(next.id || `${next.url || ""}|${next.title || ""}|${next.requester || ""}`);
+    const key = String(next.id || `${next.url || ""}|${next.title || ""}|${next.requester || ""}`);
+    return isVirtualQueueLoop ? `queue-loop:${key}` : key;
   }
 
   async function deletePreviousNowPlayingMessage(queue) {
@@ -320,7 +338,7 @@ function createQueueSession(deps) {
     }
 
     const content = formatNowPlaying(queue);
-    const controls = buildNowPlayingControls();
+    const controls = buildNowPlayingControls({ loopMode: getQueueLoopMode(queue) });
     const payload = { content, components: [controls] };
     queue.nowPlayingUpNextKey = getUpNextKey(queue);
     let message = null;
@@ -387,6 +405,7 @@ function createQueueSession(deps) {
   }
 
   async function maybeRefreshNowPlayingUpNext(queue) {
+    syncLoopState(queue, ensureTrackId);
     ensureNextTrackPreload(queue).catch((error) => {
       logError("Failed to refresh next-track preload", error);
     });
@@ -500,6 +519,7 @@ function createQueueSession(deps) {
     queue.pausedForInactivity = false;
     queue.inactivityNoticeMessageId = null;
     queue.inactivityNoticeChannelId = null;
+    clearLoopState(queue);
     clearNowPlayingProgressUpdates(queue);
     if (queue.player) {
       queue.suppressNextIdle = true;
