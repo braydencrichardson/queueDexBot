@@ -87,7 +87,7 @@ function createQueueViewService(deps) {
     }, timeoutMs);
   }
 
-  function remember(messageId, view, channelId = null, client = null) {
+  function storeViewState(messageId, view, channelId = null, client = null) {
     const existing = queueViews.get(messageId);
     clearViewTimeout(existing);
     const next = { ...view, channelId: channelId || view.channelId || existing?.channelId || null };
@@ -146,7 +146,7 @@ function createQueueViewService(deps) {
     await closeOtherViewsForOwner(view.ownerId, view.guildId, null, channel?.client);
     const payload = buildPayload(queue, view);
     const message = await channel.send(payload);
-    remember(message.id, view, message.channel?.id, channel?.client);
+    storeViewState(message.id, view, message.channel?.id, channel?.client);
     return message;
   }
 
@@ -157,14 +157,14 @@ function createQueueViewService(deps) {
       ...payload,
       fetchReply: true,
     });
-    remember(message.id, view, message.channel?.id || interaction.channelId, interaction.client);
+    storeViewState(message.id, view, message.channel?.id || interaction.channelId, interaction.client);
     return message;
   }
 
   async function updateInteraction(interaction, queue, view) {
     const payload = buildPayload(queue, view);
     await interaction.update(payload);
-    remember(interaction.message.id, view, interaction.channelId || interaction.message?.channel?.id, interaction.client);
+    storeViewState(interaction.message.id, view, interaction.channelId || interaction.message?.channel?.id, interaction.client);
   }
 
   async function editMessage(channel, messageId, queue, view, options = {}) {
@@ -173,7 +173,7 @@ function createQueueViewService(deps) {
     try {
       const message = await channel.messages.fetch(messageId);
       await message.edit(payload);
-      remember(messageId, view, message.channel?.id || view.channelId, channel?.client);
+      storeViewState(messageId, view, message.channel?.id || view.channelId, channel?.client);
       return true;
     } catch (error) {
       if (typeof logError === "function") {
