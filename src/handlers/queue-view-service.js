@@ -163,17 +163,17 @@ function createQueueViewService(deps) {
 
   async function updateInteraction(interaction, queue, view) {
     const payload = buildPayload(queue, view);
-    remember(interaction.message.id, view, interaction.channelId || interaction.message?.channel?.id, interaction.client);
     await interaction.update(payload);
+    remember(interaction.message.id, view, interaction.channelId || interaction.message?.channel?.id, interaction.client);
   }
 
   async function editMessage(channel, messageId, queue, view, options = {}) {
     const { logError, errorMessage = "Failed to update queue view" } = options;
     const payload = buildPayload(queue, view);
-    remember(messageId, view, view.channelId, channel?.client);
     try {
       const message = await channel.messages.fetch(messageId);
       await message.edit(payload);
+      remember(messageId, view, message.channel?.id || view.channelId, channel?.client);
       return true;
     } catch (error) {
       if (typeof logError === "function") {

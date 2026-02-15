@@ -129,7 +129,8 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
-      if (queue.voiceChannel && queue.voiceChannel.id !== voiceChannel.id) {
+      const queueVoiceChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+      if (queueVoiceChannelId && queueVoiceChannelId !== voiceChannel.id) {
         await interaction.reply({ content: "I am already playing in another voice channel.", ephemeral: true });
         return;
       }
@@ -181,9 +182,15 @@ function createCommandInteractionHandler(deps) {
         }
       }
 
-      queue.voiceChannel = voiceChannel;
-
-      if (!queue.connection) {
+      async function ensurePlaybackVoiceConnection() {
+        const activeChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+        if (activeChannelId && activeChannelId !== voiceChannel.id) {
+          throw new Error("Queue already connected to another voice channel");
+        }
+        queue.voiceChannel = voiceChannel;
+        if (queue.connection) {
+          return;
+        }
         await ensureSodiumReady();
         queue.connection = joinVoiceChannel({
           channelId: voiceChannel.id,
@@ -211,7 +218,15 @@ function createCommandInteractionHandler(deps) {
       if (!tracks.length) {
         try {
           const searchOptions = await getSearchOptionsForQuery(query, requester);
-          const searchChooserSent = await trySendSearchChooser(interaction, query, requesterId, searchOptions);
+          let searchChooserSent = false;
+          if (searchOptions.length) {
+            try {
+              await ensurePlaybackVoiceConnection();
+              searchChooserSent = await trySendSearchChooser(interaction, query, requesterId, searchOptions);
+            } catch (error) {
+              logError("Failed to join voice before posting search chooser", error);
+            }
+          }
           if (searchChooserSent) {
             return;
           }
@@ -233,6 +248,14 @@ function createCommandInteractionHandler(deps) {
           await interaction.editReply("No results found.");
           return;
         }
+      }
+
+      try {
+        await ensurePlaybackVoiceConnection();
+      } catch (error) {
+        logError("Failed to join voice channel for playback", error);
+        await interaction.editReply("I couldn't join your voice channel.");
+        return;
       }
 
       enqueueTracks(queue, tracks);

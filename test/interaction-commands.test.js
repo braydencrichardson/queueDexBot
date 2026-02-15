@@ -248,6 +248,136 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(replyPayload, "Joined **General**.");
 });
 
+test("play resolves tracks before joining voice", async () => {
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: null,
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const voiceChannel = {
+    id: "vc-1",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  let joinCalled = false;
+  let resolveCalled = false;
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      joinVoiceChannel: () => {
+        joinCalled = true;
+        return {
+          on: () => {},
+          subscribe: () => {},
+          destroy: () => {},
+        };
+      },
+      resolveTracks: async () => {
+        resolveCalled = true;
+        assert.equal(joinCalled, false);
+        return [{
+          id: "t1",
+          title: "Track 1",
+          url: "https://youtu.be/example",
+          source: "youtube",
+        }];
+      },
+      enqueueTracks: (guildQueue, tracks) => {
+        guildQueue.tracks.push(...tracks);
+      },
+      getQueuedTrackIndex: (guildQueue, track) => guildQueue.tracks.indexOf(track),
+      buildQueuedActionComponents: () => [],
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { displayName: "User", voice: { channel: voiceChannel } },
+    commandName: "play",
+    options: {
+      getString: () => "test query",
+    },
+    deferReply: async () => {},
+    editReply: async () => ({ id: "msg-1", edit: async () => {} }),
+    followUp: async () => {},
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.equal(resolveCalled, true);
+  assert.equal(joinCalled, true);
+  assert.equal(queue.voiceChannel, voiceChannel);
+  assert.equal(queue.tracks.length, 1);
+  clearTimeout(deps.pendingQueuedActions.get("msg-1")?.timeout);
+});
+
+test("play does not join voice when no tracks are found", async () => {
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: null,
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const voiceChannel = {
+    id: "vc-1",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  let joinCalled = false;
+  let editReplyPayload = null;
+  let resolveCalls = 0;
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      joinVoiceChannel: () => {
+        joinCalled = true;
+        return {
+          on: () => {},
+          subscribe: () => {},
+          destroy: () => {},
+        };
+      },
+      resolveTracks: async () => {
+        resolveCalls += 1;
+        return [];
+      },
+      getSearchOptionsForQuery: async () => [],
+      trySendSearchChooser: async () => false,
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { displayName: "User", voice: { channel: voiceChannel } },
+    commandName: "play",
+    options: {
+      getString: () => "missing song",
+    },
+    deferReply: async () => {},
+    editReply: async (payload) => {
+      editReplyPayload = payload;
+    },
+    followUp: async () => {},
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.equal(resolveCalls, 2);
+  assert.equal(joinCalled, false);
+  assert.equal(editReplyPayload, "No results found.");
+});
+
 test("playing reports an error when now playing controls cannot be posted", async () => {
   let deferReplyPayload = null;
   let editReplyPayload = null;

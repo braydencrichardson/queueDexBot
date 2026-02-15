@@ -266,8 +266,6 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
   let announcedAction = null;
   let sendNowPlayingArgs = null;
   let refreshCalledWith = null;
-  let buildControlsLoopMode = null;
-  let editedComponents = null;
   let deferred = false;
   let generatedId = 1;
 
@@ -279,10 +277,7 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
     announceNowPlayingAction: async (_queue, action) => {
       announcedAction = action;
     },
-    buildNowPlayingControls: ({ loopMode }) => {
-      buildControlsLoopMode = loopMode;
-      return { type: "row", loopMode };
-    },
+    buildNowPlayingControls: () => ({ type: "row" }),
     formatQueueViewContent: () => ({ content: "", page: 1 }),
     buildQueueViewComponents: () => [],
     buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
@@ -319,9 +314,7 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
     message: {
       id: "msg-1",
       channel: {},
-      edit: async ({ components }) => {
-        editedComponents = components;
-      },
+      edit: async () => {},
     },
     deferUpdate: async () => {
       deferred = true;
@@ -335,8 +328,6 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
   assert.equal(queue.tracks[0].loopSourceTrackKey, undefined);
   assert.equal(refreshCalledWith, queue);
   assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
-  assert.equal(buildControlsLoopMode, "queue");
-  assert.deepEqual(editedComponents, [{ type: "row", loopMode: "queue" }]);
   assert.equal(String(announcedAction).includes("set loop mode to **queue**"), true);
   assert.equal(deferred, true);
 });

@@ -36,7 +36,6 @@ function createButtonInteractionHandler(deps) {
     getGuildQueue,
     isSameVoiceChannel,
     announceNowPlayingAction,
-    buildNowPlayingControls,
     buildQueuedActionComponents,
     formatQueueViewContent,
     buildQueueViewComponents,
@@ -230,15 +229,12 @@ function createButtonInteractionHandler(deps) {
         stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
       }
 
-      try {
-        if (customId === "np_stop") {
+      if (customId === "np_stop") {
+        try {
           await interaction.message.edit({ components: [] });
-        } else {
-          const controls = buildNowPlayingControls({ loopMode: getQueueLoopMode(queue) });
-          await interaction.message.edit({ components: [controls] });
+        } catch (error) {
+          logError("Failed to refresh now playing controls", error);
         }
-      } catch (error) {
-        logError("Failed to refresh now playing controls", error);
       }
       return;
     }
@@ -433,6 +429,7 @@ function createButtonInteractionHandler(deps) {
         await interaction.reply({ content: "Only the requester can control this queue view.", ephemeral: true });
         return;
       }
+      let postUpdateAction = null;
 
       if (customId === "queue_close") {
         await interaction.deferUpdate();
@@ -502,10 +499,12 @@ function createButtonInteractionHandler(deps) {
         await maybeRefreshNowPlayingUpNext(queue);
         queueView.selectedTrackId = null;
         logInfo("Cleared queue via queue view", { user: interaction.user.tag });
-        await sendQueueActionNotice(
-          interaction.channel,
-          formatQueueClearedNotice(removedCount, getActorName(interaction, member))
-        );
+        postUpdateAction = async () => {
+          await sendQueueActionNotice(
+            interaction.channel,
+            formatQueueClearedNotice(removedCount, getActorName(interaction, member))
+          );
+        };
       } else if (customId === "queue_move") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
@@ -524,30 +523,32 @@ function createButtonInteractionHandler(deps) {
         const movePageSize = queueMoveMenuPageSize;
         const movePage = Math.floor((selectedIndex - 1) / movePageSize) + 1;
         const moveMenu = buildMoveMenu(queue, selectedIndex, movePage, movePageSize);
-        const moveMessage = await interaction.channel.send({
-          content: formatMovePrompt(queue.tracks[selectedIndex - 1], moveMenu.page, moveMenu.totalPages),
-          components: moveMenu.components,
-        });
-        setExpiringMapEntry({
-          store: pendingMoves,
-          key: moveMessage.id,
-          timeoutMs: INTERACTION_TIMEOUT_MS,
-          logError,
-          errorMessage: "Failed to expire move request",
-          onExpire: async () => {
-            await moveMessage.edit({ content: "Move request expired.", components: [] });
-          },
-          entry: {
-            guildId: interaction.guildId,
-            ownerId: queueView.ownerId,
-            sourceIndex: selectedIndex,
-            trackId: selectedTrack.id,
-            queueViewMessageId: interaction.message.id,
-            channelId: interaction.channel?.id,
-            page: moveMenu.page,
-            pageSize: movePageSize,
-          },
-        });
+        postUpdateAction = async () => {
+          const moveMessage = await interaction.channel.send({
+            content: formatMovePrompt(queue.tracks[selectedIndex - 1], moveMenu.page, moveMenu.totalPages),
+            components: moveMenu.components,
+          });
+          setExpiringMapEntry({
+            store: pendingMoves,
+            key: moveMessage.id,
+            timeoutMs: INTERACTION_TIMEOUT_MS,
+            logError,
+            errorMessage: "Failed to expire move request",
+            onExpire: async () => {
+              await moveMessage.edit({ content: "Move request expired.", components: [] });
+            },
+            entry: {
+              guildId: interaction.guildId,
+              ownerId: queueView.ownerId,
+              sourceIndex: selectedIndex,
+              trackId: selectedTrack.id,
+              queueViewMessageId: interaction.message.id,
+              channelId: interaction.channel?.id,
+              page: moveMenu.page,
+              pageSize: movePageSize,
+            },
+          });
+        };
       } else if (customId === "queue_backward" || customId === "queue_forward") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
@@ -588,11 +589,13 @@ function createButtonInteractionHandler(deps) {
         const removed = removeQueuedTrackAt(queue, selectedIndex);
         await maybeRefreshNowPlayingUpNext(queue);
         logInfo("Removed track via queue view", { title: removed?.title, user: interaction.user.tag });
-        await sendQueueActionNotice(
-          interaction.channel,
-          formatQueueRemovedNotice(removed, getActorName(interaction, member))
-        );
         queueView.selectedTrackId = null;
+        postUpdateAction = async () => {
+          await sendQueueActionNotice(
+            interaction.channel,
+            formatQueueRemovedNotice(removed, getActorName(interaction, member))
+          );
+        };
       } else if (customId === "queue_front") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
@@ -615,6 +618,9 @@ function createButtonInteractionHandler(deps) {
 
       queueView.stale = false;
       await queueViewService.updateInteraction(interaction, queue, queueView);
+      if (typeof postUpdateAction === "function") {
+        await postUpdateAction();
+      }
     }
   };
 }
