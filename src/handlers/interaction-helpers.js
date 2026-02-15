@@ -63,9 +63,80 @@ function getVoiceChannelCheck(member, queue, action = "control playback") {
   return null;
 }
 
+async function queueSearchSelection(options) {
+  const {
+    interaction,
+    queue,
+    pendingSearches,
+    pendingQueuedActions,
+    selected,
+    requesterId,
+    interactionTimeoutMs,
+    ensureTrackId,
+    getQueuedTrackIndex,
+    buildQueuedActionComponents,
+    maybeRefreshNowPlayingUpNext = async () => {},
+    playNext,
+    logInfo,
+    logError,
+    queueLogMessage = "Queued from search chooser",
+    queuedNoticeFormatter = () => "Queued.",
+  } = options;
+
+  clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
+
+  queue.textChannel = interaction.channel;
+  ensureTrackId(selected);
+  queue.tracks.push(selected);
+  await maybeRefreshNowPlayingUpNext(queue);
+  if (typeof logInfo === "function") {
+    logInfo(queueLogMessage, {
+      title: selected.title,
+      guildId: interaction.guildId,
+      requesterId,
+    });
+  }
+
+  const queuedIndex = getQueuedTrackIndex(queue, selected);
+  const position = queuedIndex >= 0 ? queuedIndex + 1 : null;
+  const showQueuedControls = queuedIndex >= 0;
+  await interaction.update({
+    content: queuedNoticeFormatter(selected, position),
+    components: showQueuedControls ? buildQueuedActionComponents({ includeMoveControls: queuedIndex >= 1 }) : [],
+  });
+
+  if (showQueuedControls) {
+    setExpiringMapEntry({
+      store: pendingQueuedActions,
+      key: interaction.message.id,
+      timeoutMs: interactionTimeoutMs,
+      logError,
+      errorMessage: "Failed to expire queued action controls",
+      onExpire: async () => {
+        await interaction.message.edit({ components: [] });
+      },
+      entry: {
+        guildId: interaction.guildId,
+        ownerId: interaction.user.id,
+        trackId: selected.id,
+        trackTitle: selected.title,
+      },
+    });
+  }
+
+  if (!queue.playing && typeof playNext === "function") {
+    playNext(interaction.guildId).catch((error) => {
+      if (typeof logError === "function") {
+        logError("Error starting playback", error);
+      }
+    });
+  }
+}
+
 module.exports = {
   clearMapEntryWithTimeout,
   getQueueVoiceChannelId,
   getVoiceChannelCheck,
+  queueSearchSelection,
   setExpiringMapEntry,
 };

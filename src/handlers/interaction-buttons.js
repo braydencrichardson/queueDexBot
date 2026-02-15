@@ -6,6 +6,7 @@ const { createQueueViewService } = require("./queue-view-service");
 const {
   clearMapEntryWithTimeout,
   getVoiceChannelCheck,
+  queueSearchSelection,
   setExpiringMapEntry,
 } = require("./interaction-helpers");
 const {
@@ -116,8 +117,8 @@ function createButtonInteractionHandler(deps) {
         selectedTrackId: null,
         stale: false,
       });
-      await queueViewService.sendToChannel(interaction.channel, queue, view);
       await interaction.deferUpdate();
+      await queueViewService.sendToChannel(interaction.channel, queue, view);
       return;
     }
 
@@ -142,49 +143,24 @@ function createButtonInteractionHandler(deps) {
           await interaction.reply({ content: "Join my voice channel to choose a result.", ephemeral: true });
           return;
         }
-        clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
-        queue.textChannel = interaction.channel;
-        ensureTrackId(selected);
-        queue.tracks.push(selected);
-        await maybeRefreshNowPlayingUpNext(queue);
-        logInfo("Queued first result from search chooser", {
-          title: selected.title,
-          guildId: interaction.guildId,
+        await queueSearchSelection({
+          interaction,
+          queue,
+          pendingSearches,
+          pendingQueuedActions,
+          selected,
           requesterId: pending.requesterId,
+          interactionTimeoutMs: INTERACTION_TIMEOUT_MS,
+          ensureTrackId,
+          getQueuedTrackIndex,
+          buildQueuedActionComponents,
+          maybeRefreshNowPlayingUpNext,
+          playNext,
+          logInfo,
+          logError,
+          queueLogMessage: "Queued first result from search chooser",
+          queuedNoticeFormatter: (track, position) => formatQueuedMessage(track, position, formatDuration),
         });
-
-        const queuedIndex = getQueuedTrackIndex(queue, selected);
-        const position = queuedIndex >= 0 ? queuedIndex + 1 : null;
-        const showQueuedControls = queuedIndex >= 0;
-        await interaction.update({
-          content: formatQueuedMessage(selected, position, formatDuration),
-          components: showQueuedControls ? buildQueuedActionComponents({ includeMoveControls: queuedIndex >= 1 }) : [],
-        });
-
-        if (showQueuedControls) {
-          setExpiringMapEntry({
-            store: pendingQueuedActions,
-            key: interaction.message.id,
-            timeoutMs: INTERACTION_TIMEOUT_MS,
-            logError,
-            errorMessage: "Failed to expire queued action controls",
-            onExpire: async () => {
-              await interaction.message.edit({ components: [] });
-            },
-            entry: {
-              guildId: interaction.guildId,
-              ownerId: interaction.user.id,
-              trackId: selected.id,
-              trackTitle: selected.title,
-            },
-          });
-        }
-
-        if (!queue.playing) {
-          playNext(interaction.guildId).catch((error) => {
-            logError("Error starting playback", error);
-          });
-        }
         return;
       }
       clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
@@ -204,6 +180,11 @@ function createButtonInteractionHandler(deps) {
         await interaction.reply({ content: "Join my voice channel to control playback.", ephemeral: true });
         return;
       }
+      if (customId === "np_queue" && !queue.current && !queue.tracks.length) {
+        await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+        return;
+      }
+      await interaction.deferUpdate();
 
       if (customId === "np_toggle") {
         if (queue.player.state.status === AudioPlayerStatus.Playing) {
@@ -215,10 +196,6 @@ function createButtonInteractionHandler(deps) {
         }
         await sendNowPlaying(queue, false);
       } else if (customId === "np_queue") {
-        if (!queue.current && !queue.tracks.length) {
-          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
-          return;
-        }
         const pageSize = queueViewPageSize;
         const view = queueViewService.createFromInteraction(interaction, {
           page: 1,
@@ -263,8 +240,6 @@ function createButtonInteractionHandler(deps) {
       } catch (error) {
         logError("Failed to refresh now playing controls", error);
       }
-
-      await interaction.deferUpdate();
       return;
     }
 
@@ -295,8 +270,8 @@ function createButtonInteractionHandler(deps) {
           selectedTrackId: selectedTrack.id,
           stale: false,
         });
-        await queueViewService.sendToChannel(interaction.channel, queue, view);
         await interaction.deferUpdate();
+        await queueViewService.sendToChannel(interaction.channel, queue, view);
         return;
       }
 
@@ -310,6 +285,7 @@ function createButtonInteractionHandler(deps) {
         const pageSize = queueMoveMenuPageSize;
         const page = Math.floor(trackIndex / pageSize) + 1;
         const moveMenu = buildMoveMenu(queue, selectedIndex, page, pageSize);
+        await interaction.deferUpdate();
         const moveMessage = await interaction.channel.send({
           content: formatMovePrompt({ title: pending.trackTitle || "selected track" }, moveMenu.page, moveMenu.totalPages),
           components: moveMenu.components,
@@ -334,7 +310,6 @@ function createButtonInteractionHandler(deps) {
             pageSize,
           },
         });
-        await interaction.deferUpdate();
         return;
       }
 
@@ -495,8 +470,8 @@ function createButtonInteractionHandler(deps) {
         // no-op; just re-render below
       } else if (customId === "queue_nowplaying") {
         queue.textChannel = interaction.channel;
-        await sendNowPlaying(queue, true);
         await interaction.deferUpdate();
+        await sendNowPlaying(queue, true);
         await queueViewService.closeByMessageId(
           interaction.message.id,
           interaction,

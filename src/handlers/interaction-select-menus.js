@@ -1,5 +1,5 @@
 const { createQueueViewService } = require("./queue-view-service");
-const { clearMapEntryWithTimeout, getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
+const { clearMapEntryWithTimeout, getVoiceChannelCheck, queueSearchSelection } = require("./interaction-helpers");
 const { formatMovedMessage, formatQueuedMessage } = require("../ui/messages");
 const { formatDuration } = require("../queue/utils");
 const { isValidQueuePosition, moveQueuedTrackToPosition } = require("../queue/operations");
@@ -63,49 +63,24 @@ function createSelectMenuInteractionHandler(deps) {
         return;
       }
       const selected = pending.options[index];
-      clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
-
-      queue.textChannel = interaction.channel;
-      ensureTrackId(selected);
-      queue.tracks.push(selected);
-      await maybeRefreshNowPlayingUpNext(queue);
-      logInfo("Queued from search chooser", {
-        title: selected.title,
-        guildId: interaction.guildId,
+      await queueSearchSelection({
+        interaction,
+        queue,
+        pendingSearches,
+        pendingQueuedActions,
+        selected,
         requesterId: pending.requesterId,
+        interactionTimeoutMs: INTERACTION_TIMEOUT_MS,
+        ensureTrackId,
+        getQueuedTrackIndex,
+        buildQueuedActionComponents,
+        maybeRefreshNowPlayingUpNext,
+        playNext,
+        logInfo,
+        logError,
+        queueLogMessage: "Queued from search chooser",
+        queuedNoticeFormatter: (track, position) => formatQueuedMessage(track, position, formatDuration),
       });
-
-      const queuedIndex = getQueuedTrackIndex(queue, selected);
-      const position = queuedIndex >= 0 ? queuedIndex + 1 : null;
-      const showQueuedControls = queuedIndex >= 0;
-      await interaction.update({
-        content: formatQueuedMessage(selected, position, formatDuration),
-        components: showQueuedControls ? buildQueuedActionComponents({ includeMoveControls: queuedIndex >= 1 }) : [],
-      });
-      if (showQueuedControls) {
-        setExpiringMapEntry({
-          store: pendingQueuedActions,
-          key: interaction.message.id,
-          timeoutMs: INTERACTION_TIMEOUT_MS,
-          logError,
-          errorMessage: "Failed to expire queued action controls",
-          onExpire: async () => {
-            await interaction.message.edit({ components: [] });
-          },
-          entry: {
-            guildId: interaction.guildId,
-            ownerId: interaction.user.id,
-            trackId: selected.id,
-            trackTitle: selected.title,
-          },
-        });
-      }
-
-      if (!queue.playing) {
-        playNext(interaction.guildId).catch((error) => {
-          logError("Error starting playback", error);
-        });
-      }
       return;
     }
 

@@ -404,6 +404,31 @@ function createQueueSession(deps) {
     }
   }
 
+  async function cleanupInactivityNotice(cleanupContext) {
+    const messageId = cleanupContext?.messageId;
+    const channelId = cleanupContext?.channelId;
+    if (!messageId || !channelId) {
+      return;
+    }
+
+    let cleanupChannel = null;
+    if (cleanupContext?.textChannel?.id === channelId && cleanupContext.textChannel?.messages?.fetch) {
+      cleanupChannel = cleanupContext.textChannel;
+    } else {
+      cleanupChannel = await resolveNowPlayingChannelById(channelId);
+    }
+    if (!cleanupChannel?.messages?.fetch) {
+      return;
+    }
+
+    try {
+      const message = await cleanupChannel.messages.fetch(messageId);
+      await message.delete();
+    } catch {
+      // ignore stale/missing inactivity notice cleanup failures
+    }
+  }
+
   async function maybeRefreshNowPlayingUpNext(queue) {
     syncLoopState(queue, ensureTrackId);
     ensureNextTrackPreload(queue).catch((error) => {
@@ -499,9 +524,19 @@ function createQueueSession(deps) {
       textChannel: queue?.textChannel,
       trackSnapshot: queue?.nowPlayingTrackSnapshot || queue?.current || null,
     };
+    const inactivityCleanupContext = {
+      messageId: queue?.inactivityNoticeMessageId,
+      channelId: queue?.inactivityNoticeChannelId,
+      textChannel: queue?.textChannel,
+    };
     if (cleanupContext.messageId && cleanupContext.channelId) {
       cleanupCompletedNowPlaying(cleanupContext).catch((error) => {
         logError("Failed to clean up stopped now playing message", error);
+      });
+    }
+    if (inactivityCleanupContext.messageId && inactivityCleanupContext.channelId) {
+      cleanupInactivityNotice(inactivityCleanupContext).catch((error) => {
+        logError("Failed to clear inactivity notice while stopping queue", error);
       });
     }
 

@@ -346,7 +346,13 @@ function createCommandInteractionHandler(deps) {
         return;
       }
       await interaction.deferReply({ ephemeral: true });
-      await sendNowPlaying(queue, true);
+      const nowPlayingMessage = await sendNowPlaying(queue, true);
+      if (!nowPlayingMessage) {
+        await interaction.editReply({
+          content: "I couldn't post now playing controls in this channel. Check my message permissions.",
+        });
+        return;
+      }
       await interaction.editReply({ content: "Posted now playing controls." });
       return;
     }
@@ -483,6 +489,7 @@ function createCommandInteractionHandler(deps) {
           removed: loopResult.removed,
         });
         await maybeRefreshNowPlayingUpNext(queue);
+        await sendNowPlaying(queue, false);
         if (loopResult.inserted || loopResult.removed) {
           await queueViewService.refreshGuildViews(interaction.guildId, queue, interaction.client);
         }

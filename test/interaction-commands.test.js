@@ -248,8 +248,52 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(replyPayload, "Joined **General**.");
 });
 
+test("playing reports an error when now playing controls cannot be posted", async () => {
+  let deferReplyPayload = null;
+  let editReplyPayload = null;
+  const queue = {
+    tracks: [],
+    current: { title: "Now Playing" },
+    voiceChannel: { id: "vc-bot" },
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      sendNowPlaying: async () => null,
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1" } } },
+    commandName: "playing",
+    options: {},
+    deferReply: async (payload) => {
+      deferReplyPayload = payload;
+    },
+    editReply: async (payload) => {
+      editReplyPayload = payload;
+    },
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.deepEqual(deferReplyPayload, { ephemeral: true });
+  assert.deepEqual(editReplyPayload, {
+    content: "I couldn't post now playing controls in this channel. Check my message permissions.",
+  });
+});
+
 test("queue loop single injects a tagged loop item at position 1", async () => {
   let refreshedQueue = null;
+  let sendNowPlayingArgs = null;
   let replyPayload = null;
   const queue = {
     tracks: [{ id: "next-1", title: "Next", url: "https://youtu.be/next" }],
@@ -270,6 +314,9 @@ test("queue loop single injects a tagged loop item at position 1", async () => {
       },
       maybeRefreshNowPlayingUpNext: async (guildQueue) => {
         refreshedQueue = guildQueue;
+      },
+      sendNowPlaying: async (guildQueue, forceNew) => {
+        sendNowPlayingArgs = { guildQueue, forceNew };
       },
     },
   });
@@ -297,6 +344,7 @@ test("queue loop single injects a tagged loop item at position 1", async () => {
   assert.equal(queue.tracks[0].loopTag, "single");
   assert.equal(queue.tracks[0].loopSourceTrackKey, "now-1");
   assert.equal(refreshedQueue, queue);
+  assert.deepEqual(sendNowPlayingArgs, { guildQueue: queue, forceNew: false });
   assert.equal(String(replyPayload).includes("Loop mode set to **single**"), true);
 });
 
