@@ -228,6 +228,40 @@ npm start
 npm run activity:dev
 ```
 
+Keep both processes running in background (and re-attach later) with `tmux`:
+
+```bash
+# start a tmux session
+tmux new -s qdexbot
+
+# pane 1
+npm start
+
+# split pane (Ctrl+b then % or ")
+# pane 2
+npm run activity:dev
+```
+
+Detach while keeping both running:
+
+```bash
+# inside tmux
+Ctrl+b then d
+```
+
+Re-enter later:
+
+```bash
+tmux attach -t qdexbot
+```
+
+Useful tmux commands:
+
+```bash
+tmux ls
+tmux kill-session -t qdexbot
+```
+
 Useful checks:
 
 ```bash
