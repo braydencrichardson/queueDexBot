@@ -1,37 +1,41 @@
-const { MessageActionRow, MessageButton } = require("discord.js");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require("discord.js");
 const { LOOP_MODES } = require("../queue/loop");
 
 function buildQueuedActionComponents(options = {}) {
   const { includeMoveControls = true } = options;
   const buttons = [
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queued_view")
       .setLabel("View Queue")
       .setEmoji("📜")
-      .setStyle("SECONDARY"),
+      .setStyle(ButtonStyle.Secondary),
   ];
   if (includeMoveControls) {
     buttons.push(
-      new MessageButton()
+      new ButtonBuilder()
         .setCustomId("queued_move")
         .setLabel("Move To")
         .setEmoji("↔️")
-        .setStyle("SECONDARY"),
-      new MessageButton()
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
         .setCustomId("queued_first")
         .setLabel("Move to First")
         .setEmoji("⏫")
-        .setStyle("PRIMARY")
+        .setStyle(ButtonStyle.Primary)
     );
   }
   buttons.push(
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queued_remove")
       .setLabel("Remove")
       .setEmoji("🗑️")
-      .setStyle("DANGER")
+      .setStyle(ButtonStyle.Danger)
   );
-  const row = new MessageActionRow().addComponents(...buttons);
+  const row = new ActionRowBuilder().addComponents(...buttons);
   return [row];
 }
 
@@ -46,43 +50,43 @@ function normalizeLoopMode(loopMode) {
 function getLoopButtonConfig(loopMode) {
   const normalized = normalizeLoopMode(loopMode);
   if (normalized === LOOP_MODES.SINGLE) {
-    return { label: "Loop", style: "PRIMARY", emoji: "🔂" };
+    return { label: "Loop", style: ButtonStyle.Primary, emoji: "🔂" };
   }
   if (normalized === LOOP_MODES.QUEUE) {
-    return { label: "Loop", style: "SUCCESS", emoji: "🔁" };
+    return { label: "Loop", style: ButtonStyle.Success, emoji: "🔁" };
   }
-  return { label: "Loop", style: "SECONDARY", emoji: "❌" };
+  return { label: "Loop", style: ButtonStyle.Secondary, emoji: "❌" };
 }
 
 function buildNowPlayingControls(options = {}) {
   const { loopMode = LOOP_MODES.OFF } = options;
   const loopButton = getLoopButtonConfig(loopMode);
-  return new MessageActionRow().addComponents(
-    new MessageButton()
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("np_queue")
       .setLabel("View Queue")
       .setEmoji("📜")
-      .setStyle("SECONDARY"),
-    new MessageButton()
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("np_toggle")
       .setLabel("Play/Pause")
       .setEmoji("⏯️")
-      .setStyle("SECONDARY"),
-    new MessageButton()
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("np_loop")
       .setLabel(loopButton.label)
       .setEmoji(loopButton.emoji)
       .setStyle(loopButton.style),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("np_skip")
       .setLabel("Skip")
       .setEmoji("⏭️")
-      .setStyle("SECONDARY"),
-    new MessageButton()
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("np_stop")
       .setLabel("Stop")
       .setEmoji("⏹️")
-      .setStyle("DANGER")
+      .setStyle(ButtonStyle.Danger)
   );
 }
 
@@ -91,12 +95,12 @@ module.exports = {
     const safeRequesterId = String(requesterId || "").trim();
     const customId = safeRequesterId ? `playlist_view_queue:${safeRequesterId}` : "playlist_view_queue";
     return [
-      new MessageActionRow().addComponents(
-        new MessageButton()
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
           .setCustomId(customId)
           .setLabel("View Queue")
           .setEmoji("📜")
-          .setStyle("SECONDARY")
+          .setStyle(ButtonStyle.Secondary)
       ),
     ];
   },

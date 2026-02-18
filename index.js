@@ -1,4 +1,4 @@
-const { Client, Intents } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -58,12 +58,12 @@ if (!env.token) {
 
 const client = new Client({
   intents: [
-    Intents.FLAGS.GUILDS,
-    Intents.FLAGS.GUILD_MESSAGES,
-    Intents.FLAGS.GUILD_MESSAGE_REACTIONS,
-    Intents.FLAGS.GUILD_VOICE_STATES,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildVoiceStates,
   ],
-  partials: ["MESSAGE", "CHANNEL", "REACTION"],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 const {

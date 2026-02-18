@@ -37,7 +37,10 @@ function registerInteractionHandler(client, deps) {
         return;
       }
 
-      if (interaction.isSelectMenu()) {
+      const isStringSelectMenu = typeof interaction.isStringSelectMenu === "function"
+        ? interaction.isStringSelectMenu()
+        : (typeof interaction.isSelectMenu === "function" && interaction.isSelectMenu());
+      if (isStringSelectMenu) {
         await handleSelectMenuInteraction(interaction);
         return;
       }

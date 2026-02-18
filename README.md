@@ -5,7 +5,7 @@ Can queue from Spotify share links (will search title/artist on YouTube)
 
 ## Requirements
 
-- Node.js 16+ (Discord.js v13)
+- Node.js 20+ (Discord.js v14)
 - npm
 - `yt-dlp` (required)
 - Python 3 + venv (recommended for reliable `yt-dlp`)

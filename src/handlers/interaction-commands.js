@@ -102,7 +102,10 @@ function createCommandInteractionHandler(deps) {
   }
 
   return async function handleCommandInteraction(interaction) {
-    if (!interaction.isCommand()) {
+    const isChatInputCommand = typeof interaction.isChatInputCommand === "function"
+      ? interaction.isChatInputCommand()
+      : (typeof interaction.isCommand === "function" && interaction.isCommand());
+    if (!isChatInputCommand) {
       return;
     }
 
