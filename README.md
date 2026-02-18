@@ -216,6 +216,58 @@ Notes:
 - URL Mapping target should be host/path only (no protocol).
 - Use a directory path target, not a file path.
 
+### Activity Dev Workflow
+
+Use two terminals:
+
+```bash
+# terminal 1: bot + auth/api server
+npm start
+
+# terminal 2: activity vite dev server
+npm run activity:dev
+```
+
+Useful checks:
+
+```bash
+# build activity app
+npm run activity:build
+
+# preview built app
+npm run activity:preview
+```
+
+For local env:
+- Root `.env` drives bot/auth server (`AUTH_SERVER_*`, `DISCORD_OAUTH_*`).
+- `apps/activity/.env` drives Vite client behavior (`VITE_*`).
+- `VITE_ACTIVITY_API_PROXY_TARGET` should point at your auth/api server in dev (default: `http://127.0.0.1:8787`).
+
+### Cloudflare Tunnel (Dev)
+
+Quick temporary tunnel:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:5173
+```
+
+That is usually enough for Activity dev because Vite proxies `/auth` and `/api` to the backend.
+
+For a stable hostname tunnel, map your dev hostname to `http://127.0.0.1:5173` and set:
+- `VITE_ALLOWED_HOSTS` to include that hostname.
+- Discord Activity URL Mapping target to that hostname/path (no protocol).
+
+Web OAuth requirements:
+- In Discord Developer Portal OAuth2 redirects, add:
+  `https://YOUR_HOSTNAME/auth/discord/web/callback`
+- Set root `.env`:
+  `DISCORD_OAUTH_REDIRECT_URI_WEB=https://YOUR_HOSTNAME/auth/discord/web/callback`
+
+If you hit stale UI while testing tunnels:
+- Disable CDN caching for the activity hostname (or bypass cache for this route).
+- Restart Vite when changing env values.
+- Hard reload Discord/web client after deploy changes.
+
 ## Commands
 
 - `/play query:<url or search>`: Resolve and queue one or more tracks.
