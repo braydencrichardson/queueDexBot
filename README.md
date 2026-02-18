@@ -53,6 +53,20 @@ Core Discord/deploy:
 - `GUILD_ID`: Optional; required for guild-scoped command deploys.
 - `DEPLOY_COMMANDS_TARGET`: Optional default deploy target. Valid values: `global`, `guild`.
 
+Discord OAuth / auth server (for Activity + future web view):
+
+- `DISCORD_OAUTH_CLIENT_ID`: Optional OAuth client id override (defaults to `APPLICATION_ID`).
+- `DISCORD_OAUTH_CLIENT_SECRET`: Required for OAuth code exchange endpoints.
+- `DISCORD_OAUTH_REDIRECT_URI_WEB`: Web OAuth callback URI (for `/auth/discord/web/callback`).
+- `DISCORD_OAUTH_REDIRECT_URI_ACTIVITY`: Optional explicit redirect URI used for embedded activity code exchange.
+- `DISCORD_OAUTH_SCOPES`: Space-separated scopes (default: `identify guilds`).
+- `AUTH_SERVER_ENABLED`: `1` (default) to start auth/API server, `0` to disable.
+- `AUTH_SERVER_HOST`: Bind host (default: `127.0.0.1`).
+- `AUTH_SERVER_PORT`: Bind port (default: `8787`).
+- `AUTH_SESSION_TTL_MS`: Optional session TTL in ms (default: 8 hours).
+- `AUTH_SESSION_COOKIE_NAME`: Session cookie name (default: `qdex_session`).
+- `AUTH_SESSION_COOKIE_SECURE`: `1` (default) or `0`.
+
 yt-dlp / YouTube:
 
 - `YTDLP_PATH`: Path to `yt-dlp` binary (default: `yt-dlp`).
@@ -164,6 +178,15 @@ Set:
 
 ```env
 VITE_DISCORD_CLIENT_ID=YOUR_DISCORD_APPLICATION_ID
+VITE_DISCORD_AUTHORIZE_MODE=auto
+VITE_DISCORD_OAUTH_SCOPES=identify
+# set this to a redirect URI registered in Discord Developer Portal (avoid *.discordsays.com)
+VITE_DISCORD_OAUTH_REDIRECT_URI=
+VITE_WEB_OAUTH_SCOPES=identify guilds
+# optional if backend is not on same origin:
+VITE_ACTIVITY_API_BASE=
+# local dev proxy target:
+VITE_ACTIVITY_API_PROXY_TARGET=http://127.0.0.1:8787
 ```
 
 3. Start the Activity app:
@@ -172,7 +195,22 @@ VITE_DISCORD_CLIENT_ID=YOUR_DISCORD_APPLICATION_ID
 npm run activity:dev
 ```
 
-4. Expose it via HTTPS (for web/desktop Activity testing) and set Discord Activity URL Mapping to the tunnel target.
+4. Ensure the bot process is running (`npm start`) so Activity auth/API routes are available on `AUTH_SERVER_PORT`.
+
+5. Expose it via HTTPS (for web/desktop Activity testing) and set Discord Activity URL Mapping to the tunnel target.
+
+Auth mode notes:
+- `VITE_DISCORD_AUTHORIZE_MODE=auto` (default): try RPC-style authorize first, then retry with `redirect_uri` only when Discord reports missing redirect.
+- `VITE_DISCORD_AUTHORIZE_MODE=rpc`: force authorize without `redirect_uri`.
+- `VITE_DISCORD_AUTHORIZE_MODE=web`: force authorize with `redirect_uri`.
+- Embedded auth note: avoid `guilds` and `rpc` scopes in this Activity authorize flow; use `identify`. Use web OAuth endpoints for broader scopes like `guilds`.
+- Embedded fallback note: the Activity now first attempts `authenticate()` and bootstraps backend session directly from that token, then falls back to OAuth code exchange only if needed.
+
+Web mode notes:
+- Opening the Activity URL directly in a browser now shows a web login screen (via `/auth/discord/web/start`).
+- After login, you can select a guild and use basic controls (`pause`, `resume`, `skip`, `stop`, `clear queue`) from the web UI.
+- Guild selector is filtered to guilds where both the user and bot are present.
+- Session/Discord diagnostics are available under the `Debug` tab in the UI.
 
 Notes:
 - URL Mapping target should be host/path only (no protocol).

@@ -10,12 +10,27 @@ function parseAllowedHosts(value) {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const configuredHosts = parseAllowedHosts(env.VITE_ALLOWED_HOSTS);
+  const apiProxyTarget = String(env.VITE_ACTIVITY_API_PROXY_TARGET || "http://127.0.0.1:8787").trim();
   const allowedHosts = configuredHosts.length
     ? configuredHosts
     : [
       "localhost",
       "127.0.0.1",
     ];
+  const proxy = apiProxyTarget
+    ? {
+      "/auth": {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        secure: false,
+      },
+      "/api": {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        secure: false,
+      },
+    }
+    : undefined;
   const noCacheHeaders = {
     "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
     Pragma: "no-cache",
@@ -24,12 +39,16 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
+    define: {
+      __QDEX_ACTIVITY_BUILD__: JSON.stringify(`${new Date().toISOString()}|${mode}`),
+    },
     server: {
       host: true,
       port: 5173,
       strictPort: true,
       allowedHosts,
       headers: noCacheHeaders,
+      proxy,
     },
     preview: {
       host: true,
@@ -37,6 +56,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       allowedHosts,
       headers: noCacheHeaders,
+      proxy,
     },
   };
 });

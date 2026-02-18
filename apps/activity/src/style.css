@@ -33,7 +33,80 @@ body {
   box-shadow: 0 2rem 4rem rgba(23, 32, 52, 0.12);
   backdrop-filter: blur(5px);
   padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.shell-animated {
   animation: rise 250ms ease-out;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.guild-picker {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.guild-picker label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #687a9f;
+  font-weight: 700;
+}
+
+.guild-picker select,
+.guild-readonly {
+  min-width: 18rem;
+  border: 1px solid rgba(32, 52, 83, 0.2);
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  color: #1f2e4b;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.menu-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.8rem;
+}
+
+.tab-btn {
+  border: 1px solid rgba(32, 52, 83, 0.2);
+  background: rgba(255, 255, 255, 0.85);
+  color: #223356;
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  border-color: rgba(26, 138, 118, 0.45);
+  background: rgba(26, 138, 118, 0.14);
+  color: #0f6756;
+}
+
+.menu-panel {
+  display: none;
+}
+
+.menu-panel.active {
+  display: block;
 }
 
 .kicker {
@@ -85,6 +158,7 @@ dd {
   font-size: 0.92rem;
   color: #1f2e4b;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .top-row {
@@ -121,6 +195,44 @@ dd {
   border-radius: 0.9rem;
   background: rgba(255, 255, 255, 0.7);
   padding: 0.85rem;
+}
+
+.btn {
+  border: 1px solid rgba(32, 52, 83, 0.2);
+  background: rgba(255, 255, 255, 0.95);
+  color: #213257;
+  border-radius: 0.6rem;
+  padding: 0.45rem 0.72rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-primary {
+  border-color: rgba(26, 138, 118, 0.4);
+  background: rgba(26, 138, 118, 0.14);
+  color: #0f6756;
+}
+
+.btn-danger {
+  border-color: rgba(142, 43, 22, 0.42);
+  background: rgba(142, 43, 22, 0.12);
+  color: #8e2b16;
+}
+
+.action-row {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.queue-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.3rem;
 }
 
 .panel-card-wide {
@@ -168,6 +280,24 @@ dd {
 
   .shell {
     padding: 1.1rem;
+  }
+
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .guild-picker select,
+  .guild-readonly {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .toolbar-actions {
+    width: 100%;
+  }
+
+  .toolbar-actions .btn {
+    flex: 1;
   }
 
   .panel-grid {

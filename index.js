@@ -47,6 +47,7 @@ const { normalizeQueryInput } = require("./src/utils/query");
 const { registerInteractionHandler } = require("./src/handlers/interaction");
 const { registerReadyHandler } = require("./src/handlers/ready");
 const { registerVoiceStateHandler } = require("./src/handlers/voice-state");
+const { createAuthServer } = require("./src/web/auth-server");
 
 dotenv.config();
 const env = loadEnvVars(process.env);
@@ -196,6 +197,45 @@ const {
     }
   },
 });
+
+const authServer = env.authServerEnabled
+  ? createAuthServer({
+    queues,
+    logInfo,
+    logError,
+    isBotInGuild: (guildId) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      if (!normalizedGuildId) {
+        return false;
+      }
+      if (typeof client.isReady === "function" && !client.isReady()) {
+        return true;
+      }
+      return Boolean(client.guilds?.cache?.has(normalizedGuildId));
+    },
+    stopAndLeaveQueue,
+    maybeRefreshNowPlayingUpNext,
+    sendNowPlaying,
+    config: {
+      oauthClientId: env.oauthClientId,
+      oauthClientSecret: env.oauthClientSecret,
+      oauthWebRedirectUri: env.oauthWebRedirectUri,
+      oauthActivityRedirectUri: env.oauthActivityRedirectUri,
+      oauthScopes: env.oauthScopes,
+      host: env.authServerHost,
+      port: env.authServerPort,
+      sessionTtlMs: env.authSessionTtlMs,
+      cookieName: env.authSessionCookieName,
+      cookieSecure: env.authSessionCookieSecure,
+    },
+  })
+  : null;
+
+if (authServer) {
+  authServer.start();
+} else {
+  logInfo("Auth/API server disabled by AUTH_SERVER_ENABLED=0");
+}
 
 const { trySendSearchChooser } = createSearchChooser({
   formatDuration,

@@ -1,6 +1,22 @@
+function parseBooleanEnv(rawValue, fallback = false) {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return fallback;
+  }
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (normalized === "1" || normalized === "true" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no") {
+    return false;
+  }
+  return fallback;
+}
+
 function loadEnvVars(sourceEnv = process.env) {
+  const oauthClientId = sourceEnv.DISCORD_OAUTH_CLIENT_ID || sourceEnv.APPLICATION_ID;
   return {
     token: sourceEnv.DISCORD_TOKEN,
+    applicationId: sourceEnv.APPLICATION_ID,
     youtubeCookies: sourceEnv.YOUTUBE_COOKIES,
     youtubeCookiesPath: sourceEnv.YOUTUBE_COOKIES_PATH,
     youtubeUserAgent: sourceEnv.YOUTUBE_USER_AGENT,
@@ -20,6 +36,17 @@ function loadEnvVars(sourceEnv = process.env) {
     spotifyClientId: sourceEnv.SPOTIFY_CLIENT_ID,
     spotifyClientSecret: sourceEnv.SPOTIFY_CLIENT_SECRET,
     spotifyRefreshToken: sourceEnv.SPOTIFY_REFRESH_TOKEN,
+    oauthClientId,
+    oauthClientSecret: sourceEnv.DISCORD_OAUTH_CLIENT_SECRET,
+    oauthWebRedirectUri: sourceEnv.DISCORD_OAUTH_REDIRECT_URI_WEB,
+    oauthActivityRedirectUri: sourceEnv.DISCORD_OAUTH_REDIRECT_URI_ACTIVITY,
+    oauthScopes: sourceEnv.DISCORD_OAUTH_SCOPES || "identify guilds",
+    authServerEnabled: parseBooleanEnv(sourceEnv.AUTH_SERVER_ENABLED, true),
+    authServerHost: sourceEnv.AUTH_SERVER_HOST || "127.0.0.1",
+    authServerPort: parseInt(sourceEnv.AUTH_SERVER_PORT || "", 10),
+    authSessionTtlMs: parseInt(sourceEnv.AUTH_SESSION_TTL_MS || "", 10),
+    authSessionCookieName: sourceEnv.AUTH_SESSION_COOKIE_NAME || "qdex_session",
+    authSessionCookieSecure: parseBooleanEnv(sourceEnv.AUTH_SESSION_COOKIE_SECURE, true),
   };
 }
 
