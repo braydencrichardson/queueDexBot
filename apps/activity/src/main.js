@@ -3,6 +3,8 @@ import "./style.css";
 
 const root = document.getElementById("app");
 const SDK_READY_TIMEOUT_MS = 10000;
+const UPTIME_INTERVAL_MS = 1000;
+let liveTicker = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -27,6 +29,87 @@ function renderStatus({ title, subtitle, rows = [], error = false }) {
   `;
 }
 
+function formatTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toLocaleTimeString();
+}
+
+function formatUptime(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const segments = [];
+  if (hours > 0) {
+    segments.push(`${hours}h`);
+  }
+  if (minutes > 0 || hours > 0) {
+    segments.push(`${minutes}m`);
+  }
+  segments.push(`${seconds}s`);
+  return segments.join(" ");
+}
+
+function stopLiveTicker() {
+  if (liveTicker) {
+    clearInterval(liveTicker);
+    liveTicker = null;
+  }
+}
+
+function renderLiveDashboard({ connectedAt, sdk }) {
+  const guildId = sdk.guildId || "unknown";
+  const channelId = sdk.channelId || "unknown";
+  const instanceId = sdk.instanceId || "unknown";
+  root.innerHTML = `
+    <section class="shell">
+      <div class="top-row">
+        <p class="kicker">queueDexBot Activity</p>
+        <span class="chip chip-ok">Connected</span>
+      </div>
+      <h1>queueDexBot Live Panel</h1>
+      <p class="subtitle">Activity session is active. Live bot data can plug into this layout next.</p>
+      <section class="panel-grid">
+        <article class="panel-card">
+          <h2>Session</h2>
+          <dl>
+            <dt>Mode</dt><dd>embedded</dd>
+            <dt>Connected at</dt><dd id="connected-at">${escapeHtml(formatTime(connectedAt))}</dd>
+            <dt>Uptime</dt><dd id="uptime">0s</dd>
+          </dl>
+        </article>
+        <article class="panel-card">
+          <h2>Discord Context</h2>
+          <dl>
+            <dt>Guild</dt><dd>${escapeHtml(guildId)}</dd>
+            <dt>Channel</dt><dd>${escapeHtml(channelId)}</dd>
+            <dt>Instance</dt><dd>${escapeHtml(instanceId)}</dd>
+          </dl>
+        </article>
+        <article class="panel-card panel-card-wide">
+          <h2>Now Playing (Next Step)</h2>
+          <p class="muted">No backend feed connected yet. This section will show queue, active track, and controls.</p>
+          <div class="placeholder-line"></div>
+          <div class="placeholder-line short"></div>
+        </article>
+      </section>
+      <p class="footer-note">Local clock: <span id="clock">${escapeHtml(formatTime(new Date()))}</span></p>
+    </section>
+  `;
+
+  stopLiveTicker();
+  liveTicker = setInterval(() => {
+    const uptimeNode = root.querySelector("#uptime");
+    const clockNode = root.querySelector("#clock");
+    if (uptimeNode) {
+      uptimeNode.textContent = formatUptime(Date.now() - connectedAt.getTime());
+    }
+    if (clockNode) {
+      clockNode.textContent = formatTime(new Date());
+    }
+  }, UPTIME_INTERVAL_MS);
+}
+
 function withTimeout(promise, timeoutMs, message) {
   return Promise.race([
     promise,
@@ -37,6 +120,7 @@ function withTimeout(promise, timeoutMs, message) {
 }
 
 async function bootstrap() {
+  stopLiveTicker();
   const query = new URLSearchParams(window.location.search);
   const hasFrameId = query.has("frame_id");
   if (!hasFrameId) {
@@ -73,10 +157,9 @@ async function bootstrap() {
       "Connection timed out. Please close and relaunch this Activity from Discord."
     );
 
-    renderStatus({
-      title: "Activity is live",
-      subtitle: "SDK connected. This is a placeholder view ready for queue controls.",
-      rows: [{ label: "Mode", value: "embedded" }],
+    renderLiveDashboard({
+      connectedAt: new Date(),
+      sdk: discordSdk,
     });
   } catch (error) {
     const message = String(error?.message || "");

@@ -50,6 +50,12 @@ h1 {
   font-size: clamp(1.35rem, 4vw, 2rem);
 }
 
+h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1rem;
+  color: #253457;
+}
+
 .subtitle {
   margin: 0.65rem 0 1.25rem;
   color: #415170;
@@ -81,6 +87,69 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.3rem 0.62rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.chip-ok {
+  color: #0f6756;
+  background: rgba(26, 138, 118, 0.16);
+  border: 1px solid rgba(26, 138, 118, 0.32);
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.panel-card {
+  border: 1px solid rgba(32, 52, 83, 0.12);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 0.85rem;
+}
+
+.panel-card-wide {
+  grid-column: 1 / -1;
+}
+
+.muted {
+  margin: 0 0 0.8rem;
+  color: #57698d;
+  font-size: 0.9rem;
+}
+
+.placeholder-line {
+  height: 0.62rem;
+  border-radius: 0.4rem;
+  background: linear-gradient(90deg, rgba(61, 80, 112, 0.18), rgba(61, 80, 112, 0.1));
+  margin-bottom: 0.45rem;
+}
+
+.placeholder-line.short {
+  width: 60%;
+}
+
+.footer-note {
+  margin: 0.95rem 0 0;
+  color: #506389;
+  font-size: 0.87rem;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -99,6 +168,10 @@ dd {
 
   .shell {
     padding: 1.1rem;
+  }
+
+  .panel-grid {
+    grid-template-columns: 1fr;
   }
 
   dl {
