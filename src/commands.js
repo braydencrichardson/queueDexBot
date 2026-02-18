@@ -20,6 +20,10 @@ const commands = [
     description: "Join your current voice channel",
   },
   {
+    name: "launch",
+    description: "Launch this app's activity in your current voice channel",
+  },
+  {
     name: "pause",
     description: "Pause playback",
   },

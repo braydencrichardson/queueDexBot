@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { MessageFlags } = require("discord.js");
 
 const { createCommandInteractionHandler } = require("../src/handlers/interaction-commands");
 
@@ -80,7 +81,7 @@ test("stop replies ephemerally when nothing is playing and queue is empty", asyn
   await handler(interaction);
 
   assert.equal(stopCalled, false);
-  assert.deepEqual(replyPayload, { content: "Nothing is playing and the queue is empty.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Nothing is playing and the queue is empty.", flags: MessageFlags.Ephemeral });
 });
 
 test("stop requires caller in voice channel when there is active playback", async () => {
@@ -119,7 +120,7 @@ test("stop requires caller in voice channel when there is active playback", asyn
   await handler(interaction);
 
   assert.equal(stopCalled, false);
-  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
 });
 
 test("queue clear reports already empty before voice-channel checks", async () => {
@@ -151,7 +152,7 @@ test("queue clear reports already empty before voice-channel checks", async () =
 
   await handler(interaction);
 
-  assert.deepEqual(replyPayload, { content: "Queue is already empty.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Queue is already empty.", flags: MessageFlags.Ephemeral });
 });
 
 test("queue clear requires user in voice channel before mutating queue", async () => {
@@ -184,7 +185,7 @@ test("queue clear requires user in voice channel before mutating queue", async (
   await handler(interaction);
 
   assert.equal(queue.tracks.length, 1);
-  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
 });
 
 test("join command connects bot to caller voice channel", async () => {
@@ -246,6 +247,113 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(queue.connection, connection);
   assert.equal(subscribeCalledWith, queue.player);
   assert.equal(replyPayload, "Joined **General**.");
+});
+
+test("launch requires caller in voice channel", async () => {
+  let replyPayload = null;
+  const { deps } = createDeps();
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: null } },
+    commandName: "launch",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.deepEqual(replyPayload, {
+    content: "Join a voice channel first.",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
+test("launch reports missing EMBEDDED app flag without attempting launch callback", async () => {
+  let replyPayload = null;
+  let launchCalled = false;
+  const { deps } = createDeps();
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1", name: "General" } } },
+    commandName: "launch",
+    options: {},
+    client: {
+      application: {
+        flags: { has: () => false },
+        fetch: async () => ({ flags: { has: () => false } }),
+      },
+    },
+    launchActivity: async () => {
+      launchCalled = true;
+      return undefined;
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(launchCalled, false);
+  assert.equal(
+    String(replyPayload?.content || "").includes("missing EMBEDDED flag"),
+    true
+  );
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+});
+
+test("launch calls launchActivity and posts a success follow-up", async () => {
+  let launchWithResponse = null;
+  let followUpPayload = null;
+  const { deps } = createDeps();
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1", name: "General" } } },
+    commandName: "launch",
+    options: {},
+    client: {
+      application: {
+        flags: { has: () => true },
+      },
+    },
+    launchActivity: async ({ withResponse }) => {
+      launchWithResponse = withResponse;
+      return {
+        interaction: {
+          activityInstanceId: "activity-1",
+        },
+      };
+    },
+    followUp: async (payload) => {
+      followUpPayload = payload;
+    },
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.equal(launchWithResponse, true);
+  assert.deepEqual(followUpPayload, {
+    content: "Launched activity in **General**. Instance: `activity-1`.",
+    flags: MessageFlags.Ephemeral,
+  });
 });
 
 test("play resolves tracks before joining voice", async () => {
@@ -415,7 +523,7 @@ test("playing reports an error when now playing controls cannot be posted", asyn
 
   await handler(interaction);
 
-  assert.deepEqual(deferReplyPayload, { ephemeral: true });
+  assert.deepEqual(deferReplyPayload, { flags: MessageFlags.Ephemeral });
   assert.deepEqual(editReplyPayload, {
     content: "I couldn't post now playing controls in this channel. Check my message permissions.",
   });

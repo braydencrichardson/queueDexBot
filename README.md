@@ -144,13 +144,57 @@ npm run verify-commands -- --guild
 npm start
 ```
 
+## Run Activity App (Scaffold)
+
+The repo now includes a starter Discord Activity web app at `apps/activity`.
+
+1. Install Activity app dependencies:
+
+```bash
+npm --prefix apps/activity install
+```
+
+2. Configure its env file:
+
+```bash
+cp apps/activity/.env.example apps/activity/.env
+```
+
+Set:
+
+```env
+VITE_DISCORD_CLIENT_ID=YOUR_DISCORD_APPLICATION_ID
+```
+
+3. Start the Activity app:
+
+```bash
+npm run activity:dev
+```
+
+4. Expose it via HTTPS (for web/desktop Activity testing) and set Discord Activity URL Mapping to the tunnel target.
+
+Notes:
+- URL Mapping target should be host/path only (no protocol).
+- Use a directory path target, not a file path.
+
 ## Commands
 
 - `/play query:<url or search>`: Resolve and queue one or more tracks.
 - `/join`: Join your current voice channel.
+- `/launch`: Launch this app's Discord Activity in your current voice channel.
 - `/playing`: Post now-playing controls in channel.
 - `/pause`, `/resume`, `/skip`, `/stop`: Playback controls.
 - `/queue view|clear|shuffle|remove|move`: Queue management.
+
+## Activity Troubleshooting
+
+If you see `*.discordsays.com refused to connect`:
+
+1. Confirm the app has Activities enabled (`EMBEDDED` flag) in the Discord Developer Portal.
+2. Confirm URL Mapping target is valid and reachable from Discord.
+3. For desktop/web clients, confirm the target resolves to HTTPS.
+4. Confirm your Activity host is embeddable (not blocked by `X-Frame-Options` or restrictive `frame-ancestors` CSP).
 
 ## Expected Behavior
 

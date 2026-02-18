@@ -1,3 +1,4 @@
+const { MessageFlags } = require("discord.js");
 const {
   QUEUE_MOVE_MENU_PAGE_SIZE: CONFIG_QUEUE_MOVE_MENU_PAGE_SIZE,
   QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE,
@@ -91,7 +92,7 @@ function createButtonInteractionHandler(deps) {
 
   return async function handleButtonInteraction(interaction) {
     if (!interaction.guildId) {
-      await interaction.reply({ content: "Buttons can only be used in a server.", ephemeral: true });
+      await interaction.reply({ content: "Buttons can only be used in a server.", flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -102,11 +103,11 @@ function createButtonInteractionHandler(deps) {
     if (customId.startsWith("playlist_view_queue")) {
       const ownerId = customId.split(":")[1];
       if (ownerId && ownerId !== interaction.user.id) {
-        await interaction.reply({ content: "Only the requester can use this queue shortcut.", ephemeral: true });
+        await interaction.reply({ content: "Only the requester can use this queue shortcut.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (!queue.current && !queue.tracks.length) {
-        await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+        await interaction.reply({ content: "Queue is empty.", flags: MessageFlags.Ephemeral });
         return;
       }
       const pageSize = queueViewPageSize;
@@ -124,11 +125,11 @@ function createButtonInteractionHandler(deps) {
     if (customId === "search_close" || customId === "search_queue_first") {
       const pending = pendingSearches.get(interaction.message.id);
       if (!pending) {
-        await interaction.reply({ content: "That search has expired.", ephemeral: true });
+        await interaction.reply({ content: "That search has expired.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (interaction.user.id !== pending.requesterId) {
-        await interaction.reply({ content: "Only the requester can use this search.", ephemeral: true });
+        await interaction.reply({ content: "Only the requester can use this search.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (customId === "search_queue_first") {
@@ -139,7 +140,7 @@ function createButtonInteractionHandler(deps) {
           return;
         }
         if (!isSameVoiceChannel(member, queue)) {
-          await interaction.reply({ content: "Join my voice channel to choose a result.", ephemeral: true });
+          await interaction.reply({ content: "Join my voice channel to choose a result.", flags: MessageFlags.Ephemeral });
           return;
         }
         await queueSearchSelection({
@@ -171,16 +172,16 @@ function createButtonInteractionHandler(deps) {
       if (!queue.nowPlayingMessageId || interaction.message.id !== queue.nowPlayingMessageId) {
         await interaction.reply({
           content: "That now playing message is no longer active. Use /playing to post a new one.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
       if (!isSameVoiceChannel(member, queue)) {
-        await interaction.reply({ content: "Join my voice channel to control playback.", ephemeral: true });
+        await interaction.reply({ content: "Join my voice channel to control playback.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (customId === "np_queue" && !queue.current && !queue.tracks.length) {
-        await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+        await interaction.reply({ content: "Queue is empty.", flags: MessageFlags.Ephemeral });
         return;
       }
       await interaction.deferUpdate();
@@ -242,16 +243,16 @@ function createButtonInteractionHandler(deps) {
     if (customId.startsWith("queued_")) {
       const pending = pendingQueuedActions.get(interaction.message.id);
       if (!pending) {
-        await interaction.reply({ content: "That queued action has expired.", ephemeral: true });
+        await interaction.reply({ content: "That queued action has expired.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (interaction.user.id !== pending.ownerId) {
-        await interaction.reply({ content: "Only the requester can use these controls.", ephemeral: true });
+        await interaction.reply({ content: "Only the requester can use these controls.", flags: MessageFlags.Ephemeral });
         return;
       }
       const trackIndex = getTrackIndexById(queue, pending.trackId);
       if (trackIndex < 0) {
-        await interaction.reply({ content: "That track is no longer in the queue.", ephemeral: true });
+        await interaction.reply({ content: "That track is no longer in the queue.", flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -274,7 +275,7 @@ function createButtonInteractionHandler(deps) {
       if (customId === "queued_move") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedIndex = trackIndex + 1;
@@ -312,7 +313,7 @@ function createButtonInteractionHandler(deps) {
       if (customId === "queued_first") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const moved = moveQueuedTrackToFront(queue, trackIndex + 1);
@@ -329,7 +330,7 @@ function createButtonInteractionHandler(deps) {
       if (customId === "queued_remove") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const removed = removeQueuedTrackAt(queue, trackIndex + 1);
@@ -351,11 +352,11 @@ function createButtonInteractionHandler(deps) {
     if (customId.startsWith("move_")) {
       const pending = pendingMoves.get(interaction.message.id);
       if (!pending) {
-        await interaction.reply({ content: "That move request has expired.", ephemeral: true });
+        await interaction.reply({ content: "That move request has expired.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (interaction.user.id !== pending.ownerId) {
-        await interaction.reply({ content: "Only the requester can control this move request.", ephemeral: true });
+        await interaction.reply({ content: "Only the requester can control this move request.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (customId === "move_close") {
@@ -371,12 +372,12 @@ function createButtonInteractionHandler(deps) {
         const guildQueue = getGuildQueue(interaction.guildId);
         const voiceChannelCheck = getVoiceChannelCheck(member, guildQueue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const currentIndex = pending.trackId ? getTrackIndexById(guildQueue, pending.trackId) + 1 : pending.sourceIndex;
         if (!currentIndex || !guildQueue.tracks[currentIndex - 1]) {
-          await interaction.reply({ content: "Selected track no longer exists.", ephemeral: true });
+          await interaction.reply({ content: "Selected track no longer exists.", flags: MessageFlags.Ephemeral });
           return;
         }
         const moved = moveQueuedTrackToFront(guildQueue, currentIndex);
@@ -422,11 +423,11 @@ function createButtonInteractionHandler(deps) {
     if (customId.startsWith("queue_")) {
       const queueView = queueViews.get(interaction.message.id);
       if (!queueView) {
-        await interaction.reply({ content: "That queue view has expired.", ephemeral: true });
+        await interaction.reply({ content: "That queue view has expired.", flags: MessageFlags.Ephemeral });
         return;
       }
       if (interaction.user.id !== queueView.ownerId) {
-        await interaction.reply({ content: "Only the requester can control this queue view.", ephemeral: true });
+        await interaction.reply({ content: "Only the requester can control this queue view.", flags: MessageFlags.Ephemeral });
         return;
       }
       let postUpdateAction = null;
@@ -443,7 +444,7 @@ function createButtonInteractionHandler(deps) {
         queueView.page += 1;
       } else if (customId === "queue_select_prev" || customId === "queue_select_next" || customId === "queue_select_last") {
         if (!queue.tracks.length) {
-          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+          await interaction.reply({ content: "Queue is empty.", flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedIndex = queueView.selectedTrackId
@@ -478,7 +479,7 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_shuffle") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         shuffleQueuedTracks(queue);
@@ -486,12 +487,12 @@ function createButtonInteractionHandler(deps) {
         queueView.selectedTrackId = null;
       } else if (customId === "queue_clear") {
         if (!queue.tracks.length) {
-          await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
+          await interaction.reply({ content: "Queue is already empty.", flags: MessageFlags.Ephemeral });
           return;
         }
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const removedCount = queue.tracks.length;
@@ -508,14 +509,14 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_move") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
         if (!selectedIndex || !queue.tracks[selectedIndex - 1]) {
-          await interaction.reply({ content: "Select a track to move.", ephemeral: true });
+          await interaction.reply({ content: "Select a track to move.", flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedTrack = queue.tracks[selectedIndex - 1];
@@ -552,20 +553,20 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_backward" || customId === "queue_forward") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
         if (!selectedIndex || !queue.tracks[selectedIndex - 1]) {
-          await interaction.reply({ content: "Select a track to move.", ephemeral: true });
+          await interaction.reply({ content: "Select a track to move.", flags: MessageFlags.Ephemeral });
           return;
         }
         const step = customId === "queue_backward" ? -1 : 1;
         const targetIndex = selectedIndex + step;
         if (targetIndex < 1 || targetIndex > queue.tracks.length) {
-          await interaction.reply({ content: "Track is already at the edge.", ephemeral: true });
+          await interaction.reply({ content: "Track is already at the edge.", flags: MessageFlags.Ephemeral });
           return;
         }
         const moved = moveQueuedTrackToPosition(queue, selectedIndex, targetIndex);
@@ -576,14 +577,14 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_remove") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
         if (!selectedIndex || !queue.tracks[selectedIndex - 1]) {
-          await interaction.reply({ content: "Select a track to remove.", ephemeral: true });
+          await interaction.reply({ content: "Select a track to remove.", flags: MessageFlags.Ephemeral });
           return;
         }
         const removed = removeQueuedTrackAt(queue, selectedIndex);
@@ -599,14 +600,14 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_front") {
         const voiceChannelCheck = getVoiceChannelCheck(member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedIndex = queueView.selectedTrackId
           ? getTrackIndexById(queue, queueView.selectedTrackId) + 1
           : 0;
         if (!selectedIndex || !queue.tracks[selectedIndex - 1]) {
-          await interaction.reply({ content: "Select a track to move.", ephemeral: true });
+          await interaction.reply({ content: "Select a track to move.", flags: MessageFlags.Ephemeral });
           return;
         }
         const moved = moveQueuedTrackToFront(queue, selectedIndex);

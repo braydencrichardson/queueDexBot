@@ -6,7 +6,10 @@
     "deploy-commands": "node deploy-commands.js",
     "verify-commands": "node verify-commands.js",
     "start": "node index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "activity:dev": "npm --prefix apps/activity run dev",
+    "activity:build": "npm --prefix apps/activity run build",
+    "activity:preview": "npm --prefix apps/activity run preview"
   },
   "keywords": [],
   "author": "",

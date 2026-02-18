@@ -1,0 +1,112 @@
+:root {
+  color-scheme: light;
+  font-family: "Sora", "Avenir Next", "Segoe UI", sans-serif;
+  line-height: 1.45;
+  font-weight: 400;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: #172034;
+  background:
+    radial-gradient(50rem 30rem at 10% 15%, rgba(40, 209, 184, 0.22), transparent 60%),
+    radial-gradient(48rem 28rem at 95% 5%, rgba(250, 146, 71, 0.3), transparent 60%),
+    linear-gradient(165deg, #fffdf7 0%, #f6fbff 65%, #f9fff8 100%);
+  padding: 2rem;
+}
+
+#app {
+  width: min(52rem, 100%);
+}
+
+.shell {
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(23, 32, 52, 0.12);
+  border-radius: 1.25rem;
+  box-shadow: 0 2rem 4rem rgba(23, 32, 52, 0.12);
+  backdrop-filter: blur(5px);
+  padding: clamp(1.25rem, 3vw, 2rem);
+  animation: rise 250ms ease-out;
+}
+
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 0.72rem;
+  margin: 0 0 0.5rem;
+  color: #1a8a76;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.35rem, 4vw, 2rem);
+}
+
+.subtitle {
+  margin: 0.65rem 0 1.25rem;
+  color: #415170;
+}
+
+.subtitle.error {
+  color: #8e2b16;
+}
+
+dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.6rem 1rem;
+}
+
+dt {
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #687a9f;
+}
+
+dd {
+  margin: 0;
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.92rem;
+  color: #1f2e4b;
+  overflow-wrap: anywhere;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 1rem;
+  }
+
+  .shell {
+    padding: 1.1rem;
+  }
+
+  dl {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+
+  dt {
+    margin-top: 0.5rem;
+  }
+}

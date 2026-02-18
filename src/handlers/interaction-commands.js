@@ -1,3 +1,4 @@
+const { ApplicationFlagsBitField, MessageFlags } = require("discord.js");
 const { QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
 const { getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
@@ -63,7 +64,7 @@ function createCommandInteractionHandler(deps) {
       await interaction.editReply("Could not load that track or playlist.");
       await interaction.followUp({
         content: "That link redirected in a way the resolver could not follow. Try the final/canonical URL directly.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -72,7 +73,7 @@ function createCommandInteractionHandler(deps) {
       await interaction.editReply("Could not load that track or playlist.");
       await interaction.followUp({
         content: "That SoundCloud discover link could not be loaded. Try a direct track or playlist link instead.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -85,7 +86,7 @@ function createCommandInteractionHandler(deps) {
         : "That Spotify playlist appears private/collaborative or otherwise restricted for bot-side resolution. Try a public playlist link or queue individual tracks.";
       await interaction.followUp({
         content: guidance,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -94,11 +95,89 @@ function createCommandInteractionHandler(deps) {
       await interaction.editReply("Could not load that track or playlist.");
       await interaction.followUp({
         content: "Spotify playlist/album support is not configured. Add `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `SPOTIFY_REFRESH_TOKEN` in `.env`.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
     await interaction.editReply("Could not load that track or playlist.");
+  }
+
+  function buildEphemeralPayload(content) {
+    return {
+      content,
+      flags: MessageFlags.Ephemeral,
+    };
+  }
+
+  async function safeReplyOrFollowUp(interaction, payload, context = "interaction response") {
+    const tryReply = async () => {
+      if (typeof interaction.reply !== "function") {
+        return false;
+      }
+      await interaction.reply(payload);
+      return true;
+    };
+    const tryFollowUp = async () => {
+      if (typeof interaction.followUp !== "function") {
+        return false;
+      }
+      await interaction.followUp(payload);
+      return true;
+    };
+
+    const preferFollowUp = Boolean(interaction.deferred || interaction.replied);
+    const primary = preferFollowUp ? tryFollowUp : tryReply;
+    const fallback = preferFollowUp ? tryReply : tryFollowUp;
+
+    try {
+      if (await primary()) {
+        return true;
+      }
+      return await fallback();
+    } catch (error) {
+      if (error?.code === 40060) {
+        try {
+          return await fallback();
+        } catch (fallbackError) {
+          if (fallbackError?.code === 10062) {
+            logInfo(`${context} skipped (unknown interaction)`, {
+              guild: interaction.guildId,
+              command: interaction.commandName,
+            });
+            return false;
+          }
+          throw fallbackError;
+        }
+      }
+      if (error?.code === 10062) {
+        logInfo(`${context} skipped (unknown interaction)`, {
+          guild: interaction.guildId,
+          command: interaction.commandName,
+        });
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async function hasEmbeddedActivityFlag(interaction) {
+    const cachedFlags = interaction?.client?.application?.flags;
+    if (cachedFlags?.has?.(ApplicationFlagsBitField.Flags.Embedded)) {
+      return true;
+    }
+
+    const fetchApplication = interaction?.client?.application?.fetch;
+    if (typeof fetchApplication !== "function") {
+      return false;
+    }
+
+    try {
+      const application = await interaction.client.application.fetch();
+      return Boolean(application?.flags?.has?.(ApplicationFlagsBitField.Flags.Embedded));
+    } catch (error) {
+      logError("Failed to fetch application flags while checking activity support", error);
+      return false;
+    }
   }
 
   return async function handleCommandInteraction(interaction) {
@@ -110,7 +189,7 @@ function createCommandInteractionHandler(deps) {
     }
 
     if (!interaction.guildId) {
-      await interaction.reply({ content: "Commands can only be used in a server.", ephemeral: true });
+      await interaction.reply({ content: "Commands can only be used in a server.", flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -128,13 +207,13 @@ function createCommandInteractionHandler(deps) {
       const query = normalizeQueryInput(interaction.options.getString("query", true));
       const voiceChannel = interaction.member?.voice?.channel;
       if (!voiceChannel) {
-        await interaction.reply({ content: "Join a voice channel first.", ephemeral: true });
+        await interaction.reply({ content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
         return;
       }
 
       const queueVoiceChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
       if (queueVoiceChannelId && queueVoiceChannelId !== voiceChannel.id) {
-        await interaction.reply({ content: "I am already playing in another voice channel.", ephemeral: true });
+        await interaction.reply({ content: "I am already playing in another voice channel.", flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -307,7 +386,7 @@ function createCommandInteractionHandler(deps) {
         try {
           await interaction.followUp({
             content: "Spotify links without credentials only include the track title. For best results, use `/play Artist - Title`.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           logInfo("Sent Spotify hint message", { user: interaction.user.tag });
         } catch (error) {
@@ -326,13 +405,13 @@ function createCommandInteractionHandler(deps) {
     if (interaction.commandName === "join") {
       const voiceChannel = interaction.member?.voice?.channel;
       if (!voiceChannel) {
-        await interaction.reply({ content: "Join a voice channel first.", ephemeral: true });
+        await interaction.reply({ content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
         return;
       }
 
       const queueVoiceChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
       if (queueVoiceChannelId === voiceChannel.id) {
-        await interaction.reply({ content: "I am already in your voice channel.", ephemeral: true });
+        await interaction.reply({ content: "I am already in your voice channel.", flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -366,12 +445,69 @@ function createCommandInteractionHandler(deps) {
       return;
     }
 
-    if (interaction.commandName === "playing") {
-      if (!queue.current) {
-        await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
+    if (interaction.commandName === "launch") {
+      const voiceChannel = interaction.member?.voice?.channel;
+      if (!voiceChannel) {
+        await safeReplyOrFollowUp(interaction, buildEphemeralPayload("Join a voice channel first."), "launch validation");
         return;
       }
-      await interaction.deferReply({ ephemeral: true });
+      if (typeof interaction.launchActivity !== "function") {
+        await safeReplyOrFollowUp(
+          interaction,
+          buildEphemeralPayload("Activity launch is not available in this runtime. Upgrade discord.js and redeploy commands."),
+          "launch runtime validation"
+        );
+        return;
+      }
+      const embeddedEnabled = await hasEmbeddedActivityFlag(interaction);
+      if (!embeddedEnabled) {
+        await safeReplyOrFollowUp(
+          interaction,
+          buildEphemeralPayload(
+            "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again."
+          ),
+          "launch app flag validation"
+        );
+        return;
+      }
+
+      try {
+        const response = await interaction.launchActivity({ withResponse: true });
+        const activityInstanceId = response?.interaction?.activityInstanceId
+          || response?.resource?.activityInstance?.id
+          || null;
+        const launchNotice = activityInstanceId
+          ? `Launched activity in **${voiceChannel.name}**. Instance: \`${activityInstanceId}\`.`
+          : `Launched activity in **${voiceChannel.name}**.`;
+        await interaction.followUp({
+          content: launchNotice,
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch (error) {
+        logError("Failed to launch activity", {
+          guild: interaction.guildId,
+          channel: voiceChannel.id,
+          user: interaction.user?.tag,
+          error,
+        });
+        const message = error?.code === 50234
+          ? "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again."
+          : "Couldn't launch this activity. Ensure Activities is enabled for this app and try again.";
+        try {
+          await safeReplyOrFollowUp(interaction, buildEphemeralPayload(message), "launch error response");
+        } catch (replyError) {
+          logError("Failed to send launch failure response", replyError);
+        }
+      }
+      return;
+    }
+
+    if (interaction.commandName === "playing") {
+      if (!queue.current) {
+        await interaction.reply({ content: "Nothing is playing.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const nowPlayingMessage = await sendNowPlaying(queue, true);
       if (!nowPlayingMessage) {
         await interaction.editReply({
@@ -385,12 +521,12 @@ function createCommandInteractionHandler(deps) {
 
     if (interaction.commandName === "pause") {
       if (!queue.current) {
-        await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
+        await interaction.reply({ content: "Nothing is playing.", flags: MessageFlags.Ephemeral });
         return;
       }
       const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
       if (voiceChannelCheck) {
-        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+        await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
       queue.player.pause();
@@ -401,12 +537,12 @@ function createCommandInteractionHandler(deps) {
 
     if (interaction.commandName === "resume") {
       if (!queue.current) {
-        await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
+        await interaction.reply({ content: "Nothing is playing.", flags: MessageFlags.Ephemeral });
         return;
       }
       const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
       if (voiceChannelCheck) {
-        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+        await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
       queue.player.unpause();
@@ -417,12 +553,12 @@ function createCommandInteractionHandler(deps) {
 
     if (interaction.commandName === "skip") {
       if (!queue.current) {
-        await interaction.reply({ content: "Nothing is playing.", ephemeral: true });
+        await interaction.reply({ content: "Nothing is playing.", flags: MessageFlags.Ephemeral });
         return;
       }
       const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
       if (voiceChannelCheck) {
-        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+        await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
       logInfo("Skipping track");
@@ -433,12 +569,12 @@ function createCommandInteractionHandler(deps) {
 
     if (interaction.commandName === "stop") {
       if (!queue.current && !queue.tracks.length) {
-        await interaction.reply({ content: "Nothing is playing and the queue is empty.", ephemeral: true });
+        await interaction.reply({ content: "Nothing is playing and the queue is empty.", flags: MessageFlags.Ephemeral });
         return;
       }
       const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "control playback");
       if (voiceChannelCheck) {
-        await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+        await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
       stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
@@ -451,7 +587,7 @@ function createCommandInteractionHandler(deps) {
 
       if (queueSubcommand === "view") {
         if (!queue.current && !queue.tracks.length) {
-          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+          await interaction.reply({ content: "Queue is empty.", flags: MessageFlags.Ephemeral });
           return;
         }
         const pageSize = queueViewPageSize;
@@ -467,12 +603,12 @@ function createCommandInteractionHandler(deps) {
 
       if (queueSubcommand === "clear") {
         if (!queue.tracks.length) {
-          await interaction.reply({ content: "Queue is already empty.", ephemeral: true });
+          await interaction.reply({ content: "Queue is already empty.", flags: MessageFlags.Ephemeral });
           return;
         }
         const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const removedCount = queue.tracks.length;
@@ -484,12 +620,12 @@ function createCommandInteractionHandler(deps) {
 
       if (queueSubcommand === "shuffle") {
         if (queue.tracks.length < 2) {
-          await interaction.reply({ content: "Need at least two queued tracks to shuffle.", ephemeral: true });
+          await interaction.reply({ content: "Need at least two queued tracks to shuffle.", flags: MessageFlags.Ephemeral });
           return;
         }
         const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         shuffleQueuedTracks(queue);
@@ -501,7 +637,7 @@ function createCommandInteractionHandler(deps) {
       if (queueSubcommand === "loop") {
         const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const selectedMode = interaction.options.getString("mode", true);
@@ -525,17 +661,17 @@ function createCommandInteractionHandler(deps) {
 
       if (queueSubcommand === "remove") {
         if (!queue.tracks.length) {
-          await interaction.reply({ content: "Queue is empty.", ephemeral: true });
+          await interaction.reply({ content: "Queue is empty.", flags: MessageFlags.Ephemeral });
           return;
         }
         const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const index = interaction.options.getInteger("index", true);
         if (!isValidQueuePosition(queue, index)) {
-          await interaction.reply({ content: `Invalid queue position. Choose 1-${queue.tracks.length}.`, ephemeral: true });
+          await interaction.reply({ content: `Invalid queue position. Choose 1-${queue.tracks.length}.`, flags: MessageFlags.Ephemeral });
           return;
         }
         const removed = removeQueuedTrackAt(queue, index);
@@ -546,12 +682,12 @@ function createCommandInteractionHandler(deps) {
 
       if (queueSubcommand === "move") {
         if (queue.tracks.length < 2) {
-          await interaction.reply({ content: "Need at least two queued tracks to move.", ephemeral: true });
+          await interaction.reply({ content: "Need at least two queued tracks to move.", flags: MessageFlags.Ephemeral });
           return;
         }
         const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "manage the queue");
         if (voiceChannelCheck) {
-          await interaction.reply({ content: voiceChannelCheck, ephemeral: true });
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
         const from = interaction.options.getInteger("from", true);
@@ -559,7 +695,7 @@ function createCommandInteractionHandler(deps) {
         if (!isValidQueuePosition(queue, from) || !isValidQueuePosition(queue, to)) {
           await interaction.reply({
             content: `Invalid queue positions. Choose values between 1 and ${queue.tracks.length}.`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           return;
         }
