@@ -16,7 +16,7 @@ test("np_stop uses stopAndLeaveQueue to stop consistently", async () => {
     connection: { destroy() {} },
   };
 
-  let announceCalled = false;
+  const sentMessages = [];
   let stopCalled = false;
   let deferred = false;
   let editedComponents = null;
@@ -26,9 +26,6 @@ test("np_stop uses stopAndLeaveQueue to stop consistently", async () => {
     INTERACTION_TIMEOUT_MS: 45000,
     getGuildQueue: () => queue,
     isSameVoiceChannel: () => true,
-    announceNowPlayingAction: async () => {
-      announceCalled = true;
-    },
     buildNowPlayingControls: () => ({ type: "row" }),
     formatQueueViewContent: () => ({ content: "", page: 1 }),
     buildQueueViewComponents: () => [],
@@ -70,10 +67,16 @@ test("np_stop uses stopAndLeaveQueue to stop consistently", async () => {
       deferred = true;
     },
     reply: async () => {},
-    channel: { send: async () => ({ id: "x" }) },
+    channel: {
+      send: async (content) => {
+        sentMessages.push(String(content));
+        return { id: "x" };
+      },
+    },
   });
 
-  assert.equal(announceCalled, true);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0], "**User#0001** stopped playback and cleared the queue.");
   assert.equal(stopCalled, true);
   assert.equal(queue.playing, false);
   assert.equal(queue.current, null);
@@ -192,7 +195,7 @@ test("np_toggle refreshes now playing content immediately", async () => {
     connection: { destroy() {} },
   };
 
-  let announceCalled = false;
+  const sentMessages = [];
   let sendNowPlayingArgs = null;
   let deferred = false;
 
@@ -201,9 +204,6 @@ test("np_toggle refreshes now playing content immediately", async () => {
     INTERACTION_TIMEOUT_MS: 45000,
     getGuildQueue: () => queue,
     isSameVoiceChannel: () => true,
-    announceNowPlayingAction: async () => {
-      announceCalled = true;
-    },
     buildNowPlayingControls: () => ({ type: "row" }),
     formatQueueViewContent: () => ({ content: "", page: 1 }),
     buildQueueViewComponents: () => [],
@@ -240,11 +240,17 @@ test("np_toggle refreshes now playing content immediately", async () => {
       deferred = true;
     },
     reply: async () => {},
-    channel: { send: async () => ({ id: "x" }) },
+    channel: {
+      send: async (content) => {
+        sentMessages.push(String(content));
+        return { id: "x" };
+      },
+    },
   });
 
   assert.equal(queue.player.pauseCalled, true);
-  assert.equal(announceCalled, true);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0], "**User#0001** paused playback.");
   assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
   assert.equal(deferred, true);
 });
@@ -264,7 +270,7 @@ test("np_toggle resume ensures voice reconnect through queue service", async () 
   };
 
   let queueServiceArgs = null;
-  let announceCalled = false;
+  const sentMessages = [];
   let sendNowPlayingArgs = null;
 
   const handler = createButtonInteractionHandler({
@@ -272,9 +278,6 @@ test("np_toggle resume ensures voice reconnect through queue service", async () 
     INTERACTION_TIMEOUT_MS: 45000,
     getGuildQueue: () => queue,
     isSameVoiceChannel: () => true,
-    announceNowPlayingAction: async () => {
-      announceCalled = true;
-    },
     buildNowPlayingControls: () => ({ type: "row" }),
     formatQueueViewContent: () => ({ content: "", page: 1 }),
     buildQueueViewComponents: () => [],
@@ -319,7 +322,12 @@ test("np_toggle resume ensures voice reconnect through queue service", async () 
     deferUpdate: async () => {},
     reply: async () => {},
     followUp: async () => {},
-    channel: { send: async () => ({ id: "x" }) },
+    channel: {
+      send: async (content) => {
+        sentMessages.push(String(content));
+        return { id: "x" };
+      },
+    },
   });
 
   assert.deepEqual(queueServiceArgs, {
@@ -333,7 +341,8 @@ test("np_toggle resume ensures voice reconnect through queue service", async () 
       },
     },
   });
-  assert.equal(announceCalled, true);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0], "**User#0001** resumed playback.");
   assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
 });
 
@@ -351,7 +360,7 @@ test("np_toggle resume failure does not announce success and reports error", asy
     connection: { destroy() {} },
   };
 
-  let announceCalled = false;
+  const sentMessages = [];
   let sendNowPlayingCalled = false;
   let followUpPayload = null;
 
@@ -360,9 +369,6 @@ test("np_toggle resume failure does not announce success and reports error", asy
     INTERACTION_TIMEOUT_MS: 45000,
     getGuildQueue: () => queue,
     isSameVoiceChannel: () => true,
-    announceNowPlayingAction: async () => {
-      announceCalled = true;
-    },
     buildNowPlayingControls: () => ({ type: "row" }),
     formatQueueViewContent: () => ({ content: "", page: 1 }),
     buildQueueViewComponents: () => [],
@@ -409,10 +415,15 @@ test("np_toggle resume failure does not announce success and reports error", asy
     followUp: async (payload) => {
       followUpPayload = payload;
     },
-    channel: { send: async () => ({ id: "x" }) },
+    channel: {
+      send: async (content) => {
+        sentMessages.push(String(content));
+        return { id: "x" };
+      },
+    },
   });
 
-  assert.equal(announceCalled, false);
+  assert.equal(sentMessages.length, 0);
   assert.equal(sendNowPlayingCalled, false);
   assert.equal(followUpPayload?.content, "I couldn't rejoin the voice channel.");
   assert.equal(followUpPayload?.flags, MessageFlags.Ephemeral);
@@ -433,7 +444,7 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
     connection: { destroy() {} },
   };
 
-  let announcedAction = null;
+  const sentMessages = [];
   let sendNowPlayingArgs = null;
   let refreshCalledWith = null;
   let deferred = false;
@@ -444,9 +455,6 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
     INTERACTION_TIMEOUT_MS: 45000,
     getGuildQueue: () => queue,
     isSameVoiceChannel: () => true,
-    announceNowPlayingAction: async (_queue, action) => {
-      announcedAction = action;
-    },
     buildNowPlayingControls: () => ({ type: "row" }),
     formatQueueViewContent: () => ({ content: "", page: 1 }),
     buildQueueViewComponents: () => [],
@@ -490,7 +498,12 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
       deferred = true;
     },
     reply: async () => {},
-    channel: { send: async () => ({ id: "x" }) },
+    channel: {
+      send: async (content) => {
+        sentMessages.push(String(content));
+        return { id: "x" };
+      },
+    },
   });
 
   assert.equal(queue.loopMode, "queue");
@@ -498,7 +511,8 @@ test("np_loop cycles loop mode and refreshes controls with the new mode", async 
   assert.equal(queue.tracks[0].loopSourceTrackKey, undefined);
   assert.equal(refreshCalledWith, queue);
   assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
-  assert.equal(String(announcedAction).includes("set loop mode to **queue**"), true);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(String(sentMessages[0]).includes("set loop mode to **queue**"), true);
   assert.equal(deferred, true);
 });
 

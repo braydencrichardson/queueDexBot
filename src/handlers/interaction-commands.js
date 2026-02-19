@@ -5,12 +5,13 @@ const { getQueueVoiceChannelId, getVoiceChannelCheck, setExpiringMapEntry } = re
 const { createActivityInviteService } = require("../activity/invite-service");
 const { formatActivityInviteResponse } = require("../activity/invite-message");
 const {
-  formatQueueClearedNotice,
-  formatQueueRemovedNotice,
-  formatMovedMessage,
   formatQueuedMessage,
   formatQueuedPlaylistMessage,
 } = require("../ui/messages");
+const {
+  buildControlActionFeedback,
+  buildQueueActionFeedback,
+} = require("../queue/action-feedback");
 const { formatDuration } = require("../queue/utils");
 const {
   isValidQueuePosition,
@@ -653,7 +654,7 @@ function createCommandInteractionHandler(deps) {
         queue.player.pause();
       }
       logInfo("Pausing playback");
-      await interaction.reply("Paused.");
+      await interaction.reply(buildControlActionFeedback("pause", null, { style: "reply" }));
       return;
     }
 
@@ -684,7 +685,7 @@ function createCommandInteractionHandler(deps) {
         queue.player.unpause();
       }
       logInfo("Resuming playback");
-      await interaction.reply("Resumed.");
+      await interaction.reply(buildControlActionFeedback("resume", null, { style: "reply" }));
       return;
     }
 
@@ -708,7 +709,7 @@ function createCommandInteractionHandler(deps) {
         queue.player.stop(true);
       }
       logInfo("Skipping track");
-      await interaction.reply("Skipped.");
+      await interaction.reply(buildControlActionFeedback("skip", null, { style: "reply" }));
       return;
     }
 
@@ -731,7 +732,7 @@ function createCommandInteractionHandler(deps) {
       } else {
         stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
       }
-      await interaction.reply("Stopped and cleared the queue.");
+      await interaction.reply(buildControlActionFeedback("stop", null, { style: "reply" }));
       return;
     }
 
@@ -776,7 +777,11 @@ function createCommandInteractionHandler(deps) {
           queue.tracks = [];
           await maybeRefreshNowPlayingUpNext(queue);
         }
-        await interaction.reply(formatQueueClearedNotice(removedCount));
+        await interaction.reply(buildQueueActionFeedback(
+          "clear",
+          { result: { removedCount } },
+          { style: "reply" }
+        ));
         return;
       }
 
@@ -800,7 +805,7 @@ function createCommandInteractionHandler(deps) {
           shuffleQueuedTracks(queue);
           await maybeRefreshNowPlayingUpNext(queue);
         }
-        await interaction.reply("Shuffled the queue.");
+        await interaction.reply(buildQueueActionFeedback("shuffle", null, { style: "reply" }));
         return;
       }
 
@@ -838,7 +843,11 @@ function createCommandInteractionHandler(deps) {
         if (loopResult.inserted || loopResult.removed) {
           await queueViewService.refreshGuildViews(interaction.guildId, queue, interaction.client);
         }
-        await interaction.reply(`Loop mode set to **${loopResult.mode}**.`);
+        await interaction.reply(buildQueueActionFeedback(
+          "loop",
+          { result: { loopResult } },
+          { style: "reply" }
+        ));
         return;
       }
 
@@ -869,7 +878,11 @@ function createCommandInteractionHandler(deps) {
           removed = removeQueuedTrackAt(queue, index);
           await maybeRefreshNowPlayingUpNext(queue);
         }
-        await interaction.reply(formatQueueRemovedNotice(removed));
+        await interaction.reply(buildQueueActionFeedback(
+          "remove",
+          { result: { removed } },
+          { style: "reply" }
+        ));
         return;
       }
 
@@ -904,7 +917,11 @@ function createCommandInteractionHandler(deps) {
           moved = moveQueuedTrackToPosition(queue, from, to);
           await maybeRefreshNowPlayingUpNext(queue);
         }
-        await interaction.reply(formatMovedMessage(moved, to));
+        await interaction.reply(buildQueueActionFeedback(
+          "move",
+          { result: { moved, toPosition: to } },
+          { style: "reply" }
+        ));
       }
     }
   };

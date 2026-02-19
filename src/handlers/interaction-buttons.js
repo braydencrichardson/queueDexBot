@@ -14,12 +14,15 @@ const {
 } = require("./interaction-helpers");
 const {
   formatMovePrompt,
-  formatQueueClearedNotice,
-  formatQueueRemovedNotice,
   formatMovedMessage,
   formatQueuedMessage,
   formatRemovedMessage,
 } = require("../ui/messages");
+const {
+  buildControlActionFeedback,
+  buildQueueActionFeedback,
+  sendQueueFeedback,
+} = require("../queue/action-feedback");
 const { formatDuration } = require("../queue/utils");
 const {
   moveQueuedTrackToFront,
@@ -38,7 +41,6 @@ function createButtonInteractionHandler(deps) {
     QUEUE_MOVE_MENU_PAGE_SIZE,
     getGuildQueue,
     isSameVoiceChannel,
-    announceNowPlayingAction,
     buildQueuedActionComponents,
     formatQueueViewContent,
     buildQueueViewComponents,
@@ -74,18 +76,29 @@ function createButtonInteractionHandler(deps) {
     queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
     logError,
   });
-  async function sendQueueActionNotice(channel, content) {
-    if (!channel?.send || !content) {
-      return;
+
+  function getFeedbackChannel(interaction, queue) {
+    if (interaction?.message?.channel?.send) {
+      return interaction.message.channel;
     }
-    try {
-      await channel.send(content);
-    } catch (error) {
-      logError("Failed to send queue action notice", error);
+    if (interaction?.channel?.send) {
+      return interaction.channel;
     }
+    if (queue?.textChannel?.send) {
+      return queue.textChannel;
+    }
+    return null;
   }
-  function getActorName(interaction, member) {
-    return member?.displayName || interaction.user?.username || interaction.user?.tag || "Someone";
+
+  async function sendActionFeedback(interaction, queue, content, context) {
+    return sendQueueFeedback({
+      queue,
+      channel: getFeedbackChannel(interaction, queue),
+      content,
+      logInfo,
+      logError,
+      context,
+    });
   }
 
   function getNextLoopMode(currentMode) {
@@ -315,7 +328,16 @@ function createButtonInteractionHandler(deps) {
             }
             return;
           }
-          await announceNowPlayingAction(queue, "paused playback", interaction.user, member, interaction.message.channel);
+          await sendActionFeedback(
+            interaction,
+            queue,
+            buildControlActionFeedback("pause", {
+              user: interaction.user,
+              member,
+              result: pauseResult,
+            }),
+            "button:np_toggle:pause"
+          );
         } else {
           let resumeResult = { ok: true };
           if (queueService?.resume) {
@@ -339,7 +361,16 @@ function createButtonInteractionHandler(deps) {
             }
             return;
           }
-          await announceNowPlayingAction(queue, "resumed playback", interaction.user, member, interaction.message.channel);
+          await sendActionFeedback(
+            interaction,
+            queue,
+            buildControlActionFeedback("resume", {
+              user: interaction.user,
+              member,
+              result: resumeResult,
+            }),
+            "button:np_toggle:resume"
+          );
         }
         await sendNowPlaying(queue, false);
       } else if (customId === "np_queue") {
@@ -352,7 +383,15 @@ function createButtonInteractionHandler(deps) {
         });
         await queueViewService.sendToChannel(interaction.channel, queue, view);
       } else if (customId === "np_skip") {
-        await announceNowPlayingAction(queue, "skipped the track", interaction.user, member, interaction.message.channel);
+        await sendActionFeedback(
+          interaction,
+          queue,
+          buildControlActionFeedback("skip", {
+            user: interaction.user,
+            member,
+          }),
+          "button:np_skip"
+        );
         if (queueService?.skip) {
           await queueService.skip(queue);
         } else {
@@ -383,10 +422,27 @@ function createButtonInteractionHandler(deps) {
         if (loopResult.inserted || loopResult.removed) {
           await queueViewService.refreshGuildViews(interaction.guildId, queue, interaction.client);
         }
-        await announceNowPlayingAction(queue, `set loop mode to **${loopResult.mode}**`, interaction.user, member, interaction.message.channel);
+        await sendActionFeedback(
+          interaction,
+          queue,
+          buildQueueActionFeedback("loop", {
+            user: interaction.user,
+            member,
+            result: { loopResult },
+          }),
+          "button:np_loop"
+        );
         await sendNowPlaying(queue, false);
       } else if (customId === "np_stop") {
-        await announceNowPlayingAction(queue, "stopped playback and cleared the queue", interaction.user, member, interaction.message.channel);
+        await sendActionFeedback(
+          interaction,
+          queue,
+          buildControlActionFeedback("stop", {
+            user: interaction.user,
+            member,
+          }),
+          "button:np_stop"
+        );
         if (queueService?.stop) {
           await queueService.stop(queue, { reason: "Stopping playback and clearing queue" });
         } else {
@@ -516,9 +572,15 @@ function createButtonInteractionHandler(deps) {
           await maybeRefreshNowPlayingUpNext(queue);
         }
         logInfo("Removed track via queued controls", { title: removed?.title, user: interaction.user.tag });
-        await sendQueueActionNotice(
-          interaction.channel,
-          formatQueueRemovedNotice(removed, getActorName(interaction, member))
+        await sendActionFeedback(
+          interaction,
+          queue,
+          buildQueueActionFeedback("remove", {
+            user: interaction.user,
+            member,
+            result: { removed },
+          }),
+          "button:queued_remove"
         );
         await interaction.update({
           content: formatRemovedMessage(removed),
@@ -711,9 +773,15 @@ function createButtonInteractionHandler(deps) {
         queueView.selectedTrackId = null;
         logInfo("Cleared queue via queue view", { user: interaction.user.tag });
         postUpdateAction = async () => {
-          await sendQueueActionNotice(
-            interaction.channel,
-            formatQueueClearedNotice(removedCount, getActorName(interaction, member))
+          await sendActionFeedback(
+            interaction,
+            queue,
+            buildQueueActionFeedback("clear", {
+              user: interaction.user,
+              member,
+              result: { removedCount },
+            }),
+            "button:queue_clear"
           );
         };
       } else if (customId === "queue_move") {
@@ -818,9 +886,15 @@ function createButtonInteractionHandler(deps) {
         logInfo("Removed track via queue view", { title: removed?.title, user: interaction.user.tag });
         queueView.selectedTrackId = null;
         postUpdateAction = async () => {
-          await sendQueueActionNotice(
-            interaction.channel,
-            formatQueueRemovedNotice(removed, getActorName(interaction, member))
+          await sendActionFeedback(
+            interaction,
+            queue,
+            buildQueueActionFeedback("remove", {
+              user: interaction.user,
+              member,
+              result: { removed },
+            }),
+            "button:queue_remove"
           );
         };
       } else if (customId === "queue_front") {

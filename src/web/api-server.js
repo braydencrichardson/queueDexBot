@@ -3,6 +3,11 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { createQueueService } = require("../queue/service");
+const {
+  buildControlActionFeedback,
+  buildQueueActionFeedback,
+  sendQueueFeedback,
+} = require("../queue/action-feedback");
 
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DEFAULT_OAUTH_SCOPES = "identify guilds";
@@ -1032,6 +1037,16 @@ function createApiServer(options) {
         guildId,
         user: session?.user?.username || session?.user?.id || "unknown",
       });
+      await sendQueueFeedback({
+        queue,
+        content: buildControlActionFeedback(action, {
+          sessionUser: session?.user,
+          result,
+        }),
+        logInfo,
+        logError,
+        context: `api_control:${action}`,
+      });
 
       sendJson(response, 200, {
         ok: true,
@@ -1112,6 +1127,16 @@ function createApiServer(options) {
         position,
         mode,
         user: session?.user?.username || session?.user?.id || "unknown",
+      });
+      await sendQueueFeedback({
+        queue,
+        content: buildQueueActionFeedback(action, {
+          sessionUser: session?.user,
+          result,
+        }),
+        logInfo,
+        logError,
+        context: `api_queue:${action}`,
       });
 
       sendJson(response, 200, {

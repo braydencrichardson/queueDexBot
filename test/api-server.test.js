@@ -249,6 +249,67 @@ test("api control allows playback action for user in same voice channel", async 
   }
 });
 
+test("api control posts text-channel feedback for playback actions", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let pauseCalled = false;
+  const sentMessages = [];
+  const queue = {
+    current: { id: "track-1", title: "Song" },
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    textChannel: {
+      async send(content) {
+        sentMessages.push(String(content));
+      },
+    },
+    player: {
+      state: { status: "playing" },
+      pause() {
+        pauseCalled = true;
+      },
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/control",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "pause",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(pauseCalled, true);
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0], "**User One** paused playback.");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("api control resume forwards ensure-voice options to queue service", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();
@@ -688,6 +749,66 @@ test("activity queue action move reorders queue when authorized", async () => {
     assert.equal(response.json?.result?.fromPosition, 3);
     assert.equal(response.json?.result?.toPosition, 1);
     assert.deepEqual(queue.tracks.map((track) => track.title), ["Three", "One", "Two"]);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue action posts text-channel feedback for queue edits", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const sentMessages = [];
+  const queue = {
+    current: { id: "now-1", title: "Now" },
+    tracks: [
+      { id: "t-1", title: "One" },
+      { id: "t-2", title: "Two" },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    textChannel: {
+      async send(content) {
+        sentMessages.push(String(content));
+      },
+    },
+    player: {
+      state: { status: "playing" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/action",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "remove",
+        position: 2,
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0], "User One removed Two from the queue.");
   } finally {
     global.fetch = originalFetch;
   }
