@@ -670,8 +670,16 @@ function createCommandInteractionHandler(deps) {
           await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
-        shuffleQueuedTracks(queue);
-        await maybeRefreshNowPlayingUpNext(queue);
+        if (queueService?.shuffle) {
+          const result = await queueService.shuffle(queue, { refreshNowPlayingUpNext: true });
+          if (!result.ok) {
+            await interaction.reply({ content: result.error || "Failed to shuffle queue.", flags: MessageFlags.Ephemeral });
+            return;
+          }
+        } else {
+          shuffleQueuedTracks(queue);
+          await maybeRefreshNowPlayingUpNext(queue);
+        }
         await interaction.reply("Shuffled the queue.");
         return;
       }
@@ -683,7 +691,22 @@ function createCommandInteractionHandler(deps) {
           return;
         }
         const selectedMode = interaction.options.getString("mode", true);
-        const loopResult = setQueueLoopMode(queue, selectedMode, ensureTrackId);
+        let loopResult = null;
+        if (queueService?.setLoopMode) {
+          const result = await queueService.setLoopMode(queue, selectedMode, {
+            refreshNowPlayingUpNext: true,
+            refreshNowPlaying: true,
+          });
+          if (!result.ok) {
+            await interaction.reply({ content: result.error || "Failed to set loop mode.", flags: MessageFlags.Ephemeral });
+            return;
+          }
+          loopResult = result.loopResult;
+        } else {
+          loopResult = setQueueLoopMode(queue, selectedMode, ensureTrackId);
+          await maybeRefreshNowPlayingUpNext(queue);
+          await sendNowPlaying(queue, false);
+        }
         logInfo("Loop mode updated via queue command", {
           guildId: interaction.guildId,
           user: interaction.user?.tag,
@@ -692,8 +715,6 @@ function createCommandInteractionHandler(deps) {
           inserted: loopResult.inserted,
           removed: loopResult.removed,
         });
-        await maybeRefreshNowPlayingUpNext(queue);
-        await sendNowPlaying(queue, false);
         if (loopResult.inserted || loopResult.removed) {
           await queueViewService.refreshGuildViews(interaction.guildId, queue, interaction.client);
         }
@@ -716,8 +737,18 @@ function createCommandInteractionHandler(deps) {
           await interaction.reply({ content: `Invalid queue position. Choose 1-${queue.tracks.length}.`, flags: MessageFlags.Ephemeral });
           return;
         }
-        const removed = removeQueuedTrackAt(queue, index);
-        await maybeRefreshNowPlayingUpNext(queue);
+        let removed = null;
+        if (queueService?.removeAt) {
+          const result = await queueService.removeAt(queue, index, { refreshNowPlayingUpNext: true });
+          if (!result.ok) {
+            await interaction.reply({ content: result.error || "Failed to remove track.", flags: MessageFlags.Ephemeral });
+            return;
+          }
+          removed = result.removed;
+        } else {
+          removed = removeQueuedTrackAt(queue, index);
+          await maybeRefreshNowPlayingUpNext(queue);
+        }
         await interaction.reply(formatQueueRemovedNotice(removed));
         return;
       }
@@ -741,8 +772,18 @@ function createCommandInteractionHandler(deps) {
           });
           return;
         }
-        const moved = moveQueuedTrackToPosition(queue, from, to);
-        await maybeRefreshNowPlayingUpNext(queue);
+        let moved = null;
+        if (queueService?.move) {
+          const result = await queueService.move(queue, from, to, { refreshNowPlayingUpNext: true });
+          if (!result.ok) {
+            await interaction.reply({ content: result.error || "Failed to move track.", flags: MessageFlags.Ephemeral });
+            return;
+          }
+          moved = result.moved;
+        } else {
+          moved = moveQueuedTrackToPosition(queue, from, to);
+          await maybeRefreshNowPlayingUpNext(queue);
+        }
         await interaction.reply(formatMovedMessage(moved, to));
       }
     }

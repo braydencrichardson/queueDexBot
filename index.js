@@ -211,6 +211,7 @@ const queueService = createQueueService({
   stopAndLeaveQueue,
   maybeRefreshNowPlayingUpNext,
   sendNowPlaying,
+  ensureTrackId,
 });
 
 const apiServer = env.authServerEnabled
