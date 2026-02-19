@@ -106,7 +106,12 @@ body {
 body.pip-active {
   place-items: stretch;
   padding: 0;
-  background: transparent;
+  background:
+    linear-gradient(165deg, rgba(4, 8, 18, 0.88), rgba(2, 5, 12, 0.82)),
+    radial-gradient(48rem 30rem at 10% 15%, color-mix(in srgb, var(--glow-aqua) 72%, transparent), transparent 60%),
+    radial-gradient(50rem 28rem at 95% 5%, color-mix(in srgb, var(--glow-magenta) 72%, transparent), transparent 62%),
+    radial-gradient(38rem 24rem at 70% 80%, color-mix(in srgb, var(--glow-cyan) 72%, transparent), transparent 62%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3), var(--bg-4), var(--bg-5));
   overflow: hidden;
   min-height: 100dvh;
   height: 100dvh;
@@ -332,12 +337,6 @@ dd {
   outline-offset: 2px;
 }
 
-.panel-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.8rem;
-}
-
 .panel-card {
   border: 1px solid var(--border);
   border-radius: 0.9rem;
@@ -417,6 +416,18 @@ dd {
 }
 
 .pip-mode {
+  --pip-base: min(100vw, 100dvh);
+  --pip-edge: clamp(1rem, calc(var(--pip-base) * 0.035), 0.78rem);
+  --pip-art-size: clamp(6.5rem, calc(var(--pip-base) * 0.39), 7rem);
+  --pip-dot-size: clamp(0.46rem, calc(var(--pip-base) * 0.034), 0.7rem);
+  --pip-outer-gap: minmax(0.5rem, 1fr);
+  --pip-middle-gap: minmax(0.5rem, 3fr);
+  --pip-title-size: clamp(0.88rem, calc(var(--pip-base) * 0.066), 1.02rem);
+  --pip-subtext-size: clamp(0.74rem, calc(var(--pip-base) * 0.047), 0.84rem);
+  --pip-meta-size: clamp(0.7rem, calc(var(--pip-base) * 0.042), 0.79rem);
+  --pip-progress-height: clamp(0.38rem, calc(var(--pip-base) * 0.024), 0.52rem);
+  --pip-footer-height: max(var(--pip-dot-size), var(--pip-progress-height));
+  border-radius: 0;
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -427,32 +438,153 @@ dd {
   overflow: hidden;
 }
 
-.playback-panel.pip {
-  margin: 0;
-  height: 100%;
-}
-
-.playback-panel.pip .panel-card {
-  padding: 0.55rem;
+.pip-now-playing {
+  position: relative;
+  padding: var(--pip-edge);
   min-height: 100%;
   height: 100%;
+  width: 100%;
   overflow: hidden;
+  display: grid;
+  grid-template-rows:
+    var(--pip-outer-gap)
+    var(--pip-art-size)
+    var(--pip-middle-gap)
+    var(--pip-footer-height)
+    var(--pip-outer-gap);
+  background:
+    linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3), var(--bg-4), var(--bg-5));
+  box-shadow:
+    0 0 1.2rem color-mix(in srgb, var(--glow-cyan) 52%, transparent),
+    0 0 1.15rem color-mix(in srgb, var(--glow-magenta) 36%, transparent);
 }
 
-.panel-card-pip h2 {
-  margin-bottom: 0.45rem;
-  font-size: 0.92rem;
+.pip-now-playing-ready {
+  grid-template-rows:
+    var(--pip-outer-gap)
+    minmax(0, 1fr)
+    var(--pip-footer-height)
+    var(--pip-outer-gap);
 }
 
-.pip-card-header {
-  display: flex;
+.pip-track-row {
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: var(--pip-art-size) minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 0.45rem;
+  column-gap: var(--pip-edge);
+  min-height: 0;
 }
 
-.pip-card-header h2 {
+.pip-art-link {
+  width: var(--pip-art-size);
+  height: var(--pip-art-size);
+  border-radius: clamp(0.5rem, calc(var(--pip-base) * 0.03), 0.78rem);
+  border: 1px solid color-mix(in srgb, var(--primary) 52%, var(--border));
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  box-shadow:
+    0 0 1rem color-mix(in srgb, var(--glow-magenta) 52%, transparent),
+    0 0 0.7rem color-mix(in srgb, var(--glow-cyan) 46%, transparent);
+}
+
+.pip-art-static {
+  cursor: default;
+}
+
+.pip-art-image,
+.pip-art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.pip-art-image {
+  object-fit: cover;
+}
+
+.pip-track-meta {
+  min-width: 0;
+  min-height: var(--pip-art-size);
+  padding-right: calc(var(--pip-dot-size) + 0.35rem);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.pip-track-title {
+  line-height: 1.2;
+}
+
+.pip-track-title-link,
+.pip-track-title-text {
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: var(--pip-title-size);
+  text-decoration: none;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.pip-track-title-link:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
+}
+
+.pip-track-title-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.pip-track-artist {
+  margin: 0.11rem 0 0;
+  font-size: var(--pip-subtext-size);
+  line-height: 1.22;
+  color: color-mix(in srgb, var(--text-secondary) 88%, white 12%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pip-track-duration {
+  margin: 0.11rem 0 0;
+  font-size: var(--pip-meta-size);
+  line-height: 1.2;
+  color: color-mix(in srgb, var(--text-secondary) 78%, white 22%);
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.pip-ready-state {
+  grid-row: 2;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 0.24rem;
+}
+
+.pip-ready-title {
   margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(0.9rem, calc(var(--pip-base) * 0.07), 1.04rem);
+  font-weight: 700;
+}
+
+.pip-ready-subtitle {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-secondary) 82%, white 18%);
+  font-size: clamp(0.74rem, calc(var(--pip-base) * 0.05), 0.84rem);
 }
 
 .connection-dot {
@@ -483,14 +615,9 @@ dd {
   background: var(--danger);
 }
 
-.playback-panel.pip .playback-progress-wrap {
-  margin-top: 0.45rem;
-  padding: 0.42rem 0.5rem;
-}
-
 .progress-bar-static {
   width: 100%;
-  height: 0.46rem;
+  height: 0.5rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--accent-soft) 50%, transparent);
@@ -506,22 +633,45 @@ dd {
   transition: width 180ms linear;
 }
 
-.playback-panel.pip .playback-progress-label {
-  margin-bottom: 0.2rem;
-  font-size: 0.66rem;
-}
-
-.playback-panel.pip .playback-progress-time {
-  margin-top: 0.18rem;
-  font-size: 0.74rem;
-}
-
 .playback-progress-wrap {
-  margin-top: 0.85rem;
+  margin-top: 0.62rem;
   border: 1px solid var(--border);
   border-radius: 0.7rem;
   background: color-mix(in srgb, var(--surface-elevated) 88%, transparent);
   padding: 0.55rem 0.65rem;
+}
+
+.playback-progress-wrap-visual {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.playback-progress-wrap-visual .progress-bar-static {
+  height: 0.42rem;
+}
+
+.pip-footer-row {
+  grid-row: 4;
+  display: block;
+  min-width: 0;
+  min-height: var(--pip-footer-height);
+}
+
+.pip-footer-row .playback-progress-wrap {
+  margin-top: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  min-width: 0;
+}
+
+.pip-progress-spacer {
+  min-height: var(--pip-progress-height);
+}
+
+.pip-now-playing-ready .pip-footer-row {
+  grid-row: 3;
 }
 
 .playback-progress-label {
@@ -532,17 +682,6 @@ dd {
   color: var(--text-muted);
   font-weight: 700;
   margin-bottom: 0.35rem;
-}
-
-.playback-progress-slider {
-  width: 100%;
-  accent-color: var(--primary);
-  margin: 0;
-  cursor: default;
-}
-
-.playback-progress-slider:disabled {
-  opacity: 0.92;
 }
 
 .playback-progress-time {
@@ -584,20 +723,6 @@ dd {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.82rem;
-}
-
-.playback-ready-state-pip {
-  margin-top: 0.5rem;
-  min-height: 0;
-  padding: 0.65rem;
-}
-
-.playback-ready-state-pip .playback-ready-title {
-  font-size: 0.92rem;
-}
-
-.playback-ready-state-pip .playback-ready-subtitle {
-  font-size: 0.74rem;
 }
 
 .track-summary {
@@ -658,6 +783,7 @@ dd {
   font-weight: 700;
   text-decoration: none;
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -710,6 +836,7 @@ dd {
 
 .track-summary-compact .track-summary-title-link,
 .track-summary-compact .track-summary-title-text {
+  line-clamp: 1;
   -webkit-line-clamp: 1;
   font-size: 0.89rem;
 }
@@ -724,37 +851,120 @@ dd {
   font-size: 0.7rem;
 }
 
-.track-summary-pip {
-  margin-top: 0.42rem;
-  grid-template-columns: 2.4rem minmax(0, 1fr);
-  gap: 0.45rem;
+.playback-now-playing-layout {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 10.8rem minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0.85rem;
 }
 
-.track-summary-pip .track-summary-thumb-link {
-  width: 2.4rem;
-  height: 2.4rem;
-  border-radius: 0.45rem;
+.playback-now-playing-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.track-summary-pip .track-summary-title-link,
-.track-summary-pip .track-summary-title-text {
-  font-size: 0.84rem;
+.playback-now-playing-meta {
+  min-width: 0;
 }
 
-.track-summary-pip .track-summary-artist {
-  font-size: 0.7rem;
+.playback-art-link {
+  width: 10.8rem;
+  height: 10.8rem;
+  border-radius: 0.72rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  align-self: flex-start;
 }
 
-.track-summary-pip .track-summary-meta {
-  font-size: 0.68rem;
+.playback-art-static {
+  cursor: default;
 }
 
-.now-playing-section {
-  margin-top: 0.8rem;
+.playback-art-image,
+.playback-art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
-.queue-overview-now-playing {
-  margin-bottom: 0.82rem;
+.playback-art-image {
+  object-fit: cover;
+}
+
+.playback-title {
+  line-height: 1.22;
+}
+
+.playback-title-link,
+.playback-title-text {
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: 1rem;
+  text-decoration: none;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.playback-title-link:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
+}
+
+.playback-title-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.playback-artist {
+  margin: 0.2rem 0 0;
+  font-size: 0.77rem;
+  color: var(--text-muted);
+  line-height: 1.24;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playback-meta {
+  margin: 0.12rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.pip-footer-row .progress-bar-static {
+  height: var(--pip-progress-height);
+  border-color: color-mix(in srgb, var(--primary) 52%, var(--border));
+  box-shadow:
+    0 0 0.75rem color-mix(in srgb, var(--glow-cyan) 50%, transparent),
+    0 0 0.55rem color-mix(in srgb, var(--glow-magenta) 35%, transparent);
+}
+
+.pip-now-playing > .connection-dot {
+  position: absolute;
+  top: var(--pip-edge);
+  right: var(--pip-edge);
+  width: var(--pip-dot-size);
+  height: var(--pip-dot-size);
+  margin: 0;
+  z-index: 2;
+  box-shadow: 0 0 0.72rem color-mix(in srgb, var(--glow-cyan) 68%, transparent);
+}
+
+.playback-action-row {
+  margin-top: 0.62rem;
 }
 
 .queue-header-row {
@@ -806,13 +1016,6 @@ dd {
 .up-next-more {
   margin-top: 0.7rem;
   margin-bottom: 0;
-}
-
-.queue-list {
-  margin: 0;
-  padding-left: 1rem;
-  display: grid;
-  gap: 0.3rem;
 }
 
 .queue-toolbar {
@@ -1055,12 +1258,6 @@ dd {
   color: var(--danger);
 }
 
-.pip-mode .command-feedback {
-  margin-top: 0.5rem;
-  padding: 0.35rem 0.42rem;
-  font-size: 0.74rem;
-}
-
 @keyframes rise {
   from {
     opacity: 0;
@@ -1079,6 +1276,10 @@ dd {
 
   .shell {
     padding: 1.1rem;
+  }
+
+  .pip-mode {
+    padding: 0;
   }
 
   .top-row-main,
@@ -1104,6 +1305,21 @@ dd {
     flex: 1;
   }
 
+  .playback-now-playing-layout {
+    grid-template-columns: 1fr;
+    gap: 0.7rem;
+  }
+
+  .playback-art-link {
+    width: min(100%, 10.5rem);
+    height: auto;
+    aspect-ratio: 1 / 1;
+  }
+
+  .playback-action-row .btn {
+    flex: 1 1 calc(50% - 0.3rem);
+  }
+
   .queue-header-row {
     flex-wrap: wrap;
     justify-content: flex-start;
@@ -1127,10 +1343,6 @@ dd {
 
   .queue-track-actions {
     grid-column: 1 / -1;
-  }
-
-  .panel-grid {
-    grid-template-columns: 1fr;
   }
 
   dl {

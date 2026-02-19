@@ -399,6 +399,130 @@ function getTrackSummaryMarkup(track, options = {}) {
   `;
 }
 
+function getPlaybackNowPlayingLayoutMarkup(track, options = {}) {
+  if (!track) {
+    return "";
+  }
+
+  const progressMarkup = String(options.progressMarkup || "");
+  const controlsMarkup = String(options.controlsMarkup || "");
+  const includeDuration = options.includeDuration !== false;
+  const linkUrl = getTrackLinkUrl(track);
+  const thumbnailUrl = getTrackThumbnailUrl(track);
+  const title = String(track?.title || "Unknown");
+  const artist = getTrackArtistText(track);
+  const durationText = formatTrackDuration(track?.duration);
+  const metaBits = [];
+  if (includeDuration && durationText && durationText !== "unknown") {
+    metaBits.push(durationText);
+  }
+  if (track?.pendingResolve) {
+    metaBits.push("resolving");
+  }
+  const metaText = metaBits.join(" • ");
+
+  const titleMarkup = linkUrl
+    ? `<a class="playback-title-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
+    : `<span class="playback-title-text">${escapeHtml(title)}</span>`;
+
+  const artInner = thumbnailUrl
+    ? `<img class="playback-art-image track-summary-thumb-image" data-thumb-src="${escapeHtml(thumbnailUrl)}" alt="">`
+    : `<span class="playback-art-placeholder track-summary-thumb-placeholder" aria-hidden="true"></span>`;
+
+  const artMarkup = linkUrl
+    ? `<a class="playback-art-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${artInner}</a>`
+    : `<span class="playback-art-link playback-art-static">${artInner}</span>`;
+
+  return `
+    <div class="playback-now-playing-layout">
+      ${artMarkup}
+      <div class="playback-now-playing-main">
+        <div class="playback-now-playing-meta">
+          <div class="playback-title">${titleMarkup}</div>
+          ${artist ? `<p class="playback-artist">${escapeHtml(artist)}</p>` : ""}
+          ${metaText ? `<p class="playback-meta">${escapeHtml(metaText)}</p>` : ""}
+        </div>
+        ${progressMarkup}
+        ${controlsMarkup}
+      </div>
+    </div>
+  `;
+}
+
+function getPipNowPlayingCardMarkup(track, connection) {
+  const connectionStatusKey = String(connection?.statusKey || CONNECTION_STATUS_DISCONNECTED);
+  const connectionHint = String(connection?.hint || "Connection status unavailable.");
+  const connectionLabel = String(connection?.label || "Disconnected");
+
+  if (!track) {
+    return `
+      <article class="pip-now-playing pip-now-playing-ready">
+        <span
+          id="pip-connection-dot"
+          class="connection-dot connection-dot-${escapeHtml(connectionStatusKey)}"
+          title="${escapeHtml(connectionHint)}"
+          aria-label="${escapeHtml(connectionLabel)}"
+        ></span>
+        <div class="pip-ready-state">
+          <p class="pip-ready-title">Ready</p>
+          <p class="pip-ready-subtitle">Queue tracks to start playback.</p>
+        </div>
+        <div class="pip-footer-row">
+          <div class="pip-progress-spacer" aria-hidden="true"></div>
+        </div>
+      </article>
+    `;
+  }
+
+  const linkUrl = getTrackLinkUrl(track);
+  const thumbnailUrl = getTrackThumbnailUrl(track);
+  const title = String(track?.title || "Unknown");
+  const artist = getTrackArtistText(track);
+  const durationText = formatTrackDuration(track?.duration);
+  const metaBits = [];
+  if (durationText && durationText !== "unknown") {
+    metaBits.push(durationText);
+  }
+  if (track?.pendingResolve) {
+    metaBits.push("resolving");
+  }
+  const pipMetaText = metaBits.join(" • ");
+
+  const titleMarkup = linkUrl
+    ? `<a class="pip-track-title-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
+    : `<span class="pip-track-title-text">${escapeHtml(title)}</span>`;
+
+  const artInner = thumbnailUrl
+    ? `<img class="pip-art-image track-summary-thumb-image" data-thumb-src="${escapeHtml(thumbnailUrl)}" alt="">`
+    : `<span class="pip-art-placeholder track-summary-thumb-placeholder" aria-hidden="true"></span>`;
+
+  const artMarkup = linkUrl
+    ? `<a class="pip-art-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${artInner}</a>`
+    : `<span class="pip-art-link pip-art-static">${artInner}</span>`;
+
+  return `
+    <article class="pip-now-playing">
+      <span
+        id="pip-connection-dot"
+        class="connection-dot connection-dot-${escapeHtml(connectionStatusKey)}"
+        title="${escapeHtml(connectionHint)}"
+        aria-label="${escapeHtml(connectionLabel)}"
+      ></span>
+      <div class="pip-track-row">
+        ${artMarkup}
+        <div class="pip-track-meta">
+          <div class="pip-track-title">${titleMarkup}</div>
+          ${artist ? `<p class="pip-track-artist">${escapeHtml(artist)}</p>` : ""}
+          ${pipMetaText ? `<p class="pip-track-duration">${escapeHtml(pipMetaText)}</p>` : ""}
+        </div>
+      </div>
+      <div class="pip-footer-row">
+        ${getPlaybackProgressMarkup({ visualOnly: true })}
+      </div>
+    </article>
+  `;
+}
+
 function rememberFailedThumbnailUrl(url) {
   if (!url) {
     return;
@@ -1007,51 +1131,49 @@ function getPlaybackProgressSnapshot() {
 }
 
 function getPlaybackProgressMarkup(options = {}) {
-  const pip = Boolean(options?.pip);
+  const visualOnly = Boolean(options?.visualOnly);
   const progress = getPlaybackProgressSnapshot();
   if (!progress) {
+    if (visualOnly) {
+      return `
+        <div class="playback-progress-wrap playback-progress-wrap-visual">
+          <div class="progress-bar-static" aria-hidden="true">
+            <span id="playback-progress-fill" class="progress-bar-fill" style="width:0%"></span>
+          </div>
+        </div>
+      `;
+    }
     return `<p class="muted playback-progress-empty">Progress unavailable.</p>`;
   }
 
-  const max = progress.hasDuration ? progress.durationSec : 1;
-  const value = progress.hasDuration ? progress.elapsedSec : 0;
   const leftLabel = formatProgressTimestamp(progress.elapsedSec);
   const rightLabel = progress.hasDuration ? formatProgressTimestamp(progress.durationSec) : "unknown";
   const percent = progress.hasDuration ? Math.max(0, Math.min(100, Math.round(progress.ratio * 100))) : 0;
 
-  if (pip) {
+  if (visualOnly) {
     return `
-      <div class="playback-progress-wrap playback-progress-wrap-pip">
-        <label class="playback-progress-label" for="playback-progress-time">Progress</label>
+      <div class="playback-progress-wrap playback-progress-wrap-visual">
         <div class="progress-bar-static" aria-hidden="true">
           <span id="playback-progress-fill" class="progress-bar-fill" style="width:${escapeHtml(String(percent))}%"></span>
         </div>
-        <div class="playback-progress-time" id="playback-progress-time">${escapeHtml(`${leftLabel} / ${rightLabel}`)}</div>
       </div>
     `;
   }
 
   return `
     <div class="playback-progress-wrap">
-      <label class="playback-progress-label" for="playback-progress-slider">Progress</label>
-      <input
-        id="playback-progress-slider"
-        class="playback-progress-slider"
-        type="range"
-        min="0"
-        max="${escapeHtml(String(max))}"
-        value="${escapeHtml(String(value))}"
-        disabled
-      >
+      <label class="playback-progress-label" for="playback-progress-time">Progress</label>
+      <div class="progress-bar-static" aria-hidden="true">
+        <span id="playback-progress-fill" class="progress-bar-fill" style="width:${escapeHtml(String(percent))}%"></span>
+      </div>
       <div class="playback-progress-time" id="playback-progress-time">${escapeHtml(`${leftLabel} / ${rightLabel}`)}</div>
     </div>
   `;
 }
 
-function getPlaybackReadyStateMarkup(options = {}) {
-  const pip = Boolean(options?.pip);
+function getPlaybackReadyStateMarkup() {
   return `
-    <div class="playback-ready-state${pip ? " playback-ready-state-pip" : ""}">
+    <div class="playback-ready-state">
       <p class="playback-ready-title">Ready</p>
       <p class="playback-ready-subtitle">Queue tracks to start playback.</p>
     </div>
@@ -1272,12 +1394,23 @@ function renderDashboard() {
   const queueUpdatedAtText = getQueueUpdatedAtText(queue);
   const activeNowPlaying = queueList?.nowPlaying || queue?.nowPlaying;
   const hasNowPlaying = Boolean(activeNowPlaying);
-  const nowPlayingSummaryMarkup = getTrackSummaryMarkup(activeNowPlaying, { includeDuration: true });
-  const nowPlayingPipMarkup = getTrackSummaryMarkup(activeNowPlaying, { pip: true, includeDuration: true });
   const upNextTrackListMarkup = getUpNextTrackListMarkup();
   const hasUpNextTracks = Boolean(upNextTrackListMarkup);
   const pipMode = isPipViewport();
-  const playbackProgressMarkup = hasNowPlaying ? getPlaybackProgressMarkup({ pip: pipMode }) : "";
+  const playbackProgressMarkup = hasNowPlaying
+    ? getPlaybackProgressMarkup()
+    : "";
+  const playbackControlsMarkup = hasNowPlaying
+    ? `
+      <div class="action-row playback-action-row">
+        <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
+        <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
+        <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
+        <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
+        <button type="button" class="btn" data-action="clear">Clear Queue</button>
+      </div>
+    `
+    : "";
   const themeToggleLabel = state.themeMode === THEME_DARK ? "Light Mode" : "Dark Mode";
   const queueLength = Number.isFinite(queueList?.total)
     ? queueList.total
@@ -1291,56 +1424,41 @@ function renderDashboard() {
     ? `<p class="command-feedback ${state.noticeError ? "error" : ""}">${escapeHtml(state.notice)}</p>`
     : "";
 
-  const playbackCardMarkup = pipMode
-    ? `
-      <article class="panel-card panel-card-pip">
-        <div class="pip-card-header">
-          <h2>Now Playing</h2>
-          <span
-            id="pip-connection-dot"
-            class="connection-dot connection-dot-${escapeHtml(connection.statusKey)}"
-            title="${escapeHtml(connection.hint)}"
-            aria-label="${escapeHtml(connection.label)}"
-          ></span>
-        </div>
-        ${hasNowPlaying ? nowPlayingPipMarkup : getPlaybackReadyStateMarkup({ pip: true })}
-        ${hasNowPlaying ? playbackProgressMarkup : ""}
-      </article>
-    `
-    : `
-      <article class="panel-card">
-        <h2>Playback</h2>
-        ${hasNowPlaying
-    ? `
-          <div id="queue-now-playing" class="now-playing-section">
-            ${nowPlayingSummaryMarkup}
-          </div>
-          ${playbackProgressMarkup}
-          <div class="action-row">
-            <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
-            <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
-            <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
-            <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
-            <button type="button" class="btn" data-action="clear">Clear Queue</button>
-          </div>
-        `
-    : getPlaybackReadyStateMarkup()}
-      </article>
+  if (pipMode) {
+    const shellClass = state.hasMountedDashboard ? "shell" : "shell shell-animated";
+    setThemeBodyMode(state.themeMode);
+    setPipBodyMode(true);
+    root.innerHTML = `
+      <section class="${shellClass} pip-mode">
+        ${getPipNowPlayingCardMarkup(activeNowPlaying, connection)}
+      </section>
     `;
+    wireDashboardEvents();
+    state.hasMountedDashboard = true;
+    return;
+  }
 
-  const topUtilityActionsMarkup = pipMode
-    ? ""
-    : `
-      <div class="top-row-secondary">
-        <button type="button" class="btn" id="refresh-now">Refresh</button>
-        ${mode === "web" ? '<button type="button" class="btn" id="logout-web">Logout</button>' : ""}
-        <button type="button" class="btn btn-secondary" id="theme-toggle">${escapeHtml(themeToggleLabel)}</button>
-      </div>
-    `;
+  const playbackCardMarkup = `
+    <article class="panel-card">
+      <h2>Playback</h2>
+      ${hasNowPlaying
+        ? getPlaybackNowPlayingLayoutMarkup(activeNowPlaying, {
+          progressMarkup: playbackProgressMarkup,
+          controlsMarkup: playbackControlsMarkup,
+        })
+  : getPlaybackReadyStateMarkup()}
+    </article>
+  `;
 
-  const menuSectionsMarkup = pipMode
-    ? ""
-    : `
+  const topUtilityActionsMarkup = `
+    <div class="top-row-secondary">
+      <button type="button" class="btn" id="refresh-now">Refresh</button>
+      ${mode === "web" ? '<button type="button" class="btn" id="logout-web">Logout</button>' : ""}
+      <button type="button" class="btn btn-secondary" id="theme-toggle">${escapeHtml(themeToggleLabel)}</button>
+    </div>
+  `;
+
+  const menuSectionsMarkup = `
       <nav class="menu-tabs">
         <button type="button" class="tab-btn${state.activeTab === TAB_UP_NEXT ? " active" : ""}" data-tab="${TAB_UP_NEXT}">Queue</button>
         <button type="button" class="tab-btn${state.activeTab === TAB_QUEUE ? " active" : ""}" data-tab="${TAB_QUEUE}">Queue Edit</button>
@@ -1406,33 +1524,31 @@ function renderDashboard() {
       </section>
     `;
 
-  const topBarMarkup = pipMode
-    ? ""
-    : `
-      <div class="top-row">
-        <div class="top-row-main">
-          <p class="kicker">queueDexBot</p>
-          ${getGuildSelectionMarkup()}
-        </div>
-        <button
-          type="button"
-          id="connection-status-btn"
-          class="chip chip-button top-row-status ${connection.chipClass}"
-          title="${escapeHtml(`${connection.hint} Click to open debug tools.`)}"
-          aria-label="${escapeHtml(`${connection.label}. Click to open debug tools.`)}"
-        >${escapeHtml(connection.label)}</button>
+  const topBarMarkup = `
+    <div class="top-row">
+      <div class="top-row-main">
+        <p class="kicker">queueDexBot</p>
+        ${getGuildSelectionMarkup()}
       </div>
-    `;
+      <button
+        type="button"
+        id="connection-status-btn"
+        class="chip chip-button top-row-status ${connection.chipClass}"
+        title="${escapeHtml(`${connection.hint} Click to open debug tools.`)}"
+        aria-label="${escapeHtml(`${connection.label}. Click to open debug tools.`)}"
+      >${escapeHtml(connection.label)}</button>
+    </div>
+  `;
 
-  const feedbackMarkup = pipMode ? "" : noticeMarkup;
+  const feedbackMarkup = noticeMarkup;
   const shellClass = state.hasMountedDashboard ? "shell" : "shell shell-animated";
   setThemeBodyMode(state.themeMode);
-  setPipBodyMode(pipMode);
+  setPipBodyMode(false);
   root.innerHTML = `
-    <section class="${shellClass}${pipMode ? " pip-mode" : ""}">
+    <section class="${shellClass}">
       ${topBarMarkup}
       ${topUtilityActionsMarkup}
-      <section class="playback-panel${pipMode ? " pip" : ""}">
+      <section class="playback-panel">
         ${playbackCardMarkup}
       </section>
       ${menuSectionsMarkup}
@@ -1832,16 +1948,11 @@ function startLiveTicker() {
       pipConnectionDot.setAttribute("aria-label", connection.label);
     }
 
-    const progressSliderNode = root.querySelector("#playback-progress-slider");
     const progressFillNode = root.querySelector("#playback-progress-fill");
     const progressTimeNode = root.querySelector("#playback-progress-time");
-    if (progressTimeNode || progressSliderNode || progressFillNode) {
+    if (progressTimeNode || progressFillNode) {
       const progress = getPlaybackProgressSnapshot();
       if (progress) {
-        if (progressSliderNode) {
-          progressSliderNode.max = String(progress.hasDuration ? progress.durationSec : 1);
-          progressSliderNode.value = String(progress.hasDuration ? progress.elapsedSec : 0);
-        }
         if (progressFillNode) {
           const percent = progress.hasDuration ? Math.max(0, Math.min(100, Math.round(progress.ratio * 100))) : 0;
           progressFillNode.style.width = `${percent}%`;
