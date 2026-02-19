@@ -5,6 +5,9 @@ const root = document.getElementById("app");
 const SDK_READY_TIMEOUT_MS = 10000;
 const UPTIME_INTERVAL_MS = 1000;
 const API_POLL_INTERVAL_MS = 5000;
+const API_PENDING_TIMEOUT_MS = 9000;
+const API_DISCONNECTED_TIMEOUT_MS = 20000;
+const DEBUG_TAB_VISIBILITY_TIMEOUT_MS = 30000;
 const QUEUE_LIST_LIMIT = 200;
 const ADMIN_EVENTS_LIMIT = 120;
 const PREF_SHOW_GUILD_IDS = "qdex_show_guild_ids";
@@ -17,6 +20,10 @@ const TAB_PLAYER = "player";
 const TAB_QUEUE = "queue";
 const TAB_DEBUG = "debug";
 const TAB_ADMIN = "admin";
+const CONNECTION_STATUS_DISCONNECTED = "disconnected";
+const CONNECTION_STATUS_AUTHORIZING = "authorizing";
+const CONNECTION_STATUS_PENDING = "pending";
+const CONNECTION_STATUS_CONNECTED = "connected";
 
 function loadBooleanPreference(key, fallback) {
   try {
@@ -67,6 +74,11 @@ const state = {
   adminEventsStickToBottom: loadBooleanPreference(PREF_ADMIN_EVENTS_STICK_BOTTOM, true),
   adminEventsOffsetFromBottom: null,
   showGuildIdsInSelector: loadBooleanPreference(PREF_SHOW_GUILD_IDS, false),
+  debugTabVisible: false,
+  connectionStatus: CONNECTION_STATUS_DISCONNECTED,
+  lastApiAttemptAt: null,
+  lastApiSuccessAt: null,
+  consecutiveApiFailures: 0,
   notice: "",
   noticeError: false,
   hasMountedDashboard: false,
@@ -74,6 +86,7 @@ const state = {
 
 let liveTicker = null;
 let statePoller = null;
+let debugTabHideTimer = null;
 const debugEvents = [];
 
 function escapeHtml(value) {
@@ -183,6 +196,90 @@ function formatTrackDuration(seconds) {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+function formatProgressTimestamp(seconds) {
+  const total = Number.isFinite(seconds) && seconds >= 0 ? Math.floor(seconds) : 0;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function setConnectionStatus(nextStatus) {
+  state.connectionStatus = nextStatus;
+}
+
+function markApiAttempt() {
+  state.lastApiAttemptAt = new Date();
+}
+
+function markApiSuccess() {
+  state.lastApiSuccessAt = new Date();
+  state.consecutiveApiFailures = 0;
+  updateConnectionStatusFromTelemetry();
+}
+
+function markApiFailure() {
+  state.consecutiveApiFailures += 1;
+  updateConnectionStatusFromTelemetry();
+}
+
+function updateConnectionStatusFromTelemetry() {
+  if (state.connectionStatus === CONNECTION_STATUS_AUTHORIZING && !state.lastApiSuccessAt) {
+    return;
+  }
+
+  if (!state.lastApiSuccessAt) {
+    setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
+    return;
+  }
+
+  const ageMs = Date.now() - state.lastApiSuccessAt.getTime();
+  if (ageMs >= API_DISCONNECTED_TIMEOUT_MS) {
+    setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
+    return;
+  }
+
+  if (state.consecutiveApiFailures > 0 || ageMs >= API_PENDING_TIMEOUT_MS) {
+    setConnectionStatus(CONNECTION_STATUS_PENDING);
+    return;
+  }
+
+  setConnectionStatus(CONNECTION_STATUS_CONNECTED);
+}
+
+function getConnectionStatusPresentation() {
+  updateConnectionStatusFromTelemetry();
+  if (state.connectionStatus === CONNECTION_STATUS_AUTHORIZING) {
+    return {
+      label: "Authorizing",
+      chipClass: "chip-authorizing",
+      hint: "Authorizing session.",
+    };
+  }
+  if (state.connectionStatus === CONNECTION_STATUS_PENDING) {
+    return {
+      label: "Pending",
+      chipClass: "chip-pending",
+      hint: "API heartbeat is delayed.",
+    };
+  }
+  if (state.connectionStatus === CONNECTION_STATUS_DISCONNECTED) {
+    return {
+      label: "Disconnected",
+      chipClass: "chip-disconnected",
+      hint: "API heartbeat timed out.",
+    };
+  }
+  return {
+    label: "Connected",
+    chipClass: "chip-ok",
+    hint: "Connected to API.",
+  };
+}
+
 function toPrettyJson(value) {
   try {
     return JSON.stringify(value ?? null, null, 2);
@@ -203,6 +300,39 @@ function stopStatePoller() {
     clearInterval(statePoller);
     statePoller = null;
   }
+}
+
+function stopDebugTabHideTimer() {
+  if (debugTabHideTimer) {
+    clearTimeout(debugTabHideTimer);
+    debugTabHideTimer = null;
+  }
+}
+
+function hideDebugTab() {
+  stopDebugTabHideTimer();
+  state.debugTabVisible = false;
+  if (state.activeTab === TAB_DEBUG) {
+    state.activeTab = TAB_PLAYER;
+  }
+}
+
+function scheduleDebugTabAutoHide() {
+  stopDebugTabHideTimer();
+  debugTabHideTimer = setTimeout(() => {
+    if (!state.debugTabVisible) {
+      return;
+    }
+    hideDebugTab();
+    renderDashboard();
+  }, DEBUG_TAB_VISIBILITY_TIMEOUT_MS);
+}
+
+function showDebugTabAndOpen() {
+  state.debugTabVisible = true;
+  state.activeTab = TAB_DEBUG;
+  scheduleDebugTabAutoHide();
+  renderDashboard();
 }
 
 function renderStatus({ title, subtitle, rows = [], error = false, includeTrace = false }) {
@@ -352,6 +482,73 @@ function getQueueLoopMode() {
   return queueList?.loopMode || queue?.loopMode || "off";
 }
 
+function getPlaybackProgressSnapshot() {
+  const queue = getCurrentQueueData();
+  const queueList = getQueueListData();
+  const progress = queue?.playbackProgress || queueList?.playbackProgress || null;
+  if (!progress) {
+    return null;
+  }
+
+  const durationSec = Number.isFinite(progress.durationSec) && progress.durationSec > 0
+    ? Math.floor(progress.durationSec)
+    : null;
+  let elapsedSec = Number.isFinite(progress.elapsedSec) && progress.elapsedSec >= 0
+    ? Math.floor(progress.elapsedSec)
+    : 0;
+
+  const playerStatus = String(queue?.playerStatus || "").toLowerCase();
+  const isPlaying = playerStatus === "playing";
+  const updatedAtMs = Number.isFinite(queue?.updatedAt) ? queue.updatedAt : Date.now();
+  if (isPlaying) {
+    const driftSec = Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000));
+    elapsedSec += driftSec;
+  }
+
+  if (durationSec) {
+    elapsedSec = Math.max(0, Math.min(elapsedSec, durationSec));
+  } else {
+    elapsedSec = Math.max(0, elapsedSec);
+  }
+
+  const ratio = durationSec ? Math.max(0, Math.min(1, elapsedSec / durationSec)) : 0;
+  return {
+    elapsedSec,
+    durationSec,
+    ratio,
+    hasDuration: Boolean(durationSec),
+    isPlaying,
+  };
+}
+
+function getPlaybackProgressMarkup() {
+  const progress = getPlaybackProgressSnapshot();
+  if (!progress) {
+    return `<p class="muted playback-progress-empty">Progress unavailable.</p>`;
+  }
+
+  const max = progress.hasDuration ? progress.durationSec : 1;
+  const value = progress.hasDuration ? progress.elapsedSec : 0;
+  const leftLabel = formatProgressTimestamp(progress.elapsedSec);
+  const rightLabel = progress.hasDuration ? formatProgressTimestamp(progress.durationSec) : "unknown";
+
+  return `
+    <div class="playback-progress-wrap">
+      <label class="playback-progress-label" for="playback-progress-slider">Progress</label>
+      <input
+        id="playback-progress-slider"
+        class="playback-progress-slider"
+        type="range"
+        min="0"
+        max="${escapeHtml(String(max))}"
+        value="${escapeHtml(String(value))}"
+        disabled
+      >
+      <div class="playback-progress-time" id="playback-progress-time">${escapeHtml(`${leftLabel} / ${rightLabel}`)}</div>
+    </div>
+  `;
+}
+
 function getQueueTrackListMarkup() {
   const queueList = getQueueListData();
   const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
@@ -489,6 +686,9 @@ function renderDashboard() {
   if (!adminState.isAdmin && state.activeTab === TAB_ADMIN) {
     state.activeTab = TAB_PLAYER;
   }
+  if (!state.debugTabVisible && state.activeTab === TAB_DEBUG) {
+    state.activeTab = TAB_PLAYER;
+  }
   const queueStatusText = queue
     ? `${queue.playerStatus || "idle"} | ${queue.connected ? "connected" : "not connected"} | ${queue.queueLength || 0} queued`
     : "unavailable";
@@ -496,12 +696,15 @@ function renderDashboard() {
   const nowPlayingText = activeNowPlaying
     ? `${activeNowPlaying.title || "Unknown"} (${formatTrackDuration(activeNowPlaying.duration)})`
     : "Nothing currently playing";
+  const playbackProgressMarkup = getPlaybackProgressMarkup();
   const queueLength = Number.isFinite(queueList?.total)
     ? queueList.total
     : (queue?.queueLength || 0);
   const loopMode = getQueueLoopMode();
   const connectedAtText = state.connectedAt ? formatTime(state.connectedAt) : "unknown";
   const guildCount = Array.isArray(state.authSummary?.guilds) ? state.authSummary.guilds.length : 0;
+  const connection = getConnectionStatusPresentation();
+  const showDebugTabButton = state.debugTabVisible || state.activeTab === TAB_DEBUG;
   const noticeMarkup = state.notice
     ? `<p class="subtitle ${state.noticeError ? "error" : ""}">${escapeHtml(state.notice)}</p>`
     : "";
@@ -514,7 +717,13 @@ function renderDashboard() {
     <section class="${shellClass}">
       <div class="top-row">
         <p class="kicker">queueDexBot Activity</p>
-        <span class="chip chip-ok">Connected</span>
+        <button
+          type="button"
+          id="connection-status-btn"
+          class="chip chip-button ${connection.chipClass}"
+          title="${escapeHtml(`${connection.hint} Click to open debug tools.`)}"
+          aria-label="${escapeHtml(`${connection.label}. Click to open debug tools.`)}"
+        >${escapeHtml(connection.label)}</button>
       </div>
       <h1>queueDexBot Control Panel</h1>
       <p class="subtitle">${escapeHtml(tabSubtitle)}</p>
@@ -532,7 +741,9 @@ function renderDashboard() {
         ${adminState.isAdmin
           ? `<button type="button" class="tab-btn${state.activeTab === TAB_ADMIN ? " active" : ""}" data-tab="${TAB_ADMIN}">Admin</button>`
           : ""}
-        <button type="button" class="tab-btn${state.activeTab === TAB_DEBUG ? " active" : ""}" data-tab="${TAB_DEBUG}">Debug</button>
+        ${showDebugTabButton
+          ? `<button type="button" class="tab-btn${state.activeTab === TAB_DEBUG ? " active" : ""}" data-tab="${TAB_DEBUG}">Debug</button>`
+          : ""}
       </nav>
       <section class="menu-panel${state.activeTab === TAB_PLAYER ? " active" : ""}" data-panel="${TAB_PLAYER}">
         <article class="panel-card">
@@ -542,6 +753,7 @@ function renderDashboard() {
             <dt>Now Playing</dt><dd id="queue-now-playing">${escapeHtml(nowPlayingText)}</dd>
             <dt>Last Update</dt><dd id="queue-updated-at">${escapeHtml(formatTime(queue?.updatedAt || Date.now()))}</dd>
           </dl>
+          ${playbackProgressMarkup}
           <div class="action-row">
             <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
             <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
@@ -578,6 +790,7 @@ function renderDashboard() {
           <h2>Session / Debug</h2>
           <dl>
             <dt>Mode</dt><dd>${escapeHtml(mode)}</dd>
+            <dt>Connection</dt><dd>${escapeHtml(connection.label.toLowerCase())}</dd>
             <dt>Build</dt><dd>${escapeHtml(BUILD_ID)}</dd>
             <dt>User</dt><dd>${escapeHtml(getUserLabel())}</dd>
             <dt>Guilds In Scope</dt><dd>${escapeHtml(String(guildCount))}</dd>
@@ -592,9 +805,6 @@ function renderDashboard() {
             <input type="checkbox" id="debug-show-guild-ids"${state.showGuildIdsInSelector ? " checked" : ""}>
             <span>Show guild IDs in selector labels</span>
           </label>
-          <div class="action-row">
-            <button type="button" class="btn" id="debug-refresh-guilds">Refresh Guild Memberships</button>
-          </div>
         </article>
       </section>
       <p class="footer-note">Local clock: <span id="clock">${escapeHtml(formatTime(new Date()))}</span></p>
@@ -625,10 +835,22 @@ function wireDashboardEvents() {
       if (!tab) {
         return;
       }
+      if (tab !== TAB_DEBUG && state.activeTab === TAB_DEBUG && state.debugTabVisible) {
+        scheduleDebugTabAutoHide();
+      } else if (tab === TAB_DEBUG && state.debugTabVisible) {
+        scheduleDebugTabAutoHide();
+      }
       state.activeTab = tab;
       renderDashboard();
     });
   });
+
+  const connectionStatusButton = root.querySelector("#connection-status-btn");
+  if (connectionStatusButton) {
+    connectionStatusButton.addEventListener("click", () => {
+      showDebugTabAndOpen();
+    });
+  }
 
   const guildSelect = root.querySelector("#guild-select");
   if (guildSelect) {
@@ -715,13 +937,6 @@ function wireDashboardEvents() {
   if (refreshButton) {
     refreshButton.addEventListener("click", () => {
       void refreshDashboardData();
-    });
-  }
-
-  const refreshGuildsButton = root.querySelector("#debug-refresh-guilds");
-  if (refreshGuildsButton) {
-    refreshGuildsButton.addEventListener("click", () => {
-      void refreshGuildMemberships();
     });
   }
 
@@ -835,6 +1050,28 @@ function startLiveTicker() {
     if (clockNode) {
       clockNode.textContent = formatTime(new Date());
     }
+
+    const connectionStatusNode = root.querySelector("#connection-status-btn");
+    if (connectionStatusNode) {
+      const connection = getConnectionStatusPresentation();
+      connectionStatusNode.className = `chip chip-button ${connection.chipClass}`;
+      connectionStatusNode.textContent = connection.label;
+      connectionStatusNode.title = `${connection.hint} Click to open debug tools.`;
+      connectionStatusNode.setAttribute("aria-label", `${connection.label}. Click to open debug tools.`);
+    }
+
+    const progressSliderNode = root.querySelector("#playback-progress-slider");
+    const progressTimeNode = root.querySelector("#playback-progress-time");
+    if (progressSliderNode && progressTimeNode) {
+      const progress = getPlaybackProgressSnapshot();
+      if (progress) {
+        progressSliderNode.max = String(progress.hasDuration ? progress.durationSec : 1);
+        progressSliderNode.value = String(progress.hasDuration ? progress.elapsedSec : 0);
+        const leftLabel = formatProgressTimestamp(progress.elapsedSec);
+        const rightLabel = progress.hasDuration ? formatProgressTimestamp(progress.durationSec) : "unknown";
+        progressTimeNode.textContent = `${leftLabel} / ${rightLabel}`;
+      }
+    }
   }, UPTIME_INTERVAL_MS);
 }
 
@@ -848,7 +1085,14 @@ function withTimeout(promise, timeoutMs, message) {
 }
 
 async function fetchJson(path, options = {}) {
-  const response = await fetch(getApiUrl(path), options);
+  markApiAttempt();
+  let response;
+  try {
+    response = await fetch(getApiUrl(path), options);
+  } catch (error) {
+    markApiFailure();
+    throw error;
+  }
   let payload;
   try {
     payload = await response.json();
@@ -856,11 +1100,13 @@ async function fetchJson(path, options = {}) {
     payload = null;
   }
   if (!response.ok) {
+    markApiFailure();
     const errorMessage = payload?.error || `Request failed (${response.status})`;
     const error = new Error(errorMessage);
     error.status = response.status;
     throw error;
   }
+  markApiSuccess();
   return payload;
 }
 
@@ -1400,6 +1646,12 @@ async function logoutWebSession() {
   state.adminBotGuilds = [];
   state.adminVerification = null;
   state.selectedGuildId = null;
+  state.debugTabVisible = false;
+  state.lastApiAttemptAt = null;
+  state.lastApiSuccessAt = null;
+  state.consecutiveApiFailures = 0;
+  setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
+  stopDebugTabHideTimer();
   renderWebLogin();
 }
 
@@ -1429,6 +1681,7 @@ async function bootstrapEmbeddedMode() {
     return;
   }
 
+  setConnectionStatus(CONNECTION_STATUS_AUTHORIZING);
   const discordSdk = new DiscordSDK(clientId);
   pushDebugEvent("sdk.create.success");
   renderStatus({
@@ -1467,6 +1720,7 @@ async function bootstrapEmbeddedMode() {
 
 async function bootstrapWebMode() {
   state.mode = "web";
+  setConnectionStatus(CONNECTION_STATUS_AUTHORIZING);
   state.connectedAt = new Date();
   state.sdkContext.guildId = null;
   state.sdkContext.channelId = null;
@@ -1497,7 +1751,13 @@ async function bootstrap() {
   debugEvents.length = 0;
   stopLiveTicker();
   stopStatePoller();
+  stopDebugTabHideTimer();
   state.hasMountedDashboard = false;
+  state.debugTabVisible = false;
+  state.lastApiAttemptAt = null;
+  state.lastApiSuccessAt = null;
+  state.consecutiveApiFailures = 0;
+  setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
   pushDebugEvent("bootstrap.start", `build=${BUILD_ID}`);
 
   try {
@@ -1509,6 +1769,7 @@ async function bootstrap() {
     }
     await bootstrapWebMode();
   } catch (error) {
+    setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
     const message = String(error?.message || "");
     const isTimeout = message.toLowerCase().includes("timed out");
     pushDebugEvent("bootstrap.failed", message);

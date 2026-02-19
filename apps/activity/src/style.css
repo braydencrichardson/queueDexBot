@@ -184,6 +184,41 @@ dd {
   border: 1px solid rgba(26, 138, 118, 0.32);
 }
 
+.chip-pending {
+  color: #7a5a0b;
+  background: rgba(240, 181, 48, 0.2);
+  border: 1px solid rgba(240, 181, 48, 0.36);
+}
+
+.chip-authorizing {
+  color: #365080;
+  background: rgba(92, 125, 179, 0.16);
+  border: 1px solid rgba(92, 125, 179, 0.34);
+}
+
+.chip-disconnected {
+  color: #8e2b16;
+  background: rgba(142, 43, 22, 0.14);
+  border: 1px solid rgba(142, 43, 22, 0.34);
+}
+
+.chip-button {
+  cursor: pointer;
+  font-family: inherit;
+  opacity: 0.82;
+  transition: opacity 120ms ease-in-out, transform 120ms ease-in-out;
+}
+
+.chip-button:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.chip-button:focus-visible {
+  outline: 2px solid rgba(32, 52, 83, 0.38);
+  outline-offset: 2px;
+}
+
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -236,6 +271,47 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
+}
+
+.playback-progress-wrap {
+  margin-top: 0.85rem;
+  border: 1px solid rgba(32, 52, 83, 0.12);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 0.55rem 0.65rem;
+}
+
+.playback-progress-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #687a9f;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.playback-progress-slider {
+  width: 100%;
+  accent-color: #1a8a76;
+  margin: 0;
+  cursor: default;
+}
+
+.playback-progress-slider:disabled {
+  opacity: 0.92;
+}
+
+.playback-progress-time {
+  margin-top: 0.3rem;
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.83rem;
+  color: #1f2e4b;
+}
+
+.playback-progress-empty {
+  margin-top: 0.85rem;
+  margin-bottom: 0;
 }
 
 .queue-list {

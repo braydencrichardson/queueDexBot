@@ -158,11 +158,51 @@ function summarizeTrack(track) {
   };
 }
 
+function getPlaybackElapsedSeconds(queue) {
+  const playbackMs = queue?.player?.state?.resource?.playbackDuration;
+  if (!Number.isFinite(playbackMs) || playbackMs < 0) {
+    return null;
+  }
+  return Math.floor(playbackMs / 1000);
+}
+
+function getTrackDurationSeconds(track) {
+  if (!Number.isFinite(track?.duration) || track.duration <= 0) {
+    return null;
+  }
+  return Math.floor(track.duration);
+}
+
+function summarizePlaybackProgress(queue) {
+  const durationSec = getTrackDurationSeconds(queue?.current);
+  const elapsedFromPlayer = getPlaybackElapsedSeconds(queue);
+  if (!durationSec && elapsedFromPlayer === null) {
+    return null;
+  }
+
+  if (durationSec) {
+    const elapsedSec = Math.max(0, Math.min(elapsedFromPlayer ?? 0, durationSec));
+    return {
+      elapsedSec,
+      durationSec,
+      ratio: durationSec > 0 ? elapsedSec / durationSec : 0,
+    };
+  }
+
+  const elapsedSec = Math.max(0, elapsedFromPlayer ?? 0);
+  return {
+    elapsedSec,
+    durationSec: null,
+    ratio: null,
+  };
+}
+
 function summarizeQueue(queue) {
   if (!queue) {
     return {
       connected: false,
       nowPlaying: null,
+      playbackProgress: null,
       upNext: [],
       queueLength: 0,
       loopMode: "off",
@@ -174,6 +214,7 @@ function summarizeQueue(queue) {
   return {
     connected: Boolean(queue.connection),
     nowPlaying: summarizeTrack(queue.current),
+    playbackProgress: summarizePlaybackProgress(queue),
     upNext: Array.isArray(queue.tracks) ? queue.tracks.slice(0, 5).map(summarizeTrack) : [],
     queueLength: Array.isArray(queue.tracks) ? queue.tracks.length : 0,
     loopMode: queue.loopMode || "off",
@@ -1065,6 +1106,7 @@ function createApiServer(options) {
       limit,
       total: allTracks.length,
       nowPlaying: summarizeTrack(queue?.current),
+      playbackProgress: summarizePlaybackProgress(queue),
       loopMode: queue?.loopMode || "off",
       tracks,
       updatedAt: Date.now(),
