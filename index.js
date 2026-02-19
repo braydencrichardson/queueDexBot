@@ -577,6 +577,7 @@ const apiServer = env.authServerEnabled
     queues,
     logInfo,
     logError,
+    getQueueForGuild: (guildId) => getGuildQueue(guildId),
     isBotInGuild: (guildId) => {
       const normalizedGuildId = String(guildId || "").trim();
       if (!normalizedGuildId) {
@@ -643,6 +644,12 @@ const apiServer = env.authServerEnabled
     stopAndLeaveQueue,
     maybeRefreshNowPlayingUpNext,
     sendNowPlaying,
+    normalizeQueryInput,
+    resolveTracks,
+    getSearchOptionsForQuery,
+    ensureQueueVoiceConnection,
+    ensureTrackId,
+    getPlayNext: () => playNext,
     config: {
       oauthClientId: env.oauthClientId,
       oauthClientSecret: env.oauthClientSecret,

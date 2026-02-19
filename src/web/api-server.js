@@ -3,6 +3,8 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { createQueueService } = require("../queue/service");
+const { enqueueTracks, formatDuration } = require("../queue/utils");
+const { formatQueuedMessage, formatQueuedPlaylistMessage } = require("../ui/messages");
 const {
   buildControlActionFeedback,
   buildQueueActionFeedback,
@@ -21,6 +23,7 @@ const THUMBNAIL_PROXY_TIMEOUT_MS = 8000;
 const THUMBNAIL_PROXY_MAX_BYTES = 5 * 1024 * 1024;
 const THUMBNAIL_PROXY_CACHE_TTL_MS = 10 * 60 * 1000;
 const THUMBNAIL_PROXY_CACHE_MAX_ENTRIES = 400;
+const ACTIVITY_SEARCH_CHOOSER_TTL_MS = 90 * 1000;
 const THUMBNAIL_PROXY_ALLOWED_HOST_SUFFIXES = [
   "ytimg.com",
   "ggpht.com",
@@ -475,6 +478,7 @@ function createApiServer(options) {
     logInfo = () => {},
     logError = () => {},
     isBotInGuild = () => true,
+    getQueueForGuild = null,
     getBotGuilds = () => [],
     getUserVoiceChannelId = async () => null,
     getAdminEvents = () => [],
@@ -487,6 +491,12 @@ function createApiServer(options) {
     stopAndLeaveQueue = null,
     maybeRefreshNowPlayingUpNext = async () => {},
     sendNowPlaying = async () => {},
+    normalizeQueryInput = (value) => String(value || "").trim(),
+    resolveTracks = async () => [],
+    getSearchOptionsForQuery = async () => [],
+    ensureQueueVoiceConnection = null,
+    ensureTrackId = null,
+    getPlayNext = () => null,
     config = {},
   } = options || {};
 
@@ -516,6 +526,7 @@ function createApiServer(options) {
   const pendingWebStates = new Map();
   const sessions = new Map();
   const thumbnailCache = new Map();
+  const activitySearchChoosers = new Map();
   const stopQueueAction = typeof stopAndLeaveQueue === "function"
     ? stopAndLeaveQueue
     : (queue, reason) => {
@@ -750,6 +761,17 @@ function createApiServer(options) {
 
   loadSessionsFromStore();
 
+  function resolveQueueForGuild(guildId, { createIfMissing = false } = {}) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      return null;
+    }
+    if (createIfMissing && typeof getQueueForGuild === "function") {
+      return getQueueForGuild(normalizedGuildId);
+    }
+    return queues?.get?.(normalizedGuildId) || null;
+  }
+
   function canAccessGuild(session, guildId) {
     if (!session || !guildId) {
       return false;
@@ -804,6 +826,7 @@ function createApiServer(options) {
     response,
     guildId,
     requireQueue = true,
+    createQueueIfMissing = false,
     requireVoiceChannelMatch = false,
     requireAdmin = false,
   }) {
@@ -824,7 +847,9 @@ function createApiServer(options) {
       return null;
     }
 
-    const queue = queues?.get?.(normalizedGuildId);
+    const queue = resolveQueueForGuild(normalizedGuildId, {
+      createIfMissing: Boolean(requireQueue && createQueueIfMissing),
+    });
     if (requireQueue && !queue) {
       sendJson(response, 404, { error: "Queue is not initialized for this guild" });
       return null;
@@ -960,6 +985,484 @@ function createApiServer(options) {
       };
     }
     return payload;
+  }
+
+  function getSessionRequesterName(session) {
+    const globalName = String(session?.user?.globalName || session?.user?.global_name || "").trim();
+    if (globalName) {
+      return globalName;
+    }
+    const username = String(session?.user?.username || "").trim();
+    if (username) {
+      return username;
+    }
+    const userId = String(session?.user?.id || "").trim();
+    if (userId) {
+      return userId;
+    }
+    return "Requester";
+  }
+
+  function summarizeSearchOption(track, index) {
+    return {
+      index,
+      durationLabel: formatDuration(track?.duration),
+      ...summarizeTrack(track),
+    };
+  }
+
+  function pruneExpiredActivitySearchChoosers(now = Date.now()) {
+    activitySearchChoosers.forEach((entry, chooserId) => {
+      if (!entry || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= now) {
+        activitySearchChoosers.delete(chooserId);
+      }
+    });
+  }
+
+  function createActivitySearchChooser({ guildId, requesterId, query, options }) {
+    const normalizedOptions = Array.isArray(options) ? options.slice(0, 10) : [];
+    if (!normalizedOptions.length) {
+      return null;
+    }
+    pruneExpiredActivitySearchChoosers();
+    const chooserId = crypto.randomUUID();
+    const expiresAt = Date.now() + ACTIVITY_SEARCH_CHOOSER_TTL_MS;
+    activitySearchChoosers.set(chooserId, {
+      id: chooserId,
+      guildId: String(guildId || "").trim(),
+      requesterId: String(requesterId || "").trim(),
+      query: String(query || "").trim(),
+      options: normalizedOptions,
+      createdAt: Date.now(),
+      expiresAt,
+    });
+    return activitySearchChoosers.get(chooserId);
+  }
+
+  function getActivitySearchChooser(chooserId) {
+    const normalizedChooserId = String(chooserId || "").trim();
+    if (!normalizedChooserId) {
+      return null;
+    }
+    const chooser = activitySearchChoosers.get(normalizedChooserId);
+    if (!chooser) {
+      return null;
+    }
+    if (!Number.isFinite(chooser.expiresAt) || chooser.expiresAt <= Date.now()) {
+      activitySearchChoosers.delete(normalizedChooserId);
+      return null;
+    }
+    return chooser;
+  }
+
+  function clearActivitySearchChooser(chooserId) {
+    const normalizedChooserId = String(chooserId || "").trim();
+    if (!normalizedChooserId) {
+      return false;
+    }
+    return activitySearchChoosers.delete(normalizedChooserId);
+  }
+
+  async function ensureActivityQueueVoiceConnection({ queue, guildId, session, admin }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: "Missing guild_id",
+      };
+    }
+
+    const sessionUserId = String(session?.user?.id || "").trim();
+    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+    let preferredVoiceChannelId = queueVoiceChannelId;
+
+    if (!preferredVoiceChannelId) {
+      if (!sessionUserId) {
+        return {
+          ok: false,
+          statusCode: 401,
+          error: "Session user is unavailable",
+        };
+      }
+      let userVoiceChannelId = null;
+      try {
+        userVoiceChannelId = await getUserVoiceChannelId(normalizedGuildId, sessionUserId);
+      } catch (error) {
+        logError("Failed to resolve user voice channel for activity queue search", {
+          guildId: normalizedGuildId,
+          userId: sessionUserId,
+          error,
+        });
+        return {
+          ok: false,
+          statusCode: 500,
+          error: "Failed to verify voice channel access",
+        };
+      }
+
+      preferredVoiceChannelId = String(userVoiceChannelId || "").trim() || null;
+      if (!preferredVoiceChannelId && !admin?.bypassVoiceChannelCheck) {
+        return {
+          ok: false,
+          statusCode: 403,
+          error: "Join a voice channel first.",
+        };
+      }
+    }
+
+    if (!preferredVoiceChannelId) {
+      return {
+        ok: true,
+        skipped: true,
+      };
+    }
+
+    if (typeof ensureQueueVoiceConnection !== "function") {
+      if (queue?.connection) {
+        return {
+          ok: true,
+          reused: true,
+          channelId: preferredVoiceChannelId,
+        };
+      }
+      return {
+        ok: false,
+        statusCode: 500,
+        error: "Voice connection service is unavailable.",
+      };
+    }
+
+    try {
+      const connectionResult = await ensureQueueVoiceConnection(queue, {
+        guildId: normalizedGuildId,
+        preferredVoiceChannelId,
+      });
+      if (connectionResult && connectionResult.ok === false) {
+        return {
+          ok: false,
+          statusCode: Number.isFinite(connectionResult.statusCode) ? connectionResult.statusCode : 500,
+          error: connectionResult.error || "Failed to join voice channel.",
+        };
+      }
+      return {
+        ok: true,
+        ...connectionResult,
+      };
+    } catch (error) {
+      logError("Failed to establish voice connection for activity queue search", {
+        guildId: normalizedGuildId,
+        preferredVoiceChannelId,
+        error,
+      });
+      return {
+        ok: false,
+        statusCode: 500,
+        error: "I couldn't join your voice channel.",
+      };
+    }
+  }
+
+  async function queueTracksFromActivityRequest({ context, tracks, source }) {
+    const queue = context?.queue;
+    if (!queue || !Array.isArray(tracks) || !tracks.length) {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: "No tracks to queue",
+      };
+    }
+
+    const voiceResult = await ensureActivityQueueVoiceConnection({
+      queue,
+      guildId: context.guildId,
+      session: context.session,
+      admin: context.admin,
+    });
+    if (!voiceResult.ok) {
+      return voiceResult;
+    }
+
+    if (!Array.isArray(queue.tracks)) {
+      queue.tracks = [];
+    }
+
+    const requesterName = getSessionRequesterName(context.session);
+    const hadAnythingQueuedBefore = Boolean(queue.current) || queue.tracks.length > 0;
+    const queuedTracks = tracks
+      .filter((track) => track && typeof track === "object")
+      .map((track) => ({ ...track }));
+
+    queuedTracks.forEach((track) => {
+      if (!String(track.requester || "").trim()) {
+        track.requester = requesterName;
+      }
+      if (typeof ensureTrackId === "function") {
+        ensureTrackId(track);
+      }
+    });
+
+    enqueueTracks(queue, queuedTracks);
+    await maybeRefreshNowPlayingUpNext(queue);
+
+    logInfo("Queued tracks from activity/web queue search", {
+      source: source || "unknown",
+      guildId: context.guildId,
+      userId: context?.session?.user?.id || null,
+      count: queuedTracks.length,
+      first: queuedTracks[0]?.title || null,
+    });
+
+    let feedbackContent = "";
+    if (queuedTracks.length === 1) {
+      const position = hadAnythingQueuedBefore ? queue.tracks.length : null;
+      feedbackContent = formatQueuedMessage(queuedTracks[0], position, formatDuration);
+    } else {
+      feedbackContent = formatQueuedPlaylistMessage(queuedTracks.length, requesterName);
+    }
+    await sendQueueFeedback({
+      queue,
+      content: feedbackContent,
+      logInfo,
+      logError,
+      context: `api_queue_search:${source || "resolve"}`,
+    });
+
+    const playNextFn = typeof getPlayNext === "function" ? getPlayNext() : null;
+    if (!queue.playing && typeof playNextFn === "function") {
+      playNextFn(context.guildId).catch((error) => {
+        logError("Error starting playback from activity/web queue search", {
+          guildId: context.guildId,
+          source: source || "unknown",
+          error,
+        });
+      });
+    }
+
+    return {
+      ok: true,
+      queuedTracks,
+      requesterName,
+      data: summarizeQueue(queue),
+    };
+  }
+
+  async function handleActivityQueueSearch(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const guildId = String(body.guild_id || body.guildId || "").trim();
+    const rawQuery = String(body.query || "").trim();
+    if (!rawQuery) {
+      sendJson(response, 400, { error: "Missing query" });
+      return;
+    }
+
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: true,
+      createQueueIfMissing: true,
+      requireVoiceChannelMatch: true,
+    });
+    if (!context) {
+      return;
+    }
+
+    const normalizedQuery = String(normalizeQueryInput(rawQuery) || "").trim();
+    if (!normalizedQuery) {
+      sendJson(response, 400, { error: "Missing query" });
+      return;
+    }
+
+    const requesterName = getSessionRequesterName(context.session);
+    let tracks = [];
+    try {
+      tracks = await resolveTracks(normalizedQuery, requesterName, {
+        allowSearchFallback: false,
+      });
+    } catch (error) {
+      logError("Failed to resolve activity/web queue search", {
+        guildId: context.guildId,
+        query: normalizedQuery,
+        error,
+      });
+      sendJson(response, 502, { error: error.message || "Could not load that track or playlist." });
+      return;
+    }
+
+    if (!tracks.length) {
+      let searchOptions = [];
+      try {
+        searchOptions = await getSearchOptionsForQuery(normalizedQuery, requesterName);
+      } catch (error) {
+        logError("Failed to fetch activity/web search chooser options", {
+          guildId: context.guildId,
+          query: normalizedQuery,
+          error,
+        });
+      }
+      if (Array.isArray(searchOptions) && searchOptions.length) {
+        const chooser = createActivitySearchChooser({
+          guildId: context.guildId,
+          requesterId: context.session?.user?.id || "",
+          query: normalizedQuery,
+          options: searchOptions,
+        });
+        sendJson(response, 200, {
+          ok: true,
+          mode: "chooser",
+          guildId: context.guildId,
+          search: {
+            id: chooser.id,
+            query: chooser.query,
+            expiresAt: chooser.expiresAt,
+            timeoutMs: ACTIVITY_SEARCH_CHOOSER_TTL_MS,
+            options: chooser.options.map((track, index) => summarizeSearchOption(track, index)),
+          },
+          data: summarizeQueue(context.queue),
+        });
+        return;
+      }
+
+      try {
+        tracks = await resolveTracks(normalizedQuery, requesterName, {
+          allowSearchFallback: true,
+        });
+      } catch (error) {
+        logError("Failed to resolve activity/web queue search with fallback", {
+          guildId: context.guildId,
+          query: normalizedQuery,
+          error,
+        });
+        sendJson(response, 502, { error: error.message || "Could not load that track or playlist." });
+        return;
+      }
+
+      if (!tracks.length) {
+        sendJson(response, 404, { error: "No results found." });
+        return;
+      }
+    }
+
+    const queueResult = await queueTracksFromActivityRequest({
+      context,
+      tracks,
+      source: "direct",
+    });
+    if (!queueResult.ok) {
+      sendJson(response, queueResult.statusCode || 400, {
+        error: queueResult.error || "Failed to queue tracks",
+      });
+      return;
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      mode: "queued",
+      guildId: context.guildId,
+      queuedCount: queueResult.queuedTracks.length,
+      queued: queueResult.queuedTracks.length === 1
+        ? summarizeTrack(queueResult.queuedTracks[0])
+        : null,
+      data: queueResult.data,
+    });
+  }
+
+  async function handleActivityQueueSearchSelect(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const guildId = String(body.guild_id || body.guildId || "").trim();
+    const searchId = String(body.search_id || body.searchId || "").trim();
+    if (!searchId) {
+      sendJson(response, 400, { error: "Missing search_id" });
+      return;
+    }
+
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: true,
+      createQueueIfMissing: true,
+      requireVoiceChannelMatch: true,
+    });
+    if (!context) {
+      return;
+    }
+
+    const chooser = getActivitySearchChooser(searchId);
+    if (!chooser) {
+      sendJson(response, 410, { error: "That search has expired." });
+      return;
+    }
+    if (chooser.guildId !== context.guildId) {
+      sendJson(response, 400, { error: "Search chooser does not match the selected guild." });
+      return;
+    }
+    const sessionUserId = String(context.session?.user?.id || "").trim();
+    if (!sessionUserId || chooser.requesterId !== sessionUserId) {
+      sendJson(response, 403, { error: "Only the requester can choose a result." });
+      return;
+    }
+
+    const queueFirst = toBoolean(body.queue_first ?? body.queueFirst, false);
+    const optionIndex = queueFirst
+      ? 0
+      : toFiniteInteger(body.option_index ?? body.optionIndex);
+    if (!Number.isFinite(optionIndex)) {
+      sendJson(response, 400, { error: "Missing option_index" });
+      return;
+    }
+    if (optionIndex < 0 || optionIndex >= chooser.options.length) {
+      sendJson(response, 400, {
+        error: `Invalid option index. Choose 0-${Math.max(chooser.options.length - 1, 0)}.`,
+      });
+      return;
+    }
+
+    const selectedTrack = chooser.options[optionIndex];
+    clearActivitySearchChooser(searchId);
+    const queueResult = await queueTracksFromActivityRequest({
+      context,
+      tracks: [selectedTrack],
+      source: "chooser",
+    });
+    if (!queueResult.ok) {
+      sendJson(response, queueResult.statusCode || 400, {
+        error: queueResult.error || "Failed to queue search result",
+      });
+      return;
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      mode: "queued",
+      guildId: context.guildId,
+      queuedCount: 1,
+      queued: summarizeTrack(queueResult.queuedTracks[0]),
+      data: queueResult.data,
+    });
   }
 
   async function handleActivityControl(request, response) {
@@ -2104,6 +2607,16 @@ function createApiServer(options) {
         return;
       }
 
+      if (request.method === "POST" && pathname === "/api/activity/queue/search") {
+        await handleActivityQueueSearch(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/queue/search/select") {
+        await handleActivityQueueSearchSelect(request, response);
+        return;
+      }
+
       if (request.method === "POST" && pathname === "/api/activity/admin/settings") {
         await handleAdminSettings(request, response);
         return;
@@ -2175,6 +2688,7 @@ function createApiServer(options) {
         pendingWebStates.delete(state);
       }
     });
+    pruneExpiredActivitySearchChoosers(now);
     let removedSessions = 0;
     sessions.forEach((session, sessionId) => {
       if (!session || session.expiresAt <= now) {

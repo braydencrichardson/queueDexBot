@@ -920,6 +920,331 @@ test("activity queue action requires user in bot voice channel", async () => {
   }
 });
 
+test("activity queue search returns chooser options when direct resolve finds no tracks", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const resolveTracksCalls = [];
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async (query, requester, options) => {
+      resolveTracksCalls.push({ query, requester, options });
+      return [];
+    },
+    getSearchOptionsForQuery: async () => ([
+      {
+        title: "First Result",
+        url: "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        displayUrl: "https://youtu.be/aaaaaaaaaaa",
+        duration: 111,
+        source: "youtube",
+        channel: "Artist One",
+      },
+      {
+        title: "Second Result",
+        url: "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+        displayUrl: "https://youtu.be/bbbbbbbbbbb",
+        duration: 222,
+        source: "youtube",
+        channel: "Artist Two",
+      },
+    ]),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "example query",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.ok, true);
+    assert.equal(response.json?.mode, "chooser");
+    assert.equal(response.json?.guildId, "guild-1");
+    assert.equal(String(response.json?.search?.id || "").length > 0, true);
+    assert.equal(Array.isArray(response.json?.search?.options), true);
+    assert.equal(response.json?.search?.options?.length, 2);
+    assert.equal(resolveTracksCalls.length, 1);
+    assert.equal(resolveTracksCalls[0]?.options?.allowSearchFallback, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search select queues selected chooser result and starts playback", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const sentMessages = [];
+  const ensureVoiceConnectionCalls = [];
+  const playNextCalls = [];
+  const queue = {
+    current: null,
+    tracks: [],
+    playing: false,
+    voiceChannel: null,
+    connection: null,
+    textChannel: {
+      async send(content) {
+        sentMessages.push(String(content));
+      },
+    },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async () => [],
+    getSearchOptionsForQuery: async () => ([
+      {
+        title: "Selected Result",
+        url: "https://www.youtube.com/watch?v=ccccccccccc",
+        displayUrl: "https://youtu.be/ccccccccccc",
+        duration: 150,
+        source: "youtube",
+        channel: "Artist Three",
+      },
+    ]),
+    ensureQueueVoiceConnection: async (targetQueue, options) => {
+      ensureVoiceConnectionCalls.push(options);
+      targetQueue.voiceChannel = { id: options.preferredVoiceChannelId };
+      targetQueue.connection = { joinConfig: { channelId: options.preferredVoiceChannelId } };
+      return {
+        ok: true,
+        joined: true,
+      };
+    },
+    getPlayNext: () => async (guildId) => {
+      playNextCalls.push(guildId);
+    },
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const searchResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "search term",
+      }),
+    });
+
+    assert.equal(searchResponse.statusCode, 200);
+    assert.equal(searchResponse.json?.mode, "chooser");
+    const searchId = searchResponse.json?.search?.id;
+    assert.equal(typeof searchId, "string");
+    assert.notEqual(searchId, "");
+
+    const selectResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search/select",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        search_id: searchId,
+        option_index: 0,
+      }),
+    });
+
+    assert.equal(selectResponse.statusCode, 200);
+    assert.equal(selectResponse.json?.ok, true);
+    assert.equal(selectResponse.json?.mode, "queued");
+    assert.equal(selectResponse.json?.queued?.title, "Selected Result");
+    assert.equal(queue.tracks.length, 1);
+    assert.equal(queue.tracks[0]?.title, "Selected Result");
+    assert.equal(ensureVoiceConnectionCalls.length, 1);
+    assert.equal(ensureVoiceConnectionCalls[0]?.preferredVoiceChannelId, "voice-1");
+    assert.deepEqual(playNextCalls, ["guild-1"]);
+    assert.equal(sentMessages.length, 1);
+    assert.equal(String(sentMessages[0] || "").includes("**Queued:**"), true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search queues resolved tracks directly without chooser", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const ensureVoiceConnectionCalls = [];
+  const queue = {
+    current: null,
+    tracks: [],
+    playing: false,
+    voiceChannel: null,
+    connection: null,
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  let searchOptionsCalled = false;
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async (_query, requester, options) => {
+      assert.equal(options?.allowSearchFallback, false);
+      return [{
+        title: "Direct Result",
+        url: "https://www.youtube.com/watch?v=ddddddddddd",
+        displayUrl: "https://youtu.be/ddddddddddd",
+        duration: 210,
+        source: "youtube",
+        channel: "Artist Four",
+        requester,
+      }];
+    },
+    getSearchOptionsForQuery: async () => {
+      searchOptionsCalled = true;
+      return [];
+    },
+    ensureQueueVoiceConnection: async (_targetQueue, options) => {
+      ensureVoiceConnectionCalls.push(options);
+      return { ok: true };
+    },
+    getPlayNext: () => async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "direct query",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.ok, true);
+    assert.equal(response.json?.mode, "queued");
+    assert.equal(response.json?.queuedCount, 1);
+    assert.equal(response.json?.queued?.title, "Direct Result");
+    assert.equal(queue.tracks.length, 1);
+    assert.equal(searchOptionsCalled, false);
+    assert.equal(ensureVoiceConnectionCalls.length, 1);
+    assert.equal(ensureVoiceConnectionCalls[0]?.preferredVoiceChannelId, "voice-1");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search requires caller voice channel when queue is not connected", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    playing: false,
+    voiceChannel: null,
+    connection: null,
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => null,
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async () => ([{
+      title: "Direct Result",
+      url: "https://www.youtube.com/watch?v=eeeeeeeeeee",
+      displayUrl: "https://youtu.be/eeeeeeeeeee",
+      duration: 99,
+      source: "youtube",
+      channel: "Artist Five",
+    }]),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "direct query",
+      }),
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json?.error, "Join a voice channel first.");
+    assert.equal(queue.tracks.length, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("auth me includes admin flags when session user is configured as admin", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();

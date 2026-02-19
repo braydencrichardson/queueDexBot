@@ -94,6 +94,11 @@ const state = {
   notice: "",
   noticeError: false,
   hasMountedDashboard: false,
+  queueSearchQuery: "",
+  queueSearchBusy: false,
+  queueSearchVisible: false,
+  queueSearchAutoDefaultPending: true,
+  queueSearchChooser: null,
   queueDrag: {
     active: false,
     pending: false,
@@ -964,6 +969,119 @@ function getQueueTotalCount() {
   return Number.isFinite(queueList?.total) ? queueList.total : tracks.length;
 }
 
+function markQueueSearchAutoDefaultPending() {
+  state.queueSearchAutoDefaultPending = true;
+}
+
+function applyQueueSearchAutoDefault() {
+  if (!state.queueSearchAutoDefaultPending) {
+    return;
+  }
+  state.queueSearchVisible = getQueueTotalCount() <= 0;
+  state.queueSearchAutoDefaultPending = false;
+}
+
+function isQueueSearchPanelVisible() {
+  return state.queueSearchVisible || state.queueSearchBusy || Boolean(getActiveQueueSearchChooser());
+}
+
+function getQueueSearchToggleButtonMarkup() {
+  const isVisible = isQueueSearchPanelVisible();
+  const label = isVisible ? "Hide Search" : "Search";
+  return `<button type="button" class="btn${isVisible ? " btn-secondary" : ""}" data-search-toggle="toggle"${state.queueSearchBusy ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+}
+
+function clearQueueSearchChooser() {
+  state.queueSearchChooser = null;
+}
+
+function clearQueueSearchState(options = {}) {
+  const keepQuery = Boolean(options.keepQuery);
+  state.queueSearchBusy = false;
+  state.queueSearchChooser = null;
+  if (!keepQuery) {
+    state.queueSearchQuery = "";
+  }
+}
+
+function getActiveQueueSearchChooser() {
+  const chooser = state.queueSearchChooser;
+  if (!chooser || typeof chooser !== "object") {
+    return null;
+  }
+  if (Number.isFinite(chooser.expiresAt) && chooser.expiresAt <= Date.now()) {
+    clearQueueSearchChooser();
+    return null;
+  }
+  if (!Array.isArray(chooser.options) || !chooser.options.length) {
+    clearQueueSearchChooser();
+    return null;
+  }
+  return chooser;
+}
+
+function getQueueSearchChooserMarkup() {
+  const chooser = getActiveQueueSearchChooser();
+  if (!chooser) {
+    return "";
+  }
+
+  const options = Array.isArray(chooser.options) ? chooser.options : [];
+  const expiresAtText = Number.isFinite(chooser.expiresAt) ? formatTime(chooser.expiresAt) : "soon";
+  return `
+    <div class="queue-search-chooser">
+      <p class="queue-search-chooser-heading">
+        Search results for <strong>${escapeHtml(chooser.query || "")}</strong>
+        <span class="queue-search-chooser-expiry">expires ${escapeHtml(expiresAtText)}</span>
+      </p>
+      <ul class="queue-search-option-list">
+        ${options.map((track, index) => `
+          <li class="queue-search-option-row">
+            <button
+              type="button"
+              class="btn btn-mini btn-primary"
+              data-queue-search-option="${escapeHtml(String(index))}"
+              ${state.queueSearchBusy ? " disabled" : ""}
+            >Queue</button>
+            <div class="queue-search-option-track">
+              ${getTrackSummaryMarkup(track, { compact: true, includeDuration: true })}
+            </div>
+          </li>
+        `).join("")}
+      </ul>
+      <div class="queue-search-chooser-actions">
+        <button type="button" class="btn" data-queue-search-action="queue-first"${state.queueSearchBusy ? " disabled" : ""}>Queue First</button>
+        <button type="button" class="btn btn-secondary" data-queue-search-action="dismiss"${state.queueSearchBusy ? " disabled" : ""}>Dismiss</button>
+      </div>
+    </div>
+  `;
+}
+
+function getQueueSearchComposerMarkup() {
+  const buttonLabel = state.queueSearchBusy ? "Searching..." : "Queue";
+  return `
+    <div class="queue-search-composer">
+      <form id="queue-search-form" class="queue-search-form">
+        <label for="queue-search-query" class="queue-search-label">Add to Queue</label>
+        <div class="queue-search-row">
+          <input
+            id="queue-search-query"
+            class="queue-search-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="URL or search text"
+            value="${escapeHtml(state.queueSearchQuery || "")}"
+            ${state.queueSearchBusy ? " disabled" : ""}
+          >
+          <button type="submit" class="btn btn-primary"${state.queueSearchBusy ? " disabled" : ""}>${escapeHtml(buttonLabel)}</button>
+        </div>
+      </form>
+      ${getQueueSearchChooserMarkup()}
+    </div>
+  `;
+}
+
 function getQueueDropSlotMarkup(insertBeforePosition, options = {}) {
   const position = parseQueuePosition(insertBeforePosition) || 1;
   const disabled = Boolean(options.disabled);
@@ -1176,6 +1294,9 @@ function getPlaybackReadyStateMarkup() {
     <div class="playback-ready-state">
       <p class="playback-ready-title">Ready</p>
       <p class="playback-ready-subtitle">Queue tracks to start playback.</p>
+      <div class="action-row playback-ready-action-row">
+        ${getQueueSearchToggleButtonMarkup()}
+      </div>
     </div>
   `;
 }
@@ -1403,6 +1524,7 @@ function renderDashboard() {
   const playbackControlsMarkup = hasNowPlaying
     ? `
       <div class="action-row playback-action-row">
+        ${getQueueSearchToggleButtonMarkup()}
         <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
         <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
         <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
@@ -1457,6 +1579,17 @@ function renderDashboard() {
       <button type="button" class="btn btn-secondary" id="theme-toggle">${escapeHtml(themeToggleLabel)}</button>
     </div>
   `;
+
+  const queueSearchPanelMarkup = isQueueSearchPanelVisible()
+    ? `
+      <section class="queue-search-panel">
+        <article class="panel-card">
+          <h2>Search / Play</h2>
+          ${getQueueSearchComposerMarkup()}
+        </article>
+      </section>
+    `
+    : "";
 
   const menuSectionsMarkup = `
       <nav class="menu-tabs">
@@ -1551,6 +1684,7 @@ function renderDashboard() {
       <section class="playback-panel">
         ${playbackCardMarkup}
       </section>
+      ${queueSearchPanelMarkup}
       ${menuSectionsMarkup}
       ${feedbackMarkup}
     </section>
@@ -1594,6 +1728,22 @@ function wireDashboardEvents() {
     });
   });
 
+  root.querySelectorAll("[data-search-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.queueSearchBusy) {
+        return;
+      }
+      state.queueSearchAutoDefaultPending = false;
+      if (isQueueSearchPanelVisible()) {
+        state.queueSearchVisible = false;
+        clearQueueSearchChooser();
+      } else {
+        state.queueSearchVisible = true;
+      }
+      renderDashboard();
+    });
+  });
+
   const connectionStatusButton = root.querySelector("#connection-status-btn");
   if (connectionStatusButton) {
     connectionStatusButton.addEventListener("click", () => {
@@ -1609,7 +1759,10 @@ function wireDashboardEvents() {
         return;
       }
       clearQueueDragState();
+      clearQueueSearchState();
       state.selectedGuildId = nextGuildId;
+      state.queueSearchVisible = false;
+      markQueueSearchAutoDefaultPending();
       setGuildQueryParam(nextGuildId);
       void refreshDashboardData();
     });
@@ -1649,6 +1802,57 @@ function wireDashboardEvents() {
       void sendQueueAction("loop", { mode });
     });
   }
+
+  const queueSearchInput = root.querySelector("#queue-search-query");
+  if (queueSearchInput) {
+    queueSearchInput.addEventListener("input", () => {
+      state.queueSearchQuery = String(queueSearchInput.value || "");
+    });
+  }
+
+  const queueSearchForm = root.querySelector("#queue-search-form");
+  if (queueSearchForm) {
+    queueSearchForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (state.queueSearchBusy) {
+        return;
+      }
+      void sendQueueSearch(state.queueSearchQuery);
+    });
+  }
+
+  root.querySelectorAll("[data-queue-search-option]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.queueSearchBusy) {
+        return;
+      }
+      const optionIndex = Number.parseInt(String(button.getAttribute("data-queue-search-option") || ""), 10);
+      if (!Number.isFinite(optionIndex) || optionIndex < 0) {
+        return;
+      }
+      void selectQueueSearchOption(optionIndex);
+    });
+  });
+
+  root.querySelectorAll("[data-queue-search-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.queueSearchBusy) {
+        return;
+      }
+      const action = String(button.getAttribute("data-queue-search-action") || "").trim().toLowerCase();
+      if (!action) {
+        return;
+      }
+      if (action === "dismiss") {
+        clearQueueSearchChooser();
+        renderDashboard();
+        return;
+      }
+      if (action === "queue-first") {
+        void selectQueueSearchOption(0, { queueFirst: true });
+      }
+    });
+  });
 
   root.querySelectorAll("[data-track-drag-handle]").forEach((handle) => {
     handle.addEventListener("dragstart", (event) => {
@@ -2153,10 +2357,15 @@ function resolveInitialGuildId() {
 }
 
 function updateSelectedGuildFromAuth() {
+  const previousGuildId = state.selectedGuildId;
   const guilds = getGuildOptionList();
   if (state.mode === "embedded" && state.sdkContext.guildId) {
     state.selectedGuildId = state.sdkContext.guildId;
     setGuildQueryParam(state.selectedGuildId);
+    if (state.selectedGuildId !== previousGuildId) {
+      state.queueSearchVisible = false;
+      markQueueSearchAutoDefaultPending();
+    }
     return;
   }
 
@@ -2168,16 +2377,26 @@ function updateSelectedGuildFromAuth() {
   if (preferredGuildId && guilds.some((guild) => guild.id === preferredGuildId)) {
     state.selectedGuildId = preferredGuildId;
     setGuildQueryParam(state.selectedGuildId);
+    if (state.selectedGuildId !== previousGuildId) {
+      state.queueSearchVisible = false;
+      markQueueSearchAutoDefaultPending();
+    }
     return;
   }
   if (guilds.length) {
     state.selectedGuildId = guilds[0].id;
     setGuildQueryParam(state.selectedGuildId);
+    if (state.selectedGuildId !== previousGuildId) {
+      state.queueSearchVisible = false;
+      markQueueSearchAutoDefaultPending();
+    }
     return;
   }
 
   state.selectedGuildId = null;
   setGuildQueryParam(null);
+  state.queueSearchVisible = false;
+  state.queueSearchAutoDefaultPending = false;
 }
 
 async function refreshAdminProvidersStatus() {
@@ -2316,6 +2535,8 @@ async function refreshQueueDataForSelectedGuild() {
   if (!state.selectedGuildId) {
     state.queueSummary = null;
     state.queueList = null;
+    state.queueSearchVisible = false;
+    state.queueSearchAutoDefaultPending = false;
     return;
   }
 
@@ -2330,6 +2551,7 @@ async function refreshQueueDataForSelectedGuild() {
   ]);
   state.queueSummary = queueSummary;
   state.queueList = queueList;
+  applyQueueSearchAutoDefault();
 }
 
 async function refreshQueueListForSelectedGuild() {
@@ -2376,6 +2598,140 @@ async function sendControlAction(action) {
     state.notice = `Action failed (${action}): ${error?.message || String(error)}`;
     state.noticeError = true;
     pushDebugEvent("control.failed", state.notice);
+    renderDashboard();
+  }
+}
+
+async function sendQueueSearch(queryInput) {
+  if (!state.selectedGuildId) {
+    state.notice = "Select a guild first.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+
+  const query = String(queryInput || "").trim();
+  if (!query) {
+    state.notice = "Enter a URL or search query first.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+
+  state.queueSearchQuery = query;
+  state.queueSearchBusy = true;
+  renderDashboard();
+
+  pushDebugEvent("queue.search.start", `guild=${state.selectedGuildId}; query=${query}`);
+  try {
+    const payload = await fetchJson("/api/activity/queue/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        guild_id: state.selectedGuildId,
+        query,
+      }),
+    });
+
+    state.queueSummary = {
+      guildId: payload.guildId || state.selectedGuildId,
+      data: payload.data || null,
+    };
+
+    if (payload.mode === "chooser" && payload.search) {
+      state.queueSearchChooser = payload.search;
+      state.notice = "Choose a result to queue.";
+      state.noticeError = false;
+      pushDebugEvent("queue.search.chooser", `options=${Array.isArray(payload.search.options) ? payload.search.options.length : 0}`);
+      return;
+    }
+
+    clearQueueSearchState();
+    await refreshQueueListForSelectedGuild();
+    const queuedCount = Number.isFinite(payload.queuedCount) ? payload.queuedCount : 0;
+    state.notice = queuedCount > 0
+      ? `Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`
+      : "Queued successfully.";
+    state.noticeError = false;
+    pushDebugEvent("queue.search.queued", `count=${queuedCount}`);
+  } catch (error) {
+    state.notice = `Queue search failed: ${error?.message || String(error)}`;
+    state.noticeError = true;
+    if (error?.status === 410) {
+      clearQueueSearchChooser();
+    }
+    pushDebugEvent("queue.search.failed", state.notice);
+  } finally {
+    state.queueSearchBusy = false;
+    renderDashboard();
+  }
+}
+
+async function selectQueueSearchOption(optionIndex, options = {}) {
+  if (!state.selectedGuildId) {
+    state.notice = "Select a guild first.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+
+  const chooser = getActiveQueueSearchChooser();
+  if (!chooser) {
+    state.notice = "That search has expired.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+
+  const parsedIndex = Number.parseInt(String(optionIndex), 10);
+  if (!Number.isFinite(parsedIndex) || parsedIndex < 0 || parsedIndex >= chooser.options.length) {
+    state.notice = "Choose a valid search result.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+
+  const queueFirst = Boolean(options.queueFirst);
+  state.queueSearchBusy = true;
+  renderDashboard();
+
+  pushDebugEvent("queue.search.select.start", `index=${parsedIndex}; guild=${state.selectedGuildId}`);
+  try {
+    const payload = await fetchJson("/api/activity/queue/search/select", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        guild_id: state.selectedGuildId,
+        search_id: chooser.id,
+        option_index: parsedIndex,
+        queue_first: queueFirst,
+      }),
+    });
+
+    state.queueSummary = {
+      guildId: payload.guildId || state.selectedGuildId,
+      data: payload.data || null,
+    };
+    clearQueueSearchState();
+    await refreshQueueListForSelectedGuild();
+    state.notice = "Queued selected search result.";
+    state.noticeError = false;
+    pushDebugEvent("queue.search.select.success", `index=${parsedIndex}`);
+  } catch (error) {
+    state.notice = `Queue select failed: ${error?.message || String(error)}`;
+    state.noticeError = true;
+    if (error?.status === 410) {
+      clearQueueSearchChooser();
+    }
+    pushDebugEvent("queue.search.select.failed", state.notice);
+  } finally {
+    state.queueSearchBusy = false;
     renderDashboard();
   }
 }

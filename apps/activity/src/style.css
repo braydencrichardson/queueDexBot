@@ -967,6 +967,10 @@ dd {
   margin-top: 0.62rem;
 }
 
+.playback-ready-action-row {
+  margin-top: 0.62rem;
+}
+
 .queue-header-row {
   display: flex;
   align-items: center;
@@ -979,6 +983,10 @@ dd {
   margin: 0;
 }
 
+.queue-search-panel {
+  margin-top: 0.85rem;
+}
+
 .queue-remaining {
   margin: 0;
   color: var(--text-muted);
@@ -988,6 +996,104 @@ dd {
 .queue-remaining strong {
   color: var(--text-secondary);
   font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.queue-search-composer {
+  margin-top: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
+  padding: 0.65rem;
+}
+
+.queue-search-panel .queue-search-composer {
+  margin-top: 0;
+}
+
+.queue-search-form {
+  margin: 0;
+}
+
+.queue-search-label {
+  display: block;
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 0.38rem;
+}
+
+.queue-search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.queue-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  padding: 0.48rem 0.58rem;
+  font: inherit;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+}
+
+.queue-search-input::placeholder {
+  color: color-mix(in srgb, var(--text-muted) 82%, transparent);
+}
+
+.queue-search-chooser {
+  margin-top: 0.62rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding-top: 0.62rem;
+}
+
+.queue-search-chooser-heading {
+  margin: 0 0 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: baseline;
+}
+
+.queue-search-chooser-expiry {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.queue-search-option-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.queue-search-option-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.queue-search-option-track {
+  min-width: 0;
+}
+
+.queue-search-option-track .track-summary {
+  margin-top: 0;
+}
+
+.queue-search-chooser-actions {
+  margin-top: 0.58rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 .up-next-track-list {
@@ -1302,6 +1408,19 @@ dd {
   }
 
   .queue-toolbar .btn {
+    flex: 1;
+  }
+
+  .queue-search-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .queue-search-row .btn {
+    width: 100%;
+  }
+
+  .queue-search-chooser-actions .btn {
     flex: 1;
   }
 
