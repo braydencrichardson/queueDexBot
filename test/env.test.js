@@ -25,6 +25,7 @@ test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   assert.equal(Number.isNaN(env.authSessionTtlMs), true);
   assert.equal(env.authSessionCookieName, "qdex_session");
   assert.equal(env.authSessionCookieSecure, true);
+  assert.deepEqual(env.authAdminUserIds, []);
   assert.equal(env.logLevel, "info");
   assert.equal(env.logDir, "logs");
   assert.equal(env.logServiceName, "controller");
@@ -60,6 +61,7 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
     AUTH_SESSION_TTL_MS: "3600000",
     AUTH_SESSION_COOKIE_NAME: "qdex_cookie",
     AUTH_SESSION_COOKIE_SECURE: "0",
+    AUTH_ADMIN_USER_IDS: "123, 456 789,123",
     LOG_LEVEL: "debug",
     LOG_DIR: "/tmp/queuedex-logs",
     LOG_SERVICE_NAME: "worker",
@@ -94,6 +96,7 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   assert.equal(env.authSessionTtlMs, 3600000);
   assert.equal(env.authSessionCookieName, "qdex_cookie");
   assert.equal(env.authSessionCookieSecure, false);
+  assert.deepEqual(env.authAdminUserIds, ["123", "456", "789"]);
   assert.equal(env.logLevel, "debug");
   assert.equal(env.logDir, "/tmp/queuedex-logs");
   assert.equal(env.logServiceName, "worker");

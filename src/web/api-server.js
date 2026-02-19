@@ -211,6 +211,18 @@ function toFiniteInteger(value) {
   return Math.trunc(numeric);
 }
 
+function normalizeUserIdList(rawIds) {
+  if (Array.isArray(rawIds)) {
+    return rawIds
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+  }
+  return String(rawIds || "")
+    .split(/[,\s]+/)
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
 function getQueueVoiceChannelId(queue) {
   return String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim() || null;
 }
@@ -302,6 +314,7 @@ function createApiServer(options) {
   const cookieName = String(config.cookieName || "qdex_session").trim() || "qdex_session";
   const cookieSecure = toBoolean(config.cookieSecure, true);
   const cookieSameSite = cookieSecure ? "None" : "Lax";
+  const adminUserIds = new Set(normalizeUserIdList(config.adminUserIds));
 
   const oauthConfigured = Boolean(oauthClientId && oauthClientSecret);
   const pendingWebStates = new Map();
@@ -330,8 +343,25 @@ function createApiServer(options) {
       scopes: payload.scopes || oauthScopes,
       accessToken: payload.accessToken || null,
       tokenType: payload.tokenType || "Bearer",
+      adminBypassVoiceChannelCheck: false,
     });
     return sessions.get(sessionId);
+  }
+
+  function isAdminUserId(userId) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) {
+      return false;
+    }
+    return adminUserIds.has(normalizedUserId);
+  }
+
+  function getSessionAdminSettings(session) {
+    const isAdmin = isAdminUserId(session?.user?.id);
+    return {
+      isAdmin,
+      bypassVoiceChannelCheck: isAdmin && Boolean(session?.adminBypassVoiceChannelCheck),
+    };
   }
 
   function getSessionFromRequest(request) {
@@ -435,7 +465,9 @@ function createApiServer(options) {
       return null;
     }
 
-    if (requireVoiceChannelMatch && queue) {
+    const adminSettings = getSessionAdminSettings(session);
+
+    if (requireVoiceChannelMatch && queue && !adminSettings.bypassVoiceChannelCheck) {
       const queueVoiceChannelId = getQueueVoiceChannelId(queue);
       if (queueVoiceChannelId) {
         const userId = String(session?.user?.id || "").trim();
@@ -471,6 +503,7 @@ function createApiServer(options) {
 
     return {
       session,
+      admin: adminSettings,
       guildId: normalizedGuildId,
       queue,
     };
@@ -666,6 +699,59 @@ function createApiServer(options) {
       });
       sendJson(response, 500, { error: error.message || "Failed to apply queue action" });
     }
+  }
+
+  async function handleAdminSettings(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    const session = getSessionFromRequest(request);
+    if (!session) {
+      sendJson(response, 401, { error: "Unauthorized" });
+      return;
+    }
+
+    const adminSettings = getSessionAdminSettings(session);
+    if (!adminSettings.isAdmin) {
+      sendJson(response, 403, { error: "Forbidden" });
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const hasBypassField = Object.hasOwn(body, "bypass_voice_check")
+      || Object.hasOwn(body, "bypassVoiceCheck")
+      || Object.hasOwn(body, "bypassVoiceChannelCheck");
+    if (!hasBypassField) {
+      sendJson(response, 400, { error: "Missing bypass_voice_check" });
+      return;
+    }
+
+    const bypassVoiceChannelCheck = toBoolean(
+      body.bypass_voice_check ?? body.bypassVoiceCheck ?? body.bypassVoiceChannelCheck,
+      false
+    );
+    session.adminBypassVoiceChannelCheck = bypassVoiceChannelCheck;
+
+    logInfo("Updated activity admin settings", {
+      userId: session?.user?.id || null,
+      bypassVoiceChannelCheck,
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      admin: {
+        isAdmin: true,
+        bypassVoiceChannelCheck,
+      },
+    });
   }
 
   async function handleActivityQueueList(request, response, requestUrl) {
@@ -962,6 +1048,7 @@ function createApiServer(options) {
           oauthConfigured,
           webRedirectConfigured: Boolean(oauthWebRedirectUri),
           activityRedirectConfigured: Boolean(oauthActivityRedirectUri),
+          adminUserCount: adminUserIds.size,
           now: Date.now(),
         });
         return;
@@ -1016,6 +1103,7 @@ function createApiServer(options) {
           },
           user: session.user,
           guilds: visibleGuilds,
+          admin: getSessionAdminSettings(session),
         });
         return;
       }
@@ -1071,6 +1159,11 @@ function createApiServer(options) {
 
       if (request.method === "POST" && pathname === "/api/activity/queue/action") {
         await handleActivityQueueAction(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/admin/settings") {
+        await handleAdminSettings(request, response);
         return;
       }
 

@@ -13,6 +13,7 @@ const BUILD_ID = typeof __QDEX_ACTIVITY_BUILD__ !== "undefined" ? __QDEX_ACTIVIT
 const TAB_PLAYER = "player";
 const TAB_QUEUE = "queue";
 const TAB_DEBUG = "debug";
+const TAB_ADMIN = "admin";
 
 const state = {
   mode: "unknown",
@@ -226,6 +227,14 @@ function getGuildOptionList() {
   return guilds.filter((entry) => entry?.id && entry?.name);
 }
 
+function getAdminState() {
+  const admin = state.authSummary?.admin || null;
+  return {
+    isAdmin: Boolean(admin?.isAdmin),
+    bypassVoiceChannelCheck: Boolean(admin?.bypassVoiceChannelCheck),
+  };
+}
+
 function getGuildSelectionMarkup() {
   const guildOptions = getGuildOptionList();
   if (!guildOptions.length) {
@@ -303,6 +312,10 @@ function renderDashboard() {
   const queue = getCurrentQueueData();
   const queueList = getQueueListData();
   const mode = state.mode || "unknown";
+  const adminState = getAdminState();
+  if (!adminState.isAdmin && state.activeTab === TAB_ADMIN) {
+    state.activeTab = TAB_PLAYER;
+  }
   const queueStatusText = queue
     ? `${queue.playerStatus || "idle"} | ${queue.connected ? "connected" : "not connected"} | ${queue.queueLength || 0} queued`
     : "unavailable";
@@ -319,6 +332,9 @@ function renderDashboard() {
   const noticeMarkup = state.notice
     ? `<p class="subtitle ${state.noticeError ? "error" : ""}">${escapeHtml(state.notice)}</p>`
     : "";
+  const tabSubtitle = adminState.isAdmin
+    ? "Use tabs for player, queue, admin, and diagnostics."
+    : "Use tabs for player, queue, and diagnostics.";
 
   const shellClass = state.hasMountedDashboard ? "shell" : "shell shell-animated";
   root.innerHTML = `
@@ -328,7 +344,7 @@ function renderDashboard() {
         <span class="chip chip-ok">Connected</span>
       </div>
       <h1>queueDexBot Control Panel</h1>
-      <p class="subtitle">Use tabs for player, queue, and diagnostics.</p>
+      <p class="subtitle">${escapeHtml(tabSubtitle)}</p>
       ${noticeMarkup}
       <div class="toolbar">
         ${getGuildSelectionMarkup()}
@@ -340,6 +356,9 @@ function renderDashboard() {
       <nav class="menu-tabs">
         <button type="button" class="tab-btn${state.activeTab === TAB_PLAYER ? " active" : ""}" data-tab="${TAB_PLAYER}">Player</button>
         <button type="button" class="tab-btn${state.activeTab === TAB_QUEUE ? " active" : ""}" data-tab="${TAB_QUEUE}">Queue</button>
+        ${adminState.isAdmin
+          ? `<button type="button" class="tab-btn${state.activeTab === TAB_ADMIN ? " active" : ""}" data-tab="${TAB_ADMIN}">Admin</button>`
+          : ""}
         <button type="button" class="tab-btn${state.activeTab === TAB_DEBUG ? " active" : ""}" data-tab="${TAB_DEBUG}">Debug</button>
       </nav>
       <section class="menu-panel${state.activeTab === TAB_PLAYER ? " active" : ""}" data-panel="${TAB_PLAYER}">
@@ -376,11 +395,24 @@ function renderDashboard() {
               <option value="queue"${loopMode === "queue" ? " selected" : ""}>Loop Queue</option>
               <option value="single"${loopMode === "single" ? " selected" : ""}>Loop Single</option>
             </select>
-            <button type="button" class="btn" data-queue-action="loop">Set Loop</button>
           </div>
           ${getQueueTrackListMarkup()}
         </article>
       </section>
+      ${adminState.isAdmin
+        ? `
+      <section class="menu-panel${state.activeTab === TAB_ADMIN ? " active" : ""}" data-panel="${TAB_ADMIN}">
+        <article class="panel-card">
+          <h2>Admin Overrides</h2>
+          <p class="muted">Use with care. These controls apply only to your current web/activity session.</p>
+          <label class="toggle-row">
+            <input type="checkbox" id="admin-bypass-voice-check"${adminState.bypassVoiceChannelCheck ? " checked" : ""}>
+            <span>Bypass voice channel presence check for API controls</span>
+          </label>
+        </article>
+      </section>
+        `
+        : ""}
       <section class="menu-panel${state.activeTab === TAB_DEBUG ? " active" : ""}" data-panel="${TAB_DEBUG}">
         <article class="panel-card">
           <h2>Session / Debug</h2>
@@ -451,18 +483,20 @@ function wireDashboardEvents() {
         void refreshDashboardData();
         return;
       }
-      if (action === "loop") {
-        const loopSelect = root.querySelector("#queue-loop-mode");
-        const mode = String(loopSelect?.value || "").trim().toLowerCase();
-        if (!mode) {
-          return;
-        }
-        void sendQueueAction(action, { mode });
-        return;
-      }
       void sendQueueAction(action);
     });
   });
+
+  const queueLoopModeSelect = root.querySelector("#queue-loop-mode");
+  if (queueLoopModeSelect) {
+    queueLoopModeSelect.addEventListener("change", () => {
+      const mode = String(queueLoopModeSelect.value || "").trim().toLowerCase();
+      if (!mode || mode === getQueueLoopMode()) {
+        return;
+      }
+      void sendQueueAction("loop", { mode });
+    });
+  }
 
   root.querySelectorAll("[data-track-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -508,6 +542,15 @@ function wireDashboardEvents() {
   if (logoutButton) {
     logoutButton.addEventListener("click", () => {
       void logoutWebSession();
+    });
+  }
+
+  const bypassVoiceCheckToggle = root.querySelector("#admin-bypass-voice-check");
+  if (bypassVoiceCheckToggle) {
+    bypassVoiceCheckToggle.addEventListener("change", () => {
+      void sendAdminSettings({
+        bypass_voice_check: Boolean(bypassVoiceCheckToggle.checked),
+      });
     });
   }
 }
@@ -852,6 +895,44 @@ async function sendQueueAction(action, actionOptions = {}) {
     state.notice = `Queue action failed (${action}): ${error?.message || String(error)}`;
     state.noticeError = true;
     pushDebugEvent("queue.action.failed", state.notice);
+    renderDashboard();
+  }
+}
+
+async function sendAdminSettings(settings) {
+  const adminState = getAdminState();
+  if (!adminState.isAdmin) {
+    state.notice = "Admin access is required for this action.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+  pushDebugEvent("admin.settings.start");
+  try {
+    const payload = await fetchJson("/api/activity/admin/settings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify(settings || {}),
+    });
+    state.authSummary = {
+      ...(state.authSummary || {}),
+      admin: {
+        ...(state.authSummary?.admin || {}),
+        ...(payload?.admin || {}),
+      },
+    };
+    const bypassEnabled = Boolean(payload?.admin?.bypassVoiceChannelCheck);
+    state.notice = `Admin setting updated: voice-check bypass ${bypassEnabled ? "enabled" : "disabled"}.`;
+    state.noticeError = false;
+    pushDebugEvent("admin.settings.success", `bypass=${bypassEnabled}`);
+    renderDashboard();
+  } catch (error) {
+    state.notice = `Admin setting update failed: ${error?.message || String(error)}`;
+    state.noticeError = true;
+    pushDebugEvent("admin.settings.failed", state.notice);
     renderDashboard();
   }
 }

@@ -66,6 +66,7 @@ Discord OAuth / API server (for Activity + future web view):
 - `AUTH_SESSION_TTL_MS`: Optional session TTL in ms (default: 8 hours).
 - `AUTH_SESSION_COOKIE_NAME`: Session cookie name (default: `qdex_session`).
 - `AUTH_SESSION_COOKIE_SECURE`: `1` (default) or `0`.
+- `AUTH_ADMIN_USER_IDS`: Optional comma/space-separated Discord user IDs for Activity admin overrides.
 
 yt-dlp / YouTube:
 
@@ -223,6 +224,7 @@ Web mode notes:
 - Opening the Activity URL directly in a browser now shows a web login screen (via `/auth/discord/web/start`).
 - After login, you can select a guild and use basic controls (`pause`, `resume`, `skip`, `stop`, `clear queue`) from the web UI.
 - Activity/web controls require the user to be in the same voice channel as the bot when the bot is connected.
+- Admin users listed in `AUTH_ADMIN_USER_IDS` can enable a session-level bypass for this voice check in the Activity Admin tab.
 - Guild selector is filtered to guilds where both the user and bot are present.
 - Session/Discord diagnostics are available under the `Debug` tab in the UI.
 
@@ -231,6 +233,7 @@ Activity API notes:
 - `GET /api/activity/queue?guild_id=...&offset=0&limit=100`: paged queue listing for richer UIs (e.g. drag-drop).
 - `POST /api/activity/control`: playback actions (`pause|resume|skip|stop|clear`).
 - `POST /api/activity/queue/action`: queue actions (`clear|shuffle|move|move_to_front|remove|loop`).
+- `POST /api/activity/admin/settings`: admin-only settings endpoint (`bypass_voice_check`).
 - Mutation endpoints enforce guild access and same-voice-channel checks when the bot is connected.
 
 Notes:

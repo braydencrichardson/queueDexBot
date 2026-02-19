@@ -312,6 +312,23 @@ dd {
   gap: 0.3rem;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin-top: 0.6rem;
+  color: #223356;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.toggle-row input {
+  margin-top: 0.15rem;
+  width: 1rem;
+  height: 1rem;
+  accent-color: #1a8a76;
+}
+
 .panel-card-wide {
   grid-column: 1 / -1;
 }

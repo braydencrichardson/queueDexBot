@@ -477,3 +477,151 @@ test("activity queue action requires user in bot voice channel", async () => {
     global.fetch = originalFetch;
   }
 });
+
+test("auth me includes admin flags when session user is configured as admin", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: "/auth/me",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.authenticated, true);
+    assert.equal(response.json?.admin?.isAdmin, true);
+    assert.equal(response.json?.admin?.bypassVoiceChannelCheck, false);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity admin settings endpoint rejects non-admin users", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["different-user"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/settings",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        bypass_voice_check: true,
+      }),
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json?.error, "Forbidden");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity admin can enable voice-check bypass for current session", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let pauseCalled = false;
+  const queue = {
+    current: { id: "track-1", title: "Song" },
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "playing" },
+      pause() {
+        pauseCalled = true;
+      },
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => null,
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const adminUpdateResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/settings",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        bypass_voice_check: true,
+      }),
+    });
+
+    assert.equal(adminUpdateResponse.statusCode, 200);
+    assert.equal(adminUpdateResponse.json?.ok, true);
+    assert.equal(adminUpdateResponse.json?.admin?.isAdmin, true);
+    assert.equal(adminUpdateResponse.json?.admin?.bypassVoiceChannelCheck, true);
+
+    const authMeResponse = await dispatch(serverApi, {
+      method: "GET",
+      path: "/auth/me",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(authMeResponse.statusCode, 200);
+    assert.equal(authMeResponse.json?.admin?.isAdmin, true);
+    assert.equal(authMeResponse.json?.admin?.bypassVoiceChannelCheck, true);
+
+    const controlResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/control",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "pause",
+      }),
+    });
+
+    assert.equal(controlResponse.statusCode, 200);
+    assert.equal(controlResponse.json?.ok, true);
+    assert.equal(pauseCalled, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

@@ -48,6 +48,17 @@ function parseByteSizeEnv(rawValue, fallbackBytes) {
   return numeric * multiplier;
 }
 
+function parseIdListEnv(rawValue) {
+  const values = String(rawValue || "")
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!values.length) {
+    return [];
+  }
+  return Array.from(new Set(values));
+}
+
 function loadEnvVars(sourceEnv = process.env) {
   const oauthClientId = sourceEnv.DISCORD_OAUTH_CLIENT_ID || sourceEnv.APPLICATION_ID;
   return {
@@ -83,6 +94,7 @@ function loadEnvVars(sourceEnv = process.env) {
     authSessionTtlMs: parseInt(sourceEnv.AUTH_SESSION_TTL_MS || "", 10),
     authSessionCookieName: sourceEnv.AUTH_SESSION_COOKIE_NAME || "qdex_session",
     authSessionCookieSecure: parseBooleanEnv(sourceEnv.AUTH_SESSION_COOKIE_SECURE, true),
+    authAdminUserIds: parseIdListEnv(sourceEnv.AUTH_ADMIN_USER_IDS),
     logLevel: String(sourceEnv.LOG_LEVEL || "info").trim().toLowerCase() || "info",
     logDir: sourceEnv.LOG_DIR || "logs",
     logServiceName: sourceEnv.LOG_SERVICE_NAME || "controller",

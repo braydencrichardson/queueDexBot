@@ -270,6 +270,7 @@ const apiServer = env.authServerEnabled
       sessionTtlMs: env.authSessionTtlMs,
       cookieName: env.authSessionCookieName,
       cookieSecure: env.authSessionCookieSecure,
+      adminUserIds: env.authAdminUserIds,
     },
   })
   : null;
