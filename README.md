@@ -53,14 +53,14 @@ Core Discord/deploy:
 - `GUILD_ID`: Optional; required for guild-scoped command deploys.
 - `DEPLOY_COMMANDS_TARGET`: Optional default deploy target. Valid values: `global`, `guild`.
 
-Discord OAuth / auth server (for Activity + future web view):
+Discord OAuth / API server (for Activity + future web view):
 
 - `DISCORD_OAUTH_CLIENT_ID`: Optional OAuth client id override (defaults to `APPLICATION_ID`).
 - `DISCORD_OAUTH_CLIENT_SECRET`: Required for OAuth code exchange endpoints.
 - `DISCORD_OAUTH_REDIRECT_URI_WEB`: Web OAuth callback URI (for `/auth/discord/web/callback`).
 - `DISCORD_OAUTH_REDIRECT_URI_ACTIVITY`: Optional explicit redirect URI used for embedded activity code exchange.
 - `DISCORD_OAUTH_SCOPES`: Space-separated scopes (default: `identify guilds`).
-- `AUTH_SERVER_ENABLED`: `1` (default) to start auth/API server, `0` to disable.
+- `AUTH_SERVER_ENABLED`: `1` (default) to start API/Auth server, `0` to disable.
 - `AUTH_SERVER_HOST`: Bind host (default: `127.0.0.1`).
 - `AUTH_SERVER_PORT`: Bind port (default: `8787`).
 - `AUTH_SESSION_TTL_MS`: Optional session TTL in ms (default: 8 hours).
@@ -195,7 +195,7 @@ VITE_ACTIVITY_API_PROXY_TARGET=http://127.0.0.1:8787
 npm run activity:dev
 ```
 
-4. Ensure the bot process is running (`npm start`) so Activity auth/API routes are available on `AUTH_SERVER_PORT`.
+4. Ensure the bot process is running (`npm start`) so Activity API/Auth routes are available on `AUTH_SERVER_PORT`.
 
 5. Expose it via HTTPS (for web/desktop Activity testing) and set Discord Activity URL Mapping to the tunnel target.
 
@@ -209,6 +209,7 @@ Auth mode notes:
 Web mode notes:
 - Opening the Activity URL directly in a browser now shows a web login screen (via `/auth/discord/web/start`).
 - After login, you can select a guild and use basic controls (`pause`, `resume`, `skip`, `stop`, `clear queue`) from the web UI.
+- Activity/web controls require the user to be in the same voice channel as the bot when the bot is connected.
 - Guild selector is filtered to guilds where both the user and bot are present.
 - Session/Discord diagnostics are available under the `Debug` tab in the UI.
 
@@ -221,7 +222,7 @@ Notes:
 Use two terminals:
 
 ```bash
-# terminal 1: bot + auth/api server
+# terminal 1: bot + api/auth server
 npm start
 
 # terminal 2: activity vite dev server
@@ -273,9 +274,9 @@ npm run activity:preview
 ```
 
 For local env:
-- Root `.env` drives bot/auth server (`AUTH_SERVER_*`, `DISCORD_OAUTH_*`).
+- Root `.env` drives bot API/Auth server (`AUTH_SERVER_*`, `DISCORD_OAUTH_*`).
 - `apps/activity/.env` drives Vite client behavior (`VITE_*`).
-- `VITE_ACTIVITY_API_PROXY_TARGET` should point at your auth/api server in dev (default: `http://127.0.0.1:8787`).
+- `VITE_ACTIVITY_API_PROXY_TARGET` should point at your API/Auth server in dev (default: `http://127.0.0.1:8787`).
 
 ### Cloudflare Tunnel (Dev)
 

@@ -47,7 +47,7 @@ const { normalizeQueryInput } = require("./src/utils/query");
 const { registerInteractionHandler } = require("./src/handlers/interaction");
 const { registerReadyHandler } = require("./src/handlers/ready");
 const { registerVoiceStateHandler } = require("./src/handlers/voice-state");
-const { createAuthServer } = require("./src/web/auth-server");
+const { createApiServer } = require("./src/web/api-server");
 
 dotenv.config();
 const env = loadEnvVars(process.env);
@@ -198,8 +198,8 @@ const {
   },
 });
 
-const authServer = env.authServerEnabled
-  ? createAuthServer({
+const apiServer = env.authServerEnabled
+  ? createApiServer({
     queues,
     logInfo,
     logError,
@@ -212,6 +212,32 @@ const authServer = env.authServerEnabled
         return true;
       }
       return Boolean(client.guilds?.cache?.has(normalizedGuildId));
+    },
+    getUserVoiceChannelId: async (guildId, userId) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      if (!normalizedGuildId || !normalizedUserId) {
+        return null;
+      }
+      const guild = client.guilds?.cache?.get(normalizedGuildId);
+      if (!guild) {
+        return null;
+      }
+
+      const voiceState = guild.voiceStates?.cache?.get(normalizedUserId);
+      if (voiceState?.channelId) {
+        return voiceState.channelId;
+      }
+
+      let member = guild.members?.cache?.get(normalizedUserId) || null;
+      if (!member && typeof guild.members?.fetch === "function") {
+        try {
+          member = await guild.members.fetch(normalizedUserId);
+        } catch {
+          return null;
+        }
+      }
+      return member?.voice?.channelId || member?.voice?.channel?.id || null;
     },
     stopAndLeaveQueue,
     maybeRefreshNowPlayingUpNext,
@@ -231,10 +257,10 @@ const authServer = env.authServerEnabled
   })
   : null;
 
-if (authServer) {
-  authServer.start();
+if (apiServer) {
+  apiServer.start();
 } else {
-  logInfo("Auth/API server disabled by AUTH_SERVER_ENABLED=0");
+  logInfo("API/Auth server disabled by AUTH_SERVER_ENABLED=0");
 }
 
 const { trySendSearchChooser } = createSearchChooser({

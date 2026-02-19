@@ -51,6 +51,7 @@ function serializeCookie({
 
 function setCommonHeaders(response) {
   response.setHeader("Cache-Control", "no-store");
+  response.setHeader("X-Content-Type-Options", "nosniff");
 }
 
 function sendJson(response, statusCode, payload) {
@@ -102,6 +103,19 @@ async function readJsonBody(request, maxBytes = MAX_JSON_BODY_BYTES) {
     });
     request.on("error", reject);
   });
+}
+
+function hasJsonContentType(request) {
+  const contentType = String(request?.headers?.["content-type"] || "").toLowerCase();
+  return contentType.includes("application/json");
+}
+
+function requireJsonRequest(request, response) {
+  if (hasJsonContentType(request)) {
+    return true;
+  }
+  sendJson(response, 415, { error: "Expected Content-Type: application/json" });
+  return false;
 }
 
 function summarizeUser(userPayload) {
@@ -188,6 +202,10 @@ function normalizeScopes(rawScopes) {
   return normalized || DEFAULT_OAUTH_SCOPES;
 }
 
+function getQueueVoiceChannelId(queue) {
+  return String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim() || null;
+}
+
 async function exchangeDiscordCode({
   clientId,
   clientSecret,
@@ -244,12 +262,13 @@ async function fetchDiscordResource(accessToken, routePath) {
   return response.json();
 }
 
-function createAuthServer(options) {
+function createApiServer(options) {
   const {
     queues,
     logInfo = () => {},
     logError = () => {},
     isBotInGuild = () => true,
+    getUserVoiceChannelId = async () => null,
     stopAndLeaveQueue = null,
     maybeRefreshNowPlayingUpNext = async () => {},
     sendNowPlaying = async () => {},
@@ -263,7 +282,10 @@ function createAuthServer(options) {
   const oauthScopes = normalizeScopes(config.oauthScopes || DEFAULT_OAUTH_SCOPES);
 
   const host = String(config.host || "127.0.0.1").trim() || "127.0.0.1";
-  const port = Number(config.port) || 8787;
+  const parsedPort = Number(config.port);
+  const port = Number.isInteger(parsedPort) && parsedPort >= 0 && parsedPort <= 65535
+    ? parsedPort
+    : 8787;
   const sessionTtlMs = Number.isFinite(config.sessionTtlMs) && config.sessionTtlMs > 0
     ? config.sessionTtlMs
     : DEFAULT_SESSION_TTL_MS;
@@ -363,6 +385,10 @@ function createAuthServer(options) {
   }
 
   async function handleActivityControl(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
     const session = getSessionFromRequest(request);
     if (!session) {
       sendJson(response, 401, { error: "Unauthorized" });
@@ -397,6 +423,38 @@ function createAuthServer(options) {
     if (!action) {
       sendJson(response, 400, { error: "Missing action" });
       return;
+    }
+
+    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+    if (queueVoiceChannelId) {
+      const userId = String(session?.user?.id || "").trim();
+      if (!userId) {
+        sendJson(response, 401, { error: "Session user is unavailable" });
+        return;
+      }
+
+      let userVoiceChannelId = null;
+      try {
+        userVoiceChannelId = await getUserVoiceChannelId(guildId, userId);
+      } catch (error) {
+        logError("Failed to resolve user voice channel for API control request", {
+          guildId,
+          userId,
+          error,
+        });
+        sendJson(response, 500, { error: "Failed to verify voice channel access" });
+        return;
+      }
+
+      const normalizedUserVoiceChannelId = String(userVoiceChannelId || "").trim() || null;
+      if (!normalizedUserVoiceChannelId) {
+        sendJson(response, 403, { error: "Join the bot voice channel to use controls" });
+        return;
+      }
+      if (normalizedUserVoiceChannelId !== queueVoiceChannelId) {
+        sendJson(response, 403, { error: "You must be in the same voice channel as the bot" });
+        return;
+      }
     }
 
     const hasCurrent = Boolean(queue.current);
@@ -458,6 +516,10 @@ function createAuthServer(options) {
   }
 
   async function handleActivityExchange(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
     if (!oauthConfigured) {
       sendJson(response, 503, {
         error: "OAuth is not configured",
@@ -537,6 +599,10 @@ function createAuthServer(options) {
   }
 
   async function handleActivitySession(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
     let body;
     try {
       body = await readJsonBody(request);
@@ -694,7 +760,7 @@ function createAuthServer(options) {
     }
   }
 
-  const server = http.createServer(async (request, response) => {
+  async function handleRequest(request, response) {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     const pathname = requestUrl.pathname;
     try {
@@ -808,9 +874,16 @@ function createAuthServer(options) {
 
       sendJson(response, 404, { error: "Not found" });
     } catch (error) {
-      logError("Auth server request failed", error);
+      logError("Auth/API server request failed", error);
       sendJson(response, 500, { error: "Internal server error" });
     }
+  }
+
+  const server = http.createServer((request, response) => {
+    handleRequest(request, response).catch((error) => {
+      logError("API/Auth server request failed", error);
+      sendJson(response, 500, { error: "Internal server error" });
+    });
   });
 
   const cleanupInterval = setInterval(() => {
@@ -833,7 +906,7 @@ function createAuthServer(options) {
   return {
     start() {
       server.listen(port, host, () => {
-        logInfo("Auth/API server listening", {
+        logInfo("API/Auth server listening", {
           host,
           port,
           oauthConfigured,
@@ -842,13 +915,14 @@ function createAuthServer(options) {
         });
       });
       server.on("error", (error) => {
-        logError("Auth/API server error", error);
+        logError("API/Auth server error", error);
       });
       return server;
     },
+    handleRequest,
   };
 }
 
 module.exports = {
-  createAuthServer,
+  createApiServer,
 };
