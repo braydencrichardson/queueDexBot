@@ -24,6 +24,7 @@ function createQueuePlayback(deps) {
     deferredResolveLookahead = 0,
     hydrateDeferredTrackMetadata = async () => null,
     resolveDeferredTrack = async () => null,
+    onPlaybackStarted = async () => {},
     logInfo,
     logError,
   } = deps;
@@ -582,6 +583,11 @@ function createQueuePlayback(deps) {
       }
 
       await sendNowPlaying(queue, true);
+      if (typeof onPlaybackStarted === "function") {
+        onPlaybackStarted({ guildId, queue, track: nextTrack }).catch((error) => {
+          logError("Playback-start hook failed", { guildId, error });
+        });
+      }
       ensureNextTrackPreload(queue).catch((error) => {
         logInfo("Failed to preload next track after playback start", error);
       });

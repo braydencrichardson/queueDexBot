@@ -25,6 +25,8 @@ function createQueueSession(deps) {
     getPlayNext,
     ensureNextTrackPreload = async () => null,
     resolveNowPlayingChannelById = async () => null,
+    getNowPlayingActivityLinks = async () => null,
+    showNowPlayingProgress = false,
   } = deps;
   function getGuildQueue(guildId) {
     if (!queues.has(guildId)) {
@@ -131,6 +133,9 @@ function createQueueSession(deps) {
   }
 
   function getPlaybackProgressMarker(queue) {
+    if (!showNowPlayingProgress) {
+      return null;
+    }
     const elapsedFromPlayer = getPlaybackElapsedSeconds(queue);
     const durationSec = getTrackDurationSeconds(queue?.current);
     if (!durationSec && elapsedFromPlayer === null) {
@@ -168,6 +173,10 @@ function createQueueSession(deps) {
   }
 
   async function refreshNowPlayingProgress(queue, expectedTrackKey) {
+    if (!showNowPlayingProgress) {
+      clearNowPlayingProgressUpdates(queue);
+      return;
+    }
     if (!queue?.current || !queue?.textChannel || !queue?.nowPlayingMessageId) {
       clearNowPlayingProgressUpdates(queue);
       return;
@@ -185,6 +194,10 @@ function createQueueSession(deps) {
   }
 
   function ensureNowPlayingProgressUpdates(queue) {
+    if (!showNowPlayingProgress) {
+      clearNowPlayingProgressUpdates(queue);
+      return;
+    }
     if (!queue?.current || !queue?.textChannel || !queue?.nowPlayingMessageId) {
       clearNowPlayingProgressUpdates(queue);
       return;
@@ -217,7 +230,37 @@ function createQueueSession(deps) {
     }
   }
 
-  function formatNowPlaying(queue) {
+  function normalizeActivityLinkUrl(urlValue) {
+    const raw = String(urlValue || "").trim();
+    if (!raw) {
+      return null;
+    }
+    if (!/^https?:\/\//i.test(raw)) {
+      return null;
+    }
+    return raw;
+  }
+
+  function formatActivityLinksLine(linkPayload) {
+    if (!linkPayload || typeof linkPayload !== "object") {
+      return null;
+    }
+    const inviteUrl = normalizeActivityLinkUrl(linkPayload.inviteUrl);
+    const webUrl = normalizeActivityLinkUrl(linkPayload.webUrl);
+    if (!inviteUrl && !webUrl) {
+      return null;
+    }
+    const parts = [];
+    if (inviteUrl) {
+      parts.push(`Open Activity: <${inviteUrl}>`);
+    }
+    if (webUrl) {
+      parts.push(`Web: <${webUrl}>`);
+    }
+    return `**Activity:** ${parts.join(" | ")}`;
+  }
+
+  async function formatNowPlaying(queue) {
     if (!queue.current) {
       return "Nothing is playing.";
     }
@@ -237,9 +280,11 @@ function createQueueSession(deps) {
     if (nowSecondary) {
       lines.push(`↳ ${nowSecondary}`);
     }
-    const progress = formatPlaybackProgress(queue);
-    if (progress) {
-      lines.push(progress);
+    if (showNowPlayingProgress) {
+      const progress = formatPlaybackProgress(queue);
+      if (progress) {
+        lines.push(progress);
+      }
     }
     if (nextTrack) {
       const nextPrimary = formatTrackPrimary(nextTrack, {
@@ -262,6 +307,14 @@ function createQueueSession(deps) {
       lines.push("**Up next:** (empty)");
     }
     lines.push(`**Remaining:** ${remaining}`);
+    try {
+      const activityLinksLine = formatActivityLinksLine(await getNowPlayingActivityLinks(queue));
+      if (activityLinksLine) {
+        lines.push(activityLinksLine);
+      }
+    } catch (error) {
+      logError("Failed to resolve now playing activity links", error);
+    }
     return lines.join("\n");
   }
 
@@ -337,7 +390,7 @@ function createQueueSession(deps) {
       return null;
     }
 
-    const content = formatNowPlaying(queue);
+    const content = await formatNowPlaying(queue);
     const controls = buildNowPlayingControls({ loopMode: getQueueLoopMode(queue) });
     const payload = { content, components: [controls] };
     queue.nowPlayingUpNextKey = getUpNextKey(queue);

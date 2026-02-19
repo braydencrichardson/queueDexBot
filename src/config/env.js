@@ -88,6 +88,12 @@ function loadEnvVars(sourceEnv = process.env) {
     oauthWebRedirectUri: sourceEnv.DISCORD_OAUTH_REDIRECT_URI_WEB,
     oauthActivityRedirectUri: sourceEnv.DISCORD_OAUTH_REDIRECT_URI_ACTIVITY,
     oauthScopes: sourceEnv.DISCORD_OAUTH_SCOPES || "identify guilds",
+    activityWebUrl: sourceEnv.ACTIVITY_WEB_URL,
+    activityInvitePrewarmOnPlaybackStart: parseBooleanEnv(
+      sourceEnv.ACTIVITY_INVITE_PREWARM_ON_PLAYBACK_START,
+      false
+    ),
+    nowPlayingShowProgress: parseBooleanEnv(sourceEnv.NOW_PLAYING_SHOW_PROGRESS, false),
     authServerEnabled: parseBooleanEnv(sourceEnv.AUTH_SERVER_ENABLED, true),
     authServerHost: sourceEnv.AUTH_SERVER_HOST || "127.0.0.1",
     authServerPort: parseInt(sourceEnv.AUTH_SERVER_PORT || "", 10),

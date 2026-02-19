@@ -3,6 +3,7 @@ const { QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE } = require("../config
 const { createQueueViewService } = require("./queue-view-service");
 const { getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
 const { createActivityInviteService } = require("../activity/invite-service");
+const { formatActivityInviteResponse } = require("../activity/invite-message");
 const {
   formatQueueClearedNotice,
   formatQueueRemovedNotice,
@@ -52,6 +53,7 @@ function createCommandInteractionHandler(deps) {
     queueService = null,
     activityInviteService = null,
     getActivityApplicationId = () => "",
+    activityWebUrl = "",
   } = deps;
   const inviteService = activityInviteService || createActivityInviteService();
 
@@ -505,11 +507,15 @@ function createCommandInteractionHandler(deps) {
           applicationId,
           reason: `Activity launch requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
         });
-        const launchVerb = inviteResult.reused ? "Reused" : "Created";
         await safeReplyOrFollowUp(
           interaction,
           buildEphemeralPayload(
-            `${launchVerb} an Activity invite for **${voiceChannel.name}**.\n${inviteResult.url}`
+            formatActivityInviteResponse({
+              inviteUrl: inviteResult.url,
+              reused: inviteResult.reused,
+              voiceChannelName: voiceChannel.name,
+              activityWebUrl,
+            })
           ),
           "launch success response"
         );

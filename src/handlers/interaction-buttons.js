@@ -4,6 +4,7 @@ const {
   QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE,
 } = require("../config/constants");
 const { createActivityInviteService } = require("../activity/invite-service");
+const { formatActivityInviteResponse } = require("../activity/invite-message");
 const { createQueueViewService } = require("./queue-view-service");
 const {
   clearMapEntryWithTimeout,
@@ -59,6 +60,7 @@ function createButtonInteractionHandler(deps) {
     activityInviteService = null,
     getActivityApplicationId = () => "",
     resolveVoiceChannelById = async () => null,
+    activityWebUrl = "",
   } = deps;
   const inviteService = activityInviteService || createActivityInviteService();
   const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : CONFIG_QUEUE_VIEW_PAGE_SIZE;
@@ -173,9 +175,13 @@ function createButtonInteractionHandler(deps) {
         applicationId,
         reason: `Activity launch requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
       });
-      const launchVerb = inviteResult.reused ? "Reused" : "Created";
       await interaction.reply({
-        content: `${launchVerb} an Activity invite for **${voiceChannel.name || "voice"}**.\n${inviteResult.url}`,
+        content: formatActivityInviteResponse({
+          inviteUrl: inviteResult.url,
+          reused: inviteResult.reused,
+          voiceChannelName: voiceChannel.name || "voice",
+          activityWebUrl,
+        }),
         flags: MessageFlags.Ephemeral,
       });
     } catch (error) {

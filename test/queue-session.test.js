@@ -68,7 +68,12 @@ test("sendNowPlaying includes block progress bar for timed tracks", async () => 
     on: () => {},
     stop: () => {},
   };
-  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession({ player });
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession({
+    player,
+    deps: {
+      showNowPlayingProgress: true,
+    },
+  });
 
   let sentPayload = null;
   const message = {
@@ -108,13 +113,115 @@ test("sendNowPlaying includes block progress bar for timed tracks", async () => 
   stopAndLeaveQueue(queue, "cleanup");
 });
 
+test("sendNowPlaying includes activity links when provided by callback", async () => {
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession({
+    deps: {
+      getNowPlayingActivityLinks: async () => ({
+        inviteUrl: "https://discord.gg/activity-test",
+        webUrl: "https://activity.example.com",
+      }),
+    },
+  });
+
+  let sentPayload = null;
+  const message = {
+    id: "np-activity",
+    channel: { id: "text-1" },
+    async edit() {},
+  };
+
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Song",
+    requester: "Requester",
+    duration: 180,
+    url: "https://youtu.be/example",
+    source: "youtube",
+  };
+  queue.tracks = [];
+  queue.textChannel = {
+    id: "text-1",
+    messages: {
+      async fetch() {
+        throw new Error("not used in forceNew mode");
+      },
+    },
+    async send(payload) {
+      sentPayload = payload;
+      return message;
+    },
+  };
+
+  await sendNowPlaying(queue, true);
+
+  const content = String(sentPayload?.content || "");
+  assert.equal(
+    content.includes("**Activity:** Open Activity: <https://discord.gg/activity-test> | Web: <https://activity.example.com>"),
+    true
+  );
+
+  stopAndLeaveQueue(queue, "cleanup");
+});
+
+test("sendNowPlaying hides progress by default when now-playing progress is disabled", async () => {
+  const player = {
+    state: { resource: { playbackDuration: 30000 } },
+    on: () => {},
+    stop: () => {},
+  };
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession({ player });
+
+  let sentPayload = null;
+  const message = {
+    id: "np-hidden-progress",
+    channel: { id: "text-1" },
+    async edit() {},
+  };
+
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Song",
+    requester: "Requester",
+    duration: 180,
+    url: "https://youtu.be/example",
+    source: "youtube",
+  };
+  queue.tracks = [];
+  queue.textChannel = {
+    id: "text-1",
+    messages: {
+      async fetch() {
+        throw new Error("not used in forceNew mode");
+      },
+    },
+    async send(payload) {
+      sentPayload = payload;
+      return message;
+    },
+  };
+
+  await sendNowPlaying(queue, true);
+
+  const content = String(sentPayload?.content || "");
+  assert.equal(content.includes("**Progress:**"), false);
+
+  stopAndLeaveQueue(queue, "cleanup");
+});
+
 test("sendNowPlaying renders 0:00 elapsed when playback duration has not advanced yet", async () => {
   const player = {
     state: { resource: { playbackDuration: 0 } },
     on: () => {},
     stop: () => {},
   };
-  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession({ player });
+  const { getGuildQueue, sendNowPlaying, stopAndLeaveQueue } = createSession({
+    player,
+    deps: {
+      showNowPlayingProgress: true,
+    },
+  });
 
   let sentPayload = null;
   const message = {
@@ -164,6 +271,7 @@ test("sendNowPlaying shows pause icon in progress when player is paused", async 
     player,
     deps: {
       AudioPlayerStatus: { Idle: "idle", Playing: "playing", Paused: "paused", AutoPaused: "autopaused" },
+      showNowPlayingProgress: true,
     },
   });
 

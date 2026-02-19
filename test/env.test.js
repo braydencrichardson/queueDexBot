@@ -19,6 +19,9 @@ test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   assert.equal(env.oauthWebRedirectUri, undefined);
   assert.equal(env.oauthActivityRedirectUri, undefined);
   assert.equal(env.oauthScopes, "identify guilds");
+  assert.equal(env.activityWebUrl, undefined);
+  assert.equal(env.activityInvitePrewarmOnPlaybackStart, false);
+  assert.equal(env.nowPlayingShowProgress, false);
   assert.equal(env.authServerEnabled, true);
   assert.equal(env.authServerHost, "127.0.0.1");
   assert.equal(Number.isNaN(env.authServerPort), true);
@@ -55,6 +58,9 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
     DISCORD_OAUTH_REDIRECT_URI_WEB: "https://app.example.com/auth/discord/web/callback",
     DISCORD_OAUTH_REDIRECT_URI_ACTIVITY: "https://activity.example.com",
     DISCORD_OAUTH_SCOPES: "identify guilds",
+    ACTIVITY_WEB_URL: "https://activity.example.com",
+    ACTIVITY_INVITE_PREWARM_ON_PLAYBACK_START: "1",
+    NOW_PLAYING_SHOW_PROGRESS: "1",
     AUTH_SERVER_ENABLED: "0",
     AUTH_SERVER_HOST: "0.0.0.0",
     AUTH_SERVER_PORT: "8787",
@@ -90,6 +96,9 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   assert.equal(env.oauthWebRedirectUri, "https://app.example.com/auth/discord/web/callback");
   assert.equal(env.oauthActivityRedirectUri, "https://activity.example.com");
   assert.equal(env.oauthScopes, "identify guilds");
+  assert.equal(env.activityWebUrl, "https://activity.example.com");
+  assert.equal(env.activityInvitePrewarmOnPlaybackStart, true);
+  assert.equal(env.nowPlayingShowProgress, true);
   assert.equal(env.authServerEnabled, false);
   assert.equal(env.authServerHost, "0.0.0.0");
   assert.equal(env.authServerPort, 8787);

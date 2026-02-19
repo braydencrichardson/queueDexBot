@@ -158,6 +158,94 @@ async function resolveVoiceChannelById(guildId, channelId) {
   return null;
 }
 
+async function prewarmActivityInviteOnPlaybackStart({ guildId, queue, track }) {
+  if (!env.activityInvitePrewarmOnPlaybackStart) {
+    return;
+  }
+
+  const applicationId = getActivityApplicationId();
+  if (!applicationId) {
+    return;
+  }
+
+  const queueVoiceChannelId = String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim();
+  if (!queueVoiceChannelId) {
+    return;
+  }
+
+  let voiceChannel = queue?.voiceChannel;
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    voiceChannel = await resolveVoiceChannelById(guildId, queueVoiceChannelId);
+  }
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    logInfo("Skipping activity invite prewarm; queue voice channel is unavailable", {
+      guildId,
+      channelId: queueVoiceChannelId,
+    });
+    return;
+  }
+
+  const reasonTrackTitle = String(track?.title || "unknown track").trim().slice(0, 96) || "unknown track";
+  try {
+    const result = await activityInviteService.getOrCreateInvite({
+      voiceChannel,
+      applicationId,
+      reason: `Activity invite prewarm on playback start (${reasonTrackTitle})`,
+    });
+    logInfo("Activity invite prewarm completed", {
+      guildId,
+      channel: voiceChannel.id,
+      reused: Boolean(result?.reused),
+    });
+  } catch (error) {
+    logError("Activity invite prewarm failed", {
+      guildId,
+      channelId: queueVoiceChannelId,
+      error,
+    });
+  }
+}
+
+async function getNowPlayingActivityLinks(queue) {
+  const webUrl = String(env.activityWebUrl || "").trim() || null;
+  const applicationId = getActivityApplicationId();
+  if (!applicationId) {
+    return webUrl ? { webUrl } : null;
+  }
+
+  const queueVoiceChannelId = String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim();
+  if (!queueVoiceChannelId) {
+    return webUrl ? { webUrl } : null;
+  }
+
+  let voiceChannel = queue?.voiceChannel;
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    voiceChannel = await resolveVoiceChannelById(queue?.guildId, queueVoiceChannelId);
+  }
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    return webUrl ? { webUrl } : null;
+  }
+
+  try {
+    const inviteResult = await activityInviteService.getOrCreateInvite({
+      voiceChannel,
+      applicationId,
+      reason: "Now playing activity link refresh",
+    });
+    return {
+      inviteUrl: inviteResult.url,
+      webUrl,
+    };
+  } catch (error) {
+    logError("Failed to resolve activity invite for now playing content", {
+      guildId: queue?.guildId || null,
+      channelId: queueVoiceChannelId,
+      error,
+    });
+    return webUrl ? { webUrl } : null;
+  }
+}
+
 const {
   getSoundcloudClientId,
   getSoundcloudCookieHeader,
@@ -259,6 +347,8 @@ const {
   logError,
   getPlayNext: () => playNext,
   ensureNextTrackPreload: (queue) => ensureNextTrackPreload(queue),
+  getNowPlayingActivityLinks,
+  showNowPlayingProgress: env.nowPlayingShowProgress,
   resolveNowPlayingChannelById: async (channelId) => {
     if (!channelId) {
       return null;
@@ -415,6 +505,7 @@ const { createSoundcloudResource } = createSoundcloudResourceFactory({
   deferredResolveLookahead,
   hydrateDeferredTrackMetadata,
   resolveDeferredTrack,
+  onPlaybackStarted: prewarmActivityInviteOnPlaybackStart,
   logInfo,
   logError,
 }));
@@ -534,6 +625,7 @@ registerInteractionHandler(client, {
   activityInviteService,
   getActivityApplicationId,
   resolveVoiceChannelById,
+  activityWebUrl: env.activityWebUrl,
 });
 
 client.login(env.token).catch((error) => {

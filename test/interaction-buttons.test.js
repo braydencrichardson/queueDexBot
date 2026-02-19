@@ -707,3 +707,68 @@ test("queue_activity replies with invite link without closing queue view", async
   });
   clearTimeout(queueViews.get("queue-msg-1")?.timeout);
 });
+
+test("np_activity includes configured web activity URL in invite response", async () => {
+  let replyPayload = null;
+  const queue = {
+    nowPlayingMessageId: "np-msg-2",
+    tracks: [{ id: "t2", title: "Song 2" }],
+    current: { id: "c2", title: "Now Playing 2" },
+    voiceChannel: {
+      id: "voice-2",
+      name: "General",
+      guild: { id: "guild-1" },
+      createInvite: async () => ({
+        code: "np-web-link",
+        url: "https://discord.gg/np-web-link",
+        expiresTimestamp: Date.now() + 15 * 60 * 1000,
+      }),
+    },
+    player: {
+      state: { status: "playing" },
+    },
+  };
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews: new Map(),
+    logInfo: () => {},
+    logError: () => {},
+    sendNowPlaying: async () => {},
+    stopAndLeaveQueue: () => {},
+    activityWebUrl: "https://activity.example.com",
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "np_activity",
+    applicationId: "app-1",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" }, voice: { channel: { id: "voice-2" } } }),
+      },
+    },
+    message: { id: "np-msg-2", channel: {}, edit: async () => {} },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+    channel: { send: async () => ({ id: "x" }) },
+  });
+
+  assert.equal(String(replyPayload?.content || "").includes("https://discord.gg/np-web-link"), true);
+  assert.equal(String(replyPayload?.content || "").includes("Web: <https://activity.example.com/>"), true);
+});

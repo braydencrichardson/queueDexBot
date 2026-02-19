@@ -60,6 +60,9 @@ Discord OAuth / API server (for Activity + future web view):
 - `DISCORD_OAUTH_REDIRECT_URI_WEB`: Web OAuth callback URI (for `/auth/discord/web/callback`).
 - `DISCORD_OAUTH_REDIRECT_URI_ACTIVITY`: Optional explicit redirect URI used for embedded activity code exchange.
 - `DISCORD_OAUTH_SCOPES`: Space-separated scopes (default: `identify guilds`).
+- `ACTIVITY_WEB_URL`: Optional public web URL to include alongside generated Activity invite links.
+- `ACTIVITY_INVITE_PREWARM_ON_PLAYBACK_START`: `1` to pre-create/reuse an Activity invite when playback starts, `0` (default) to disable.
+- `NOW_PLAYING_SHOW_PROGRESS`: `1` to show/update progress in Discord now-playing messages, `0` (default) to hide it.
 - `AUTH_SERVER_ENABLED`: `1` (default) to start API/Auth server, `0` to disable.
 - `AUTH_SERVER_HOST`: Bind host (default: `127.0.0.1`).
 - `AUTH_SERVER_PORT`: Bind port (default: `8787`).

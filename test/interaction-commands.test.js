@@ -431,6 +431,52 @@ test("launch reuses cached voice activity invite while it is still valid", async
   assert.equal(String(replies[1]?.content || "").includes("Reused an Activity invite"), true);
 });
 
+test("launch includes configured activity web URL in invite response", async () => {
+  let replyPayload = null;
+  const { deps } = createDeps({
+    deps: {
+      activityWebUrl: "https://activity.example.com",
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    applicationId: "app-1",
+    user: { id: "user-1", tag: "User#0001" },
+    member: {
+      voice: {
+        channel: {
+          id: "vc-1",
+          name: "General",
+          guild: { id: "guild-1" },
+          createInvite: async () => ({
+            code: "voice-activity",
+            url: "https://discord.gg/voice-activity",
+          }),
+        },
+      },
+    },
+    commandName: "launch",
+    options: {},
+    client: {
+      application: {
+        flags: { has: () => true },
+      },
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(String(replyPayload?.content || "").includes("https://discord.gg/voice-activity"), true);
+  assert.equal(String(replyPayload?.content || "").includes("Web: <https://activity.example.com/>"), true);
+});
+
 test("play resolves tracks before joining voice", async () => {
   const queue = {
     tracks: [],
