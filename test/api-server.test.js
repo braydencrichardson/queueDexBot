@@ -991,8 +991,62 @@ test("activity queue search returns chooser options when direct resolve finds no
     assert.equal(String(response.json?.search?.id || "").length > 0, true);
     assert.equal(Array.isArray(response.json?.search?.options), true);
     assert.equal(response.json?.search?.options?.length, 2);
-    assert.equal(resolveTracksCalls.length, 1);
-    assert.equal(resolveTracksCalls[0]?.options?.allowSearchFallback, false);
+    assert.equal(resolveTracksCalls.length, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search avoids direct resolve for plain text when chooser has no results", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  let resolveTracksCalls = 0;
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async () => {
+      resolveTracksCalls += 1;
+      return [];
+    },
+    getSearchOptionsForQuery: async () => [],
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "plain text query",
+      }),
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json?.error, "No results found.");
+    assert.equal(resolveTracksCalls, 0);
   } finally {
     global.fetch = originalFetch;
   }
@@ -1096,6 +1150,7 @@ test("activity queue search select queues selected chooser result and starts pla
     assert.equal(selectResponse.json?.ok, true);
     assert.equal(selectResponse.json?.mode, "queued");
     assert.equal(selectResponse.json?.queued?.title, "Selected Result");
+    assert.equal(selectResponse.json?.queuedPosition, 1);
     assert.equal(queue.tracks.length, 1);
     assert.equal(queue.tracks[0]?.title, "Selected Result");
     assert.equal(ensureVoiceConnectionCalls.length, 1);
@@ -1128,11 +1183,13 @@ test("activity queue search queues resolved tracks directly without chooser", as
   };
 
   let searchOptionsCalled = false;
+  let resolveTracksCalls = 0;
   const serverApi = createApiServer({
     queues: new Map([["guild-1", queue]]),
     getUserVoiceChannelId: async () => "voice-1",
     normalizeQueryInput: (value) => String(value || "").trim(),
     resolveTracks: async (_query, requester, options) => {
+      resolveTracksCalls += 1;
       assert.equal(options?.allowSearchFallback, false);
       return [{
         title: "Direct Result",
@@ -1169,7 +1226,7 @@ test("activity queue search queues resolved tracks directly without chooser", as
       },
       body: JSON.stringify({
         guild_id: "guild-1",
-        query: "direct query",
+        query: "https://youtu.be/ddddddddddd",
       }),
     });
 
@@ -1178,10 +1235,67 @@ test("activity queue search queues resolved tracks directly without chooser", as
     assert.equal(response.json?.mode, "queued");
     assert.equal(response.json?.queuedCount, 1);
     assert.equal(response.json?.queued?.title, "Direct Result");
+    assert.equal(response.json?.queuedPosition, 1);
     assert.equal(queue.tracks.length, 1);
+    assert.equal(resolveTracksCalls, 1);
     assert.equal(searchOptionsCalled, false);
     assert.equal(ensureVoiceConnectionCalls.length, 1);
     assert.equal(ensureVoiceConnectionCalls[0]?.preferredVoiceChannelId, "voice-1");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search returns link-resolution error for unresolved URL query", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  let resolveTracksCalls = 0;
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async () => {
+      resolveTracksCalls += 1;
+      return [];
+    },
+    getSearchOptionsForQuery: async () => [],
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "https://youtu.be/invalid-id",
+      }),
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json?.error, "Could not resolve that link.");
+    assert.equal(resolveTracksCalls, 1);
   } finally {
     global.fetch = originalFetch;
   }
@@ -1233,7 +1347,7 @@ test("activity queue search requires caller voice channel when queue is not conn
       },
       body: JSON.stringify({
         guild_id: "guild-1",
-        query: "direct query",
+        query: "https://youtu.be/eeeeeeeeeee",
       }),
     });
 

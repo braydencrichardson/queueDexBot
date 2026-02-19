@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { createQueueService } = require("../queue/service");
-const { enqueueTracks, formatDuration } = require("../queue/utils");
+const { enqueueTracks, formatDuration, getQueuedTrackIndex } = require("../queue/utils");
 const { formatQueuedMessage, formatQueuedPlaylistMessage } = require("../ui/messages");
 const {
   buildControlActionFeedback,
@@ -95,6 +95,53 @@ function sendText(response, statusCode, content) {
   response.setHeader("Content-Type", "text/plain; charset=utf-8");
   setCommonHeaders(response);
   response.end(content);
+}
+
+function createTaskLimiter(maxConcurrent = 1) {
+  const concurrency = Number.isFinite(maxConcurrent) && maxConcurrent > 0
+    ? Math.max(1, Math.floor(maxConcurrent))
+    : 1;
+  let active = 0;
+  const pending = [];
+
+  function runNext() {
+    if (active >= concurrency || pending.length === 0) {
+      return;
+    }
+    const nextTask = pending.shift();
+    active += 1;
+    Promise.resolve()
+      .then(() => nextTask.task())
+      .then(nextTask.resolve, nextTask.reject)
+      .finally(() => {
+        active = Math.max(0, active - 1);
+        runNext();
+      });
+  }
+
+  return async function runWithLimit(task) {
+    return new Promise((resolve, reject) => {
+      pending.push({ task, resolve, reject });
+      runNext();
+    });
+  };
+}
+
+function isLikelyUrlQuery(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return false;
+  }
+  try {
+    const parsed = new URL(raw);
+    const protocol = String(parsed.protocol || "").toLowerCase();
+    if (protocol !== "http:" && protocol !== "https:") {
+      return false;
+    }
+    return Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 async function readJsonBody(request, maxBytes = MAX_JSON_BODY_BYTES) {
@@ -521,12 +568,16 @@ function createApiServer(options) {
   const rawSessionStorePath = String(config.sessionStorePath || DEFAULT_SESSION_STORE_PATH).trim() || DEFAULT_SESSION_STORE_PATH;
   const sessionStorePath = path.resolve(rawSessionStorePath);
   const adminUserIds = new Set(normalizeUserIdList(config.adminUserIds));
+  const activityQueueSearchConcurrency = Number.isFinite(Number(config.activityQueueSearchConcurrency))
+    ? Math.max(1, Math.floor(Number(config.activityQueueSearchConcurrency)))
+    : 1;
 
   const oauthConfigured = Boolean(oauthClientId && oauthClientSecret);
   const pendingWebStates = new Map();
   const sessions = new Map();
   const thumbnailCache = new Map();
   const activitySearchChoosers = new Map();
+  const runActivitySearchTask = createTaskLimiter(activityQueueSearchConcurrency);
   const stopQueueAction = typeof stopAndLeaveQueue === "function"
     ? stopAndLeaveQueue
     : (queue, reason) => {
@@ -1205,6 +1256,11 @@ function createApiServer(options) {
     enqueueTracks(queue, queuedTracks);
     await maybeRefreshNowPlayingUpNext(queue);
 
+    const queuedTrackPositions = queuedTracks.map((track) => {
+      const queuedIndex = getQueuedTrackIndex(queue, track);
+      return queuedIndex >= 0 ? queuedIndex + 1 : null;
+    });
+
     logInfo("Queued tracks from activity/web queue search", {
       source: source || "unknown",
       guildId: context.guildId,
@@ -1215,7 +1271,7 @@ function createApiServer(options) {
 
     let feedbackContent = "";
     if (queuedTracks.length === 1) {
-      const position = hadAnythingQueuedBefore ? queue.tracks.length : null;
+      const position = Number.isFinite(queuedTrackPositions[0]) ? queuedTrackPositions[0] : (hadAnythingQueuedBefore ? queue.tracks.length : null);
       feedbackContent = formatQueuedMessage(queuedTracks[0], position, formatDuration);
     } else {
       feedbackContent = formatQueuedPlaylistMessage(queuedTracks.length, requesterName);
@@ -1242,6 +1298,7 @@ function createApiServer(options) {
     return {
       ok: true,
       queuedTracks,
+      queuedTrackPositions,
       requesterName,
       data: summarizeQueue(queue),
     };
@@ -1286,11 +1343,53 @@ function createApiServer(options) {
     }
 
     const requesterName = getSessionRequesterName(context.session);
+    const queryIsUrl = isLikelyUrlQuery(normalizedQuery);
+    if (!queryIsUrl) {
+      let searchOptions = [];
+      try {
+        searchOptions = await runActivitySearchTask(
+          () => getSearchOptionsForQuery(normalizedQuery, requesterName)
+        );
+      } catch (error) {
+        logError("Failed to fetch activity/web search chooser options", {
+          guildId: context.guildId,
+          query: normalizedQuery,
+          error,
+        });
+      }
+      if (Array.isArray(searchOptions) && searchOptions.length) {
+        const chooser = createActivitySearchChooser({
+          guildId: context.guildId,
+          requesterId: context.session?.user?.id || "",
+          query: normalizedQuery,
+          options: searchOptions,
+        });
+        sendJson(response, 200, {
+          ok: true,
+          mode: "chooser",
+          guildId: context.guildId,
+          search: {
+            id: chooser.id,
+            query: chooser.query,
+            expiresAt: chooser.expiresAt,
+            timeoutMs: ACTIVITY_SEARCH_CHOOSER_TTL_MS,
+            options: chooser.options.map((track, index) => summarizeSearchOption(track, index)),
+          },
+          data: summarizeQueue(context.queue),
+        });
+        return;
+      }
+      sendJson(response, 404, { error: "No results found." });
+      return;
+    }
+
     let tracks = [];
     try {
-      tracks = await resolveTracks(normalizedQuery, requesterName, {
-        allowSearchFallback: false,
-      });
+      tracks = await runActivitySearchTask(
+        () => resolveTracks(normalizedQuery, requesterName, {
+          allowSearchFallback: false,
+        })
+      );
     } catch (error) {
       logError("Failed to resolve activity/web queue search", {
         guildId: context.guildId,
@@ -1304,7 +1403,9 @@ function createApiServer(options) {
     if (!tracks.length) {
       let searchOptions = [];
       try {
-        searchOptions = await getSearchOptionsForQuery(normalizedQuery, requesterName);
+        searchOptions = await runActivitySearchTask(
+          () => getSearchOptionsForQuery(normalizedQuery, requesterName)
+        );
       } catch (error) {
         logError("Failed to fetch activity/web search chooser options", {
           guildId: context.guildId,
@@ -1335,24 +1436,8 @@ function createApiServer(options) {
         return;
       }
 
-      try {
-        tracks = await resolveTracks(normalizedQuery, requesterName, {
-          allowSearchFallback: true,
-        });
-      } catch (error) {
-        logError("Failed to resolve activity/web queue search with fallback", {
-          guildId: context.guildId,
-          query: normalizedQuery,
-          error,
-        });
-        sendJson(response, 502, { error: error.message || "Could not load that track or playlist." });
-        return;
-      }
-
-      if (!tracks.length) {
-        sendJson(response, 404, { error: "No results found." });
-        return;
-      }
+      sendJson(response, 404, { error: "Could not resolve that link." });
+      return;
     }
 
     const queueResult = await queueTracksFromActivityRequest({
@@ -1374,6 +1459,9 @@ function createApiServer(options) {
       queuedCount: queueResult.queuedTracks.length,
       queued: queueResult.queuedTracks.length === 1
         ? summarizeTrack(queueResult.queuedTracks[0])
+        : null,
+      queuedPosition: queueResult.queuedTracks.length === 1
+        ? (Number.isFinite(queueResult.queuedTrackPositions?.[0]) ? queueResult.queuedTrackPositions[0] : null)
         : null,
       data: queueResult.data,
     });
@@ -1461,6 +1549,7 @@ function createApiServer(options) {
       guildId: context.guildId,
       queuedCount: 1,
       queued: summarizeTrack(queueResult.queuedTracks[0]),
+      queuedPosition: Number.isFinite(queueResult.queuedTrackPositions?.[0]) ? queueResult.queuedTrackPositions[0] : null,
       data: queueResult.data,
     });
   }

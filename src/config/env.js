@@ -118,6 +118,11 @@ function loadEnvVars(sourceEnv = process.env) {
     authServerEnabled: parseBooleanEnv(sourceEnv.AUTH_SERVER_ENABLED, true),
     authServerHost: sourceEnv.AUTH_SERVER_HOST || "127.0.0.1",
     authServerPort: parseInt(sourceEnv.AUTH_SERVER_PORT || "", 10),
+    activityQueueSearchConcurrency: parseIntEnv(
+      sourceEnv.ACTIVITY_QUEUE_SEARCH_CONCURRENCY,
+      1,
+      { min: 1, max: 16 }
+    ),
     authSessionTtlMs: parseInt(sourceEnv.AUTH_SESSION_TTL_MS || "", 10),
     authSessionCookieName: sourceEnv.AUTH_SESSION_COOKIE_NAME || "qdex_session",
     authSessionCookieSecure: parseBooleanEnv(sourceEnv.AUTH_SESSION_COOKIE_SECURE, true),

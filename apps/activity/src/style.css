@@ -1045,6 +1045,67 @@ dd {
   color: color-mix(in srgb, var(--text-muted) 82%, transparent);
 }
 
+.queue-action-feed {
+  margin-top: 0.62rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.queue-search-feedback {
+  margin: 0;
+  padding: 0.46rem 0.58rem;
+  border-radius: 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--success) 52%, var(--border));
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: color-mix(in srgb, var(--text-primary) 92%, var(--success));
+  font-size: 0.82rem;
+}
+
+.queue-search-feedback.error {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: color-mix(in srgb, var(--text-primary) 88%, var(--danger));
+}
+
+.queue-search-result-card {
+  margin-top: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 0.65rem;
+  padding: 0.58rem;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+
+.queue-search-result-heading {
+  margin: 0;
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.queue-search-result-track {
+  margin-top: 0.44rem;
+}
+
+.queue-search-result-meta {
+  margin: 0.48rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.queue-search-result-meta strong {
+  color: var(--text-primary);
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.queue-search-result-actions {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
 .queue-search-chooser {
   margin-top: 0.62rem;
   border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -1421,6 +1482,10 @@ dd {
   }
 
   .queue-search-chooser-actions .btn {
+    flex: 1;
+  }
+
+  .queue-search-result-actions .btn {
     flex: 1;
   }
 

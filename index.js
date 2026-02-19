@@ -658,6 +658,7 @@ const apiServer = env.authServerEnabled
       oauthScopes: env.oauthScopes,
       host: env.authServerHost,
       port: env.authServerPort,
+      activityQueueSearchConcurrency: env.activityQueueSearchConcurrency,
       sessionTtlMs: env.authSessionTtlMs,
       cookieName: env.authSessionCookieName,
       cookieSecure: env.authSessionCookieSecure,

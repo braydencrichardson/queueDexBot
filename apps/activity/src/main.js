@@ -11,6 +11,7 @@ const API_POLL_INTERVAL_MS = 5000;
 const API_PENDING_TIMEOUT_MS = 9000;
 const API_DISCONNECTED_TIMEOUT_MS = 20000;
 const DEBUG_TAB_VISIBILITY_TIMEOUT_MS = 30000;
+const QUEUE_SEARCH_FEEDBACK_TIMEOUT_MS = 15000;
 const PIP_MAX_WIDTH_PX = 420;
 const PIP_MAX_HEIGHT_PX = 260;
 const QUEUE_LIST_LIMIT = 200;
@@ -98,6 +99,9 @@ const state = {
   queueSearchBusy: false,
   queueSearchVisible: false,
   queueSearchAutoDefaultPending: true,
+  queueSearchFeedback: "",
+  queueSearchFeedbackError: false,
+  queueSearchQueuedResult: null,
   queueSearchChooser: null,
   queueDrag: {
     active: false,
@@ -110,6 +114,7 @@ const state = {
 let liveTicker = null;
 let statePoller = null;
 let debugTabHideTimer = null;
+let queueSearchFeedbackTimer = null;
 let viewportWatcherBound = false;
 const debugEvents = [];
 const failedThumbnailUrls = new Set();
@@ -859,6 +864,7 @@ function renderWebLogin() {
   state.discordSdkConnected = false;
   state.notice = "";
   state.noticeError = false;
+  clearQueueSearchState();
 
   root.innerHTML = `
     <section class="shell shell-animated">
@@ -969,6 +975,47 @@ function getQueueTotalCount() {
   return Number.isFinite(queueList?.total) ? queueList.total : tracks.length;
 }
 
+function clearQueueSearchFeedbackTimer() {
+  if (queueSearchFeedbackTimer) {
+    clearTimeout(queueSearchFeedbackTimer);
+    queueSearchFeedbackTimer = null;
+  }
+}
+
+function clearQueueSearchFeedback() {
+  clearQueueSearchFeedbackTimer();
+  state.queueSearchFeedback = "";
+  state.queueSearchFeedbackError = false;
+}
+
+function setQueueSearchFeedback(message, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+    ? Math.floor(options.timeoutMs)
+    : QUEUE_SEARCH_FEEDBACK_TIMEOUT_MS;
+  const nextMessage = String(message || "").trim();
+  const isError = Boolean(options.error);
+  const canAppend = Boolean(options.append)
+    && !isError
+    && !state.queueSearchFeedbackError
+    && Boolean(state.queueSearchFeedback);
+  state.queueSearchFeedback = canAppend
+    ? `${state.queueSearchFeedback} + ${nextMessage}`
+    : nextMessage;
+  state.queueSearchFeedbackError = isError;
+  clearQueueSearchFeedbackTimer();
+  if (!state.queueSearchFeedback) {
+    return;
+  }
+  queueSearchFeedbackTimer = setTimeout(() => {
+    clearQueueSearchFeedback();
+    renderDashboard();
+  }, timeoutMs);
+}
+
+function clearQueueSearchQueuedResult() {
+  state.queueSearchQueuedResult = null;
+}
+
 function markQueueSearchAutoDefaultPending() {
   state.queueSearchAutoDefaultPending = true;
 }
@@ -982,7 +1029,9 @@ function applyQueueSearchAutoDefault() {
 }
 
 function isQueueSearchPanelVisible() {
-  return state.queueSearchVisible || state.queueSearchBusy || Boolean(getActiveQueueSearchChooser());
+  return state.queueSearchVisible
+    || state.queueSearchBusy
+    || Boolean(getActiveQueueSearchChooser());
 }
 
 function getQueueSearchToggleButtonMarkup() {
@@ -997,11 +1046,34 @@ function clearQueueSearchChooser() {
 
 function clearQueueSearchState(options = {}) {
   const keepQuery = Boolean(options.keepQuery);
+  const keepFeedback = Boolean(options.keepFeedback);
+  const keepQueuedResult = Boolean(options.keepQueuedResult);
   state.queueSearchBusy = false;
   state.queueSearchChooser = null;
   if (!keepQuery) {
     state.queueSearchQuery = "";
   }
+  if (!keepFeedback) {
+    clearQueueSearchFeedback();
+  }
+  if (!keepQueuedResult) {
+    clearQueueSearchQueuedResult();
+  }
+}
+
+function getQueuedTrackPosition(trackId, fallbackPosition = null) {
+  const normalizedTrackId = String(trackId || "").trim();
+  if (normalizedTrackId) {
+    const queueList = getQueueListData();
+    const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
+    const matched = tracks.find((track) => String(track?.id || "").trim() === normalizedTrackId);
+    const matchedPosition = Number.parseInt(String(matched?.position || ""), 10);
+    if (Number.isFinite(matchedPosition) && matchedPosition > 0) {
+      return matchedPosition;
+    }
+  }
+  const fallback = Number.parseInt(String(fallbackPosition || ""), 10);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : null;
 }
 
 function getActiveQueueSearchChooser() {
@@ -1053,6 +1125,82 @@ function getQueueSearchChooserMarkup() {
         <button type="button" class="btn" data-queue-search-action="queue-first"${state.queueSearchBusy ? " disabled" : ""}>Queue First</button>
         <button type="button" class="btn btn-secondary" data-queue-search-action="dismiss"${state.queueSearchBusy ? " disabled" : ""}>Dismiss</button>
       </div>
+    </div>
+  `;
+}
+
+function getQueueSearchFeedbackMarkup() {
+  if (!state.queueSearchFeedback) {
+    return "";
+  }
+  return `<p class="queue-search-feedback ${state.queueSearchFeedbackError ? "error" : ""}">${escapeHtml(state.queueSearchFeedback)}</p>`;
+}
+
+function getQueueSearchQueuedResultMarkup() {
+  const queuedResult = state.queueSearchQueuedResult;
+  if (!queuedResult || typeof queuedResult !== "object") {
+    return "";
+  }
+
+  if (queuedResult.kind === "multi") {
+    const queuedCount = Number.isFinite(queuedResult.queuedCount) ? queuedResult.queuedCount : 0;
+    if (queuedCount <= 0) {
+      return "";
+    }
+    return `
+      <div class="queue-search-result-card">
+        <p class="queue-search-result-heading">Queued Playlist</p>
+        <p class="queue-search-result-meta">${escapeHtml(`Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`)}</p>
+      </div>
+    `;
+  }
+
+  if (queuedResult.kind !== "single" || !queuedResult.track) {
+    return "";
+  }
+
+  const currentPosition = getQueuedTrackPosition(queuedResult.track.id, queuedResult.position);
+  const hasTrackPosition = Number.isFinite(currentPosition) && currentPosition > 0;
+  const canMoveToFront = hasTrackPosition && currentPosition > 1;
+  const canRemove = hasTrackPosition;
+  const actionsDisabled = state.queueSearchBusy || !hasTrackPosition;
+  const positionText = hasTrackPosition ? `#${currentPosition}` : "No longer queued";
+
+  return `
+    <div class="queue-search-result-card">
+      <p class="queue-search-result-heading">Queued Track</p>
+      <div class="queue-search-result-track">
+        ${getTrackSummaryMarkup(queuedResult.track, { compact: true, includeDuration: true })}
+      </div>
+      <p class="queue-search-result-meta">Position: <strong>${escapeHtml(positionText)}</strong></p>
+      <div class="queue-search-result-actions">
+        <button
+          type="button"
+          class="btn btn-mini"
+          data-queue-search-result-action="play-next"
+          ${actionsDisabled || !canMoveToFront ? " disabled" : ""}
+        >Play Next</button>
+        <button
+          type="button"
+          class="btn btn-mini btn-danger"
+          data-queue-search-result-action="cancel"
+          ${actionsDisabled || !canRemove ? " disabled" : ""}
+        >Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+function getQueueActionFeedMarkup() {
+  const feedbackMarkup = getQueueSearchFeedbackMarkup();
+  const queuedResultMarkup = getQueueSearchQueuedResultMarkup();
+  if (!feedbackMarkup && !queuedResultMarkup) {
+    return "";
+  }
+  return `
+    <div class="queue-action-feed">
+      ${feedbackMarkup}
+      ${queuedResultMarkup}
     </div>
   `;
 }
@@ -1289,11 +1437,13 @@ function getPlaybackProgressMarkup(options = {}) {
   `;
 }
 
-function getPlaybackReadyStateMarkup() {
+function getPlaybackReadyStateMarkup(options = {}) {
+  const feedMarkup = String(options.feedMarkup || "");
   return `
     <div class="playback-ready-state">
       <p class="playback-ready-title">Ready</p>
       <p class="playback-ready-subtitle">Queue tracks to start playback.</p>
+      ${feedMarkup}
       <div class="action-row playback-ready-action-row">
         ${getQueueSearchToggleButtonMarkup()}
       </div>
@@ -1515,6 +1665,9 @@ function renderDashboard() {
   const queueUpdatedAtText = getQueueUpdatedAtText(queue);
   const activeNowPlaying = queueList?.nowPlaying || queue?.nowPlaying;
   const hasNowPlaying = Boolean(activeNowPlaying);
+  const queueSearchPanelVisible = isQueueSearchPanelVisible();
+  const queueActionFeedMarkup = getQueueActionFeedMarkup();
+  const inlineQueueActionFeedMarkup = !queueSearchPanelVisible ? queueActionFeedMarkup : "";
   const upNextTrackListMarkup = getUpNextTrackListMarkup();
   const hasUpNextTracks = Boolean(upNextTrackListMarkup);
   const pipMode = isPipViewport();
@@ -1523,6 +1676,7 @@ function renderDashboard() {
     : "";
   const playbackControlsMarkup = hasNowPlaying
     ? `
+      ${inlineQueueActionFeedMarkup}
       <div class="action-row playback-action-row">
         ${getQueueSearchToggleButtonMarkup()}
         <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
@@ -1568,7 +1722,7 @@ function renderDashboard() {
           progressMarkup: playbackProgressMarkup,
           controlsMarkup: playbackControlsMarkup,
         })
-  : getPlaybackReadyStateMarkup()}
+  : getPlaybackReadyStateMarkup({ feedMarkup: inlineQueueActionFeedMarkup })}
     </article>
   `;
 
@@ -1580,12 +1734,13 @@ function renderDashboard() {
     </div>
   `;
 
-  const queueSearchPanelMarkup = isQueueSearchPanelVisible()
+  const queueSearchPanelMarkup = queueSearchPanelVisible
     ? `
       <section class="queue-search-panel">
         <article class="panel-card">
           <h2>Search / Play</h2>
           ${getQueueSearchComposerMarkup()}
+          ${queueActionFeedMarkup}
         </article>
       </section>
     `
@@ -1851,6 +2006,19 @@ function wireDashboardEvents() {
       if (action === "queue-first") {
         void selectQueueSearchOption(0, { queueFirst: true });
       }
+    });
+  });
+
+  root.querySelectorAll("[data-queue-search-result-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.queueSearchBusy) {
+        return;
+      }
+      const action = String(button.getAttribute("data-queue-search-result-action") || "").trim().toLowerCase();
+      if (!action) {
+        return;
+      }
+      void applyQueueSearchQueuedResultAction(action);
     });
   });
 
@@ -2602,24 +2770,48 @@ async function sendControlAction(action) {
   }
 }
 
+function applyQueueSearchQueuedResultFromPayload(payload) {
+  const queuedCount = Number.isFinite(payload?.queuedCount) ? payload.queuedCount : 0;
+  if (queuedCount <= 0) {
+    clearQueueSearchQueuedResult();
+    return 0;
+  }
+  if (queuedCount === 1 && payload?.queued) {
+    const queuedPosition = Number.parseInt(String(payload?.queuedPosition || ""), 10);
+    state.queueSearchQueuedResult = {
+      kind: "single",
+      track: payload.queued,
+      position: Number.isFinite(queuedPosition) && queuedPosition > 0 ? queuedPosition : null,
+      queuedAt: Date.now(),
+    };
+    return queuedCount;
+  }
+  state.queueSearchQueuedResult = {
+    kind: "multi",
+    queuedCount,
+    queuedAt: Date.now(),
+  };
+  return queuedCount;
+}
+
 async function sendQueueSearch(queryInput) {
   if (!state.selectedGuildId) {
-    state.notice = "Select a guild first.";
-    state.noticeError = true;
+    setQueueSearchFeedback("Select a guild first.", { error: true });
     renderDashboard();
     return;
   }
 
   const query = String(queryInput || "").trim();
   if (!query) {
-    state.notice = "Enter a URL or search query first.";
-    state.noticeError = true;
+    setQueueSearchFeedback("Enter a URL or search query first.", { error: true });
     renderDashboard();
     return;
   }
 
   state.queueSearchQuery = query;
   state.queueSearchBusy = true;
+  clearQueueSearchFeedback();
+  clearQueueSearchQueuedResult();
   renderDashboard();
 
   pushDebugEvent("queue.search.start", `guild=${state.selectedGuildId}; query=${query}`);
@@ -2643,27 +2835,32 @@ async function sendQueueSearch(queryInput) {
 
     if (payload.mode === "chooser" && payload.search) {
       state.queueSearchChooser = payload.search;
-      state.notice = "Choose a result to queue.";
-      state.noticeError = false;
+      setQueueSearchFeedback("Choose a result to queue.");
       pushDebugEvent("queue.search.chooser", `options=${Array.isArray(payload.search.options) ? payload.search.options.length : 0}`);
       return;
     }
 
-    clearQueueSearchState();
+    clearQueueSearchState({
+      keepFeedback: true,
+      keepQueuedResult: true,
+    });
     await refreshQueueListForSelectedGuild();
-    const queuedCount = Number.isFinite(payload.queuedCount) ? payload.queuedCount : 0;
-    state.notice = queuedCount > 0
-      ? `Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`
-      : "Queued successfully.";
-    state.noticeError = false;
+    const queuedCount = applyQueueSearchQueuedResultFromPayload(payload);
+    if (queuedCount > 0) {
+      setQueueSearchFeedback(`Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`, {
+        append: true,
+      });
+    } else {
+      setQueueSearchFeedback("Queued successfully.");
+    }
     pushDebugEvent("queue.search.queued", `count=${queuedCount}`);
   } catch (error) {
-    state.notice = `Queue search failed: ${error?.message || String(error)}`;
-    state.noticeError = true;
+    const message = `Queue search failed: ${error?.message || String(error)}`;
+    setQueueSearchFeedback(message, { error: true });
     if (error?.status === 410) {
       clearQueueSearchChooser();
     }
-    pushDebugEvent("queue.search.failed", state.notice);
+    pushDebugEvent("queue.search.failed", message);
   } finally {
     state.queueSearchBusy = false;
     renderDashboard();
@@ -2672,30 +2869,29 @@ async function sendQueueSearch(queryInput) {
 
 async function selectQueueSearchOption(optionIndex, options = {}) {
   if (!state.selectedGuildId) {
-    state.notice = "Select a guild first.";
-    state.noticeError = true;
+    setQueueSearchFeedback("Select a guild first.", { error: true });
     renderDashboard();
     return;
   }
 
   const chooser = getActiveQueueSearchChooser();
   if (!chooser) {
-    state.notice = "That search has expired.";
-    state.noticeError = true;
+    setQueueSearchFeedback("That search has expired.", { error: true });
     renderDashboard();
     return;
   }
 
   const parsedIndex = Number.parseInt(String(optionIndex), 10);
   if (!Number.isFinite(parsedIndex) || parsedIndex < 0 || parsedIndex >= chooser.options.length) {
-    state.notice = "Choose a valid search result.";
-    state.noticeError = true;
+    setQueueSearchFeedback("Choose a valid search result.", { error: true });
     renderDashboard();
     return;
   }
 
   const queueFirst = Boolean(options.queueFirst);
   state.queueSearchBusy = true;
+  clearQueueSearchFeedback();
+  clearQueueSearchQueuedResult();
   renderDashboard();
 
   pushDebugEvent("queue.search.select.start", `index=${parsedIndex}; guild=${state.selectedGuildId}`);
@@ -2718,18 +2914,105 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
       guildId: payload.guildId || state.selectedGuildId,
       data: payload.data || null,
     };
-    clearQueueSearchState();
+    clearQueueSearchState({
+      keepFeedback: true,
+      keepQueuedResult: true,
+    });
     await refreshQueueListForSelectedGuild();
-    state.notice = "Queued selected search result.";
-    state.noticeError = false;
+    const queuedCount = applyQueueSearchQueuedResultFromPayload(payload);
+    if (queuedCount > 0) {
+      setQueueSearchFeedback(`Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`, {
+        append: true,
+      });
+    } else {
+      setQueueSearchFeedback("Queued selected search result.");
+    }
     pushDebugEvent("queue.search.select.success", `index=${parsedIndex}`);
   } catch (error) {
-    state.notice = `Queue select failed: ${error?.message || String(error)}`;
-    state.noticeError = true;
+    const message = `Queue select failed: ${error?.message || String(error)}`;
+    setQueueSearchFeedback(message, { error: true });
     if (error?.status === 410) {
       clearQueueSearchChooser();
     }
-    pushDebugEvent("queue.search.select.failed", state.notice);
+    pushDebugEvent("queue.search.select.failed", message);
+  } finally {
+    state.queueSearchBusy = false;
+    renderDashboard();
+  }
+}
+
+async function applyQueueSearchQueuedResultAction(action) {
+  const queuedResult = state.queueSearchQueuedResult;
+  if (!queuedResult || queuedResult.kind !== "single") {
+    return;
+  }
+  if (!state.selectedGuildId) {
+    setQueueSearchFeedback("Select a guild first.", { error: true });
+    renderDashboard();
+    return;
+  }
+
+  const currentPosition = getQueuedTrackPosition(queuedResult.track?.id, queuedResult.position);
+  if (!Number.isFinite(currentPosition) || currentPosition <= 0) {
+    clearQueueSearchQueuedResult();
+    setQueueSearchFeedback("That queued track is no longer in queue.", { error: true });
+    renderDashboard();
+    return;
+  }
+
+  if (action === "play-next" && currentPosition <= 1) {
+    clearQueueSearchQueuedResult();
+    setQueueSearchFeedback("Track is already next in queue.");
+    renderDashboard();
+    return;
+  }
+
+  let apiAction = "";
+  let actionPayload = {};
+  let successMessage = "";
+  if (action === "play-next") {
+    apiAction = "move_to_front";
+    actionPayload = { position: currentPosition };
+    successMessage = "Queue action applied: move.";
+  } else if (action === "cancel") {
+    apiAction = "remove";
+    actionPayload = { position: currentPosition };
+    successMessage = "Queue action applied: remove.";
+  } else {
+    return;
+  }
+
+  state.queueSearchBusy = true;
+  renderDashboard();
+
+  pushDebugEvent("queue.search.result-action.start", `${action} guild=${state.selectedGuildId} position=${currentPosition}`);
+  try {
+    const payload = await fetchJson("/api/activity/queue/action", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        action: apiAction,
+        guild_id: state.selectedGuildId,
+        ...actionPayload,
+      }),
+    });
+    state.queueSummary = {
+      guildId: payload.guildId || state.selectedGuildId,
+      data: payload.data || null,
+    };
+    await refreshQueueListForSelectedGuild();
+    clearQueueSearchQueuedResult();
+    setQueueSearchFeedback(successMessage, {
+      append: true,
+    });
+    pushDebugEvent("queue.search.result-action.success", action);
+  } catch (error) {
+    const message = `Queued track action failed (${action}): ${error?.message || String(error)}`;
+    setQueueSearchFeedback(message, { error: true });
+    pushDebugEvent("queue.search.result-action.failed", message);
   } finally {
     state.queueSearchBusy = false;
     renderDashboard();
@@ -2738,8 +3021,7 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
 
 async function sendQueueAction(action, actionOptions = {}) {
   if (!state.selectedGuildId) {
-    state.notice = "Select a guild first.";
-    state.noticeError = true;
+    setQueueSearchFeedback("Select a guild first.", { error: true });
     renderDashboard();
     return;
   }
@@ -2762,14 +3044,15 @@ async function sendQueueAction(action, actionOptions = {}) {
       data: payload.data || null,
     };
     await refreshQueueListForSelectedGuild();
-    state.notice = `Queue action applied: ${action}`;
-    state.noticeError = false;
+    setQueueSearchFeedback(`Queue action applied: ${action}.`, {
+      append: true,
+    });
     pushDebugEvent("queue.action.success", action);
     renderDashboard();
   } catch (error) {
-    state.notice = `Queue action failed (${action}): ${error?.message || String(error)}`;
-    state.noticeError = true;
-    pushDebugEvent("queue.action.failed", state.notice);
+    const message = `Queue action failed (${action}): ${error?.message || String(error)}`;
+    setQueueSearchFeedback(message, { error: true });
+    pushDebugEvent("queue.action.failed", message);
     renderDashboard();
   }
 }

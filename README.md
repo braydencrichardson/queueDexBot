@@ -71,6 +71,7 @@ Discord OAuth / API server (for Activity + future web view):
 - `AUTH_SERVER_ENABLED`: `1` (default) to start API/Auth server, `0` to disable.
 - `AUTH_SERVER_HOST`: Bind host (default: `127.0.0.1`).
 - `AUTH_SERVER_PORT`: Bind port (default: `8787`).
+- `ACTIVITY_QUEUE_SEARCH_CONCURRENCY`: Max concurrent Activity/Web search-resolve tasks (default: `1`).
 - `AUTH_SESSION_TTL_MS`: Optional session TTL in ms (default: 8 hours).
 - `AUTH_SESSION_COOKIE_NAME`: Session cookie name (default: `qdex_session`).
 - `AUTH_SESSION_COOKIE_SECURE`: `1` (default) or `0`.
