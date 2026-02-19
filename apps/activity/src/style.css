@@ -557,6 +557,49 @@ dd {
   margin-bottom: 0;
 }
 
+.playback-ready-state {
+  margin-top: 0.85rem;
+  min-height: 9.5rem;
+  border: 1px dashed color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--surface-elevated) 82%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  text-align: center;
+  padding: 0.9rem;
+}
+
+.playback-ready-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.playback-ready-subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.playback-ready-state-pip {
+  margin-top: 0.5rem;
+  min-height: 0;
+  padding: 0.65rem;
+}
+
+.playback-ready-state-pip .playback-ready-title {
+  font-size: 0.92rem;
+}
+
+.playback-ready-state-pip .playback-ready-subtitle {
+  font-size: 0.74rem;
+}
+
 .track-summary {
   margin-top: 0.55rem;
   display: grid;
@@ -712,6 +755,57 @@ dd {
 
 .queue-overview-now-playing {
   margin-bottom: 0.82rem;
+}
+
+.queue-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.queue-header-row h2 {
+  margin: 0;
+}
+
+.queue-remaining {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.queue-remaining strong {
+  color: var(--text-secondary);
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.up-next-track-list {
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.up-next-track-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.up-next-track-pos {
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  min-width: 1.9rem;
+  text-align: right;
+}
+
+.up-next-more {
+  margin-top: 0.7rem;
+  margin-bottom: 0;
 }
 
 .queue-list {
@@ -1008,6 +1102,11 @@ dd {
 
   .queue-toolbar .btn {
     flex: 1;
+  }
+
+  .queue-header-row {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   #queue-loop-mode {

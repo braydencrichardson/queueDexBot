@@ -22,6 +22,7 @@ const DEFAULT_WEB_OAUTH_SCOPES = "identify guilds";
 const BUILD_ID = typeof __QDEX_ACTIVITY_BUILD__ !== "undefined" ? __QDEX_ACTIVITY_BUILD__ : "dev-unknown";
 
 const TAB_PLAYER = "player";
+const TAB_UP_NEXT = "up_next";
 const TAB_QUEUE = "queue";
 const TAB_DEBUG = "debug";
 const TAB_ADMIN = "admin";
@@ -69,7 +70,7 @@ const state = {
     channelId: null,
     instanceId: null,
   },
-  activeTab: TAB_PLAYER,
+  activeTab: TAB_UP_NEXT,
   selectedGuildId: null,
   authSummary: null,
   queueSummary: null,
@@ -653,7 +654,7 @@ function hideDebugTab() {
   stopDebugTabHideTimer();
   state.debugTabVisible = false;
   if (state.activeTab === TAB_DEBUG) {
-    state.activeTab = TAB_PLAYER;
+    state.activeTab = TAB_UP_NEXT;
   }
 }
 
@@ -949,6 +950,23 @@ function getQueueLoopMode() {
   return queueList?.loopMode || queue?.loopMode || "off";
 }
 
+function getQueueStatusText(queue, queueList) {
+  if (!queue) {
+    return "unavailable";
+  }
+  const queueLength = Number.isFinite(queueList?.total)
+    ? queueList.total
+    : (queue.queueLength || 0);
+  return `${queue.playerStatus || "idle"} | ${queue.connected ? "connected" : "not connected"} | ${queueLength} queued`;
+}
+
+function getQueueUpdatedAtText(queue) {
+  if (!Number.isFinite(queue?.updatedAt)) {
+    return "unknown";
+  }
+  return formatTime(queue.updatedAt);
+}
+
 function getPlaybackProgressSnapshot() {
   const queue = getCurrentQueueData();
   const queueList = getQueueListData();
@@ -1030,6 +1048,16 @@ function getPlaybackProgressMarkup(options = {}) {
   `;
 }
 
+function getPlaybackReadyStateMarkup(options = {}) {
+  const pip = Boolean(options?.pip);
+  return `
+    <div class="playback-ready-state${pip ? " playback-ready-state-pip" : ""}">
+      <p class="playback-ready-title">Ready</p>
+      <p class="playback-ready-subtitle">Queue tracks to start playback.</p>
+    </div>
+  `;
+}
+
 function getQueueTrackListMarkup() {
   const queueList = getQueueListData();
   const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
@@ -1078,6 +1106,33 @@ function getQueueTrackListMarkup() {
         `;
       }).join("")}
     </ul>
+  `;
+}
+
+function getUpNextTrackListMarkup() {
+  const queueList = getQueueListData();
+  const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
+  const total = Number.isFinite(queueList?.total) ? queueList.total : tracks.length;
+  if (!tracks.length) {
+    return "";
+  }
+
+  const hiddenCount = Math.max(0, total - tracks.length);
+  return `
+    <ul class="up-next-track-list">
+      ${tracks.map((track, index) => {
+        const position = Number.isFinite(track?.position) ? track.position : index + 1;
+        return `
+          <li class="up-next-track-row">
+            <span class="up-next-track-pos">#${escapeHtml(String(position))}</span>
+            ${getTrackSummaryMarkup(track, { compact: true, includeDuration: true })}
+          </li>
+        `;
+      }).join("")}
+    </ul>
+    ${hiddenCount > 0
+    ? `<p class="muted up-next-more">+${escapeHtml(String(hiddenCount))} more queued</p>`
+    : ""}
   `;
 }
 
@@ -1208,20 +1263,21 @@ function renderDashboard() {
   const mode = state.mode || "unknown";
   const adminState = getAdminState();
   if (!adminState.isAdmin && state.activeTab === TAB_ADMIN) {
-    state.activeTab = TAB_PLAYER;
+    state.activeTab = TAB_UP_NEXT;
   }
   if (!state.debugTabVisible && state.activeTab === TAB_DEBUG) {
-    state.activeTab = TAB_PLAYER;
+    state.activeTab = TAB_UP_NEXT;
   }
-  const queueStatusText = queue
-    ? `${queue.playerStatus || "idle"} | ${queue.connected ? "connected" : "not connected"} | ${queue.queueLength || 0} queued`
-    : "unavailable";
+  const queueStatusText = getQueueStatusText(queue, queueList);
+  const queueUpdatedAtText = getQueueUpdatedAtText(queue);
   const activeNowPlaying = queueList?.nowPlaying || queue?.nowPlaying;
+  const hasNowPlaying = Boolean(activeNowPlaying);
   const nowPlayingSummaryMarkup = getTrackSummaryMarkup(activeNowPlaying, { includeDuration: true });
-  const nowPlayingCompactMarkup = getTrackSummaryMarkup(activeNowPlaying, { compact: true, includeDuration: true });
   const nowPlayingPipMarkup = getTrackSummaryMarkup(activeNowPlaying, { pip: true, includeDuration: true });
+  const upNextTrackListMarkup = getUpNextTrackListMarkup();
+  const hasUpNextTracks = Boolean(upNextTrackListMarkup);
   const pipMode = isPipViewport();
-  const playbackProgressMarkup = getPlaybackProgressMarkup({ pip: pipMode });
+  const playbackProgressMarkup = hasNowPlaying ? getPlaybackProgressMarkup({ pip: pipMode }) : "";
   const themeToggleLabel = state.themeMode === THEME_DARK ? "Light Mode" : "Dark Mode";
   const queueLength = Number.isFinite(queueList?.total)
     ? queueList.total
@@ -1247,28 +1303,28 @@ function renderDashboard() {
             aria-label="${escapeHtml(connection.label)}"
           ></span>
         </div>
-        ${nowPlayingPipMarkup}
-        ${playbackProgressMarkup}
+        ${hasNowPlaying ? nowPlayingPipMarkup : getPlaybackReadyStateMarkup({ pip: true })}
+        ${hasNowPlaying ? playbackProgressMarkup : ""}
       </article>
     `
     : `
       <article class="panel-card">
         <h2>Playback</h2>
-        <dl>
-          <dt>Status</dt><dd id="queue-status">${escapeHtml(queueStatusText)}</dd>
-          <dt>Last Update</dt><dd id="queue-updated-at">${escapeHtml(formatTime(queue?.updatedAt || Date.now()))}</dd>
-        </dl>
-        <div id="queue-now-playing" class="now-playing-section">
-          ${nowPlayingSummaryMarkup}
-        </div>
-        ${playbackProgressMarkup}
-        <div class="action-row">
-          <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
-          <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
-          <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
-          <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
-          <button type="button" class="btn" data-action="clear">Clear Queue</button>
-        </div>
+        ${hasNowPlaying
+    ? `
+          <div id="queue-now-playing" class="now-playing-section">
+            ${nowPlayingSummaryMarkup}
+          </div>
+          ${playbackProgressMarkup}
+          <div class="action-row">
+            <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
+            <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
+            <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
+            <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
+            <button type="button" class="btn" data-action="clear">Clear Queue</button>
+          </div>
+        `
+    : getPlaybackReadyStateMarkup()}
       </article>
     `;
 
@@ -1286,7 +1342,8 @@ function renderDashboard() {
     ? ""
     : `
       <nav class="menu-tabs">
-        <button type="button" class="tab-btn${state.activeTab === TAB_QUEUE ? " active" : ""}" data-tab="${TAB_QUEUE}">Queue</button>
+        <button type="button" class="tab-btn${state.activeTab === TAB_UP_NEXT ? " active" : ""}" data-tab="${TAB_UP_NEXT}">Queue</button>
+        <button type="button" class="tab-btn${state.activeTab === TAB_QUEUE ? " active" : ""}" data-tab="${TAB_QUEUE}">Queue Edit</button>
         ${adminState.isAdmin
           ? `<button type="button" class="tab-btn${state.activeTab === TAB_ADMIN ? " active" : ""}" data-tab="${TAB_ADMIN}">Admin</button>`
           : ""}
@@ -1294,18 +1351,22 @@ function renderDashboard() {
           ? `<button type="button" class="tab-btn${state.activeTab === TAB_DEBUG ? " active" : ""}" data-tab="${TAB_DEBUG}">Debug</button>`
           : ""}
       </nav>
+      <section class="menu-panel${state.activeTab === TAB_UP_NEXT ? " active" : ""}" data-panel="${TAB_UP_NEXT}">
+        <article class="panel-card">
+          <div class="queue-header-row">
+            <h2>Queue</h2>
+            <p class="queue-remaining">Remaining: <strong>${escapeHtml(String(queueLength))}</strong></p>
+          </div>
+          ${hasUpNextTracks ? upNextTrackListMarkup : ""}
+        </article>
+      </section>
       <section class="menu-panel${state.activeTab === TAB_QUEUE ? " active" : ""}" data-panel="${TAB_QUEUE}">
         <article class="panel-card">
-          <h2>Queue Overview</h2>
-          <div class="queue-overview-now-playing">
-            ${nowPlayingCompactMarkup}
+          <div class="queue-header-row">
+            <h2>Queue Edit</h2>
+            <p class="queue-remaining">Remaining: <strong>${escapeHtml(String(queueLength))}</strong></p>
           </div>
-          <dl>
-            <dt>Loop</dt><dd id="queue-loop">${escapeHtml(loopMode)}</dd>
-            <dt>Queue Length</dt><dd>${escapeHtml(String(queueLength))}</dd>
-          </dl>
           <div class="queue-toolbar">
-            <button type="button" class="btn" data-queue-action="refresh">Refresh Queue</button>
             <button type="button" class="btn" data-queue-action="shuffle">Shuffle</button>
             <button type="button" class="btn btn-danger" data-queue-action="clear">Clear</button>
             <select id="queue-loop-mode">
@@ -1329,6 +1390,9 @@ function renderDashboard() {
             <dt>Guilds In Scope</dt><dd>${escapeHtml(String(guildCount))}</dd>
             <dt>Connected At</dt><dd>${escapeHtml(connectedAtText)}</dd>
             <dt>Uptime</dt><dd id="uptime">0s</dd>
+            <dt>Browser Time</dt><dd id="browser-time">${escapeHtml(formatTime(Date.now()))}</dd>
+            <dt>Queue Status</dt><dd id="debug-queue-status">${escapeHtml(queueStatusText)}</dd>
+            <dt>Queue Last Update</dt><dd id="debug-queue-updated-at">${escapeHtml(queueUpdatedAtText)}</dd>
             <dt>Guild</dt><dd>${escapeHtml(state.sdkContext.guildId || state.selectedGuildId || "unknown")}</dd>
             <dt>Channel</dt><dd>${escapeHtml(state.sdkContext.channelId || "n/a")}</dd>
             <dt>Instance</dt><dd>${escapeHtml(state.sdkContext.instanceId || "n/a")}</dd>
@@ -1733,6 +1797,22 @@ function startLiveTicker() {
     if (uptimeNode) {
       const connectedAt = state.connectedAt || new Date();
       uptimeNode.textContent = formatUptime(Date.now() - connectedAt.getTime());
+    }
+
+    const browserTimeNode = root.querySelector("#browser-time");
+    if (browserTimeNode) {
+      browserTimeNode.textContent = formatTime(Date.now());
+    }
+
+    const queue = getCurrentQueueData();
+    const queueList = getQueueListData();
+    const debugQueueStatusNode = root.querySelector("#debug-queue-status");
+    if (debugQueueStatusNode) {
+      debugQueueStatusNode.textContent = getQueueStatusText(queue, queueList);
+    }
+    const debugQueueUpdatedAtNode = root.querySelector("#debug-queue-updated-at");
+    if (debugQueueUpdatedAtNode) {
+      debugQueueUpdatedAtNode.textContent = getQueueUpdatedAtText(queue);
     }
 
     const connectionStatusNode = root.querySelector("#connection-status-btn");
