@@ -41,6 +41,42 @@ function createSoundcloudResolver(deps) {
     };
   }
 
+  function normalizeImageUrl(value) {
+    const raw = typeof value === "string" ? value.trim() : "";
+    if (!raw) {
+      return null;
+    }
+    const normalized = raw.startsWith("//") ? `https:${raw}` : raw;
+    if (/^https?:\/\//i.test(normalized)) {
+      return normalized;
+    }
+    return null;
+  }
+
+  function pickSoundcloudThumbnail(track) {
+    if (!track || typeof track !== "object") {
+      return null;
+    }
+    const candidates = [
+      track.artwork_url,
+      track.artworkUrl,
+      track.artwork,
+      track.thumbnail_url,
+      track.thumbnailUrl,
+      track.thumbnail,
+      track.user?.avatar_url,
+      track.user?.avatarUrl,
+      track.user?.avatarURL,
+    ];
+    for (const candidate of candidates) {
+      const normalized = normalizeImageUrl(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
   function parseHydrationPayload(pageHtml) {
     const scriptMarker = "window.__sc_hydration";
     const markerIndex = pageHtml.indexOf(scriptMarker);
@@ -215,6 +251,7 @@ function createSoundcloudResolver(deps) {
         channel: track?.user?.username || track?.user?.name || null,
         source: "soundcloud",
         duration: Math.round((track.duration || 0) / 1000),
+        thumbnailUrl: pickSoundcloudThumbnail(track),
         requester,
       };
     }
@@ -334,6 +371,7 @@ function createSoundcloudResolver(deps) {
         channel: track?.user?.username || track?.user?.name || null,
         source: "soundcloud",
         duration: Math.round((track.duration || 0) / 1000),
+        thumbnailUrl: pickSoundcloudThumbnail(track),
         requester,
       });
     };
@@ -413,6 +451,7 @@ function createSoundcloudResolver(deps) {
           channel: track.user?.name || null,
           source: "soundcloud",
           duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
+          thumbnailUrl: pickSoundcloudThumbnail(track),
           requester,
         },
       ];
@@ -430,6 +469,7 @@ function createSoundcloudResolver(deps) {
           channel: track.user?.name || null,
           source: "soundcloud",
           duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
+          thumbnailUrl: pickSoundcloudThumbnail(track),
           requester,
         }))
       );
@@ -447,6 +487,7 @@ function createSoundcloudResolver(deps) {
           channel: info.user?.name || null,
           source: "soundcloud",
           duration: info.durationInSec ?? Math.round((info.durationInMs || 0) / 1000),
+          thumbnailUrl: pickSoundcloudThumbnail(info),
           requester,
         },
       ];
@@ -462,6 +503,7 @@ function createSoundcloudResolver(deps) {
           channel: track.user?.name || null,
           source: "soundcloud",
           duration: track.durationInSec ?? Math.round((track.durationInMs || 0) / 1000),
+          thumbnailUrl: pickSoundcloudThumbnail(track),
           requester,
         }))
       );

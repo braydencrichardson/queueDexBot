@@ -94,6 +94,11 @@ let statePoller = null;
 let debugTabHideTimer = null;
 let viewportWatcherBound = false;
 const debugEvents = [];
+const failedThumbnailUrls = new Set();
+const MAX_FAILED_THUMBNAILS = 600;
+const thumbnailDataUrlCache = new Map();
+const thumbnailDataUrlInFlight = new Map();
+const MAX_THUMBNAIL_DATA_URL_CACHE = 220;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -238,6 +243,278 @@ function formatProgressTimestamp(seconds) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   }
   return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function normalizeHttpUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.startsWith("//") ? `https:${raw}` : raw;
+  if (!/^https?:\/\//i.test(normalized)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(normalized);
+    const protocol = String(parsed.protocol || "").toLowerCase();
+    if (protocol !== "https:" && protocol !== "http:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getYoutubeVideoId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) {
+    return raw;
+  }
+  try {
+    const parsed = new URL(raw);
+    const host = String(parsed.hostname || "").toLowerCase();
+    if (host === "youtu.be") {
+      const id = parsed.pathname.split("/").filter(Boolean)[0];
+      return /^[a-zA-Z0-9_-]{11}$/.test(id || "") ? id : null;
+    }
+    if (host.endsWith("youtube.com")) {
+      const queryId = parsed.searchParams.get("v");
+      if (/^[a-zA-Z0-9_-]{11}$/.test(queryId || "")) {
+        return queryId;
+      }
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      if ((parts[0] === "shorts" || parts[0] === "embed") && /^[a-zA-Z0-9_-]{11}$/.test(parts[1] || "")) {
+        return parts[1];
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function getTrackLinkUrl(track) {
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  return normalizeHttpUrl(track.displayUrl) || normalizeHttpUrl(track.url);
+}
+
+function getTrackArtistText(track) {
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  const artist = String(track.artist || track.channel || "").trim();
+  if (artist) {
+    return artist;
+  }
+  return null;
+}
+
+function getTrackThumbnailUrl(track) {
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  const directThumbnail = normalizeHttpUrl(track.thumbnailUrl || track.thumbnail || track.artworkUrl || track.artwork_url);
+  if (directThumbnail && !failedThumbnailUrls.has(directThumbnail)) {
+    return directThumbnail;
+  }
+  const source = String(track.source || "").toLowerCase();
+  const youtubeId = getYoutubeVideoId(track.url) || getYoutubeVideoId(track.displayUrl);
+  if (youtubeId && source.includes("youtube")) {
+    const youtubeThumbnail = `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`;
+    if (!failedThumbnailUrls.has(youtubeThumbnail)) {
+      return youtubeThumbnail;
+    }
+  }
+  return null;
+}
+
+function getTrackSummaryMarkup(track, options = {}) {
+  if (!track) {
+    return `<p class="muted track-summary-empty">Nothing currently playing.</p>`;
+  }
+
+  const compact = Boolean(options.compact);
+  const pip = Boolean(options.pip);
+  const includeDuration = options.includeDuration !== false;
+  const linkUrl = getTrackLinkUrl(track);
+  const thumbnailUrl = getTrackThumbnailUrl(track);
+  const title = String(track?.title || "Unknown");
+  const artist = getTrackArtistText(track);
+
+  const metaBits = [];
+  if (includeDuration) {
+    metaBits.push(formatTrackDuration(track?.duration));
+  }
+  if (track?.pendingResolve) {
+    metaBits.push("resolving");
+  }
+  const metaText = metaBits.filter(Boolean).join(" • ");
+
+  const titleMarkup = linkUrl
+    ? `<a class="track-summary-title-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
+    : `<span class="track-summary-title-text">${escapeHtml(title)}</span>`;
+
+  const thumbInner = thumbnailUrl
+    ? `<img class="track-summary-thumb-image" data-thumb-src="${escapeHtml(thumbnailUrl)}" alt="">`
+    : `<span class="track-summary-thumb-placeholder" aria-hidden="true"></span>`;
+
+  const thumbMarkup = linkUrl
+    ? `<a class="track-summary-thumb-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${thumbInner}</a>`
+    : `<span class="track-summary-thumb-link track-summary-thumb-static">${thumbInner}</span>`;
+
+  const className = [
+    "track-summary",
+    compact ? "track-summary-compact" : "",
+    pip ? "track-summary-pip" : "",
+  ].filter(Boolean).join(" ");
+
+  return `
+    <div class="${className}">
+      ${thumbMarkup}
+      <div class="track-summary-body">
+        <div class="track-summary-title">${titleMarkup}</div>
+        ${artist ? `<p class="track-summary-artist">${escapeHtml(artist)}</p>` : ""}
+        ${metaText ? `<p class="track-summary-meta">${escapeHtml(metaText)}</p>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function rememberFailedThumbnailUrl(url) {
+  if (!url) {
+    return;
+  }
+  if (failedThumbnailUrls.size >= MAX_FAILED_THUMBNAILS) {
+    const oldest = failedThumbnailUrls.values().next().value;
+    if (oldest) {
+      failedThumbnailUrls.delete(oldest);
+    }
+  }
+  failedThumbnailUrls.add(url);
+}
+
+function rememberThumbnailDataUrl(url, dataUrl) {
+  if (!url || !dataUrl) {
+    return;
+  }
+  if (thumbnailDataUrlCache.size >= MAX_THUMBNAIL_DATA_URL_CACHE) {
+    const oldest = thumbnailDataUrlCache.keys().next().value;
+    if (oldest) {
+      thumbnailDataUrlCache.delete(oldest);
+    }
+  }
+  thumbnailDataUrlCache.set(url, dataUrl);
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : null;
+      if (!dataUrl) {
+        reject(new Error("Failed converting thumbnail blob to data URL"));
+        return;
+      }
+      resolve(dataUrl);
+    };
+    reader.onerror = () => {
+      reject(new Error("Failed reading thumbnail blob"));
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function fetchThumbnailDataUrlViaProxy(sourceUrl) {
+  const cached = thumbnailDataUrlCache.get(sourceUrl);
+  if (cached) {
+    return cached;
+  }
+
+  const inFlight = thumbnailDataUrlInFlight.get(sourceUrl);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const proxyPath = `/api/activity/thumbnail?src=${encodeURIComponent(sourceUrl)}`;
+  const requestTask = (async () => {
+    const response = await fetch(getApiUrl(proxyPath), {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const proxyError = new Error(`Thumbnail proxy request failed (${response.status})`);
+      proxyError.status = response.status;
+      throw proxyError;
+    }
+    const blob = await response.blob();
+    if (!String(blob?.type || "").toLowerCase().startsWith("image/")) {
+      throw new Error("Thumbnail proxy returned non-image content");
+    }
+    const dataUrl = await blobToDataUrl(blob);
+    rememberThumbnailDataUrl(sourceUrl, dataUrl);
+    return dataUrl;
+  })();
+
+  thumbnailDataUrlInFlight.set(sourceUrl, requestTask);
+  requestTask.finally(() => {
+    thumbnailDataUrlInFlight.delete(sourceUrl);
+  });
+  return requestTask;
+}
+
+function replaceThumbnailWithPlaceholder(imageNode) {
+  if (!imageNode?.parentNode || !document?.createElement) {
+    return;
+  }
+  const placeholder = document.createElement("span");
+  placeholder.className = "track-summary-thumb-placeholder";
+  placeholder.setAttribute("aria-hidden", "true");
+  imageNode.replaceWith(placeholder);
+}
+
+function hydrateTrackThumbnails() {
+  const embeddedMode = state.mode === "embedded";
+  root.querySelectorAll("img.track-summary-thumb-image[data-thumb-src]").forEach((image) => {
+    if (image.dataset.thumbReady === "1") {
+      return;
+    }
+    image.dataset.thumbReady = "1";
+    const thumbSrc = normalizeHttpUrl(image.getAttribute("data-thumb-src"));
+    if (!thumbSrc || failedThumbnailUrls.has(thumbSrc)) {
+      replaceThumbnailWithPlaceholder(image);
+      return;
+    }
+
+    if (embeddedMode) {
+      void fetchThumbnailDataUrlViaProxy(thumbSrc)
+        .then((dataUrl) => {
+          if (!image.isConnected) {
+            return;
+          }
+          image.setAttribute("src", dataUrl);
+        })
+        .catch((error) => {
+          if (error?.status !== 401) {
+            rememberFailedThumbnailUrl(thumbSrc);
+          }
+          if (image.isConnected) {
+            replaceThumbnailWithPlaceholder(image);
+          }
+        });
+      return;
+    }
+
+    image.addEventListener("error", () => {
+      rememberFailedThumbnailUrl(thumbSrc);
+      replaceThumbnailWithPlaceholder(image);
+    }, { once: true });
+    image.setAttribute("src", thumbSrc);
+  });
 }
 
 function setConnectionStatus(nextStatus) {
@@ -631,8 +908,7 @@ function getQueueTrackListMarkup() {
           <li class="queue-track-row">
             <div class="queue-track-main">
               <span class="queue-track-pos">#${escapeHtml(String(position))}</span>
-              <span class="queue-track-title">${escapeHtml(track?.title || "Unknown")}</span>
-              <span class="queue-track-meta">${escapeHtml(formatTrackDuration(track?.duration))}</span>
+              ${getTrackSummaryMarkup(track, { compact: true, includeDuration: true })}
             </div>
             <div class="queue-track-actions">
               <button type="button" class="btn btn-mini" data-track-action="top" data-position="${escapeHtml(String(position))}"${isFirst ? " disabled" : ""}>Top</button>
@@ -752,9 +1028,9 @@ function renderDashboard() {
     ? `${queue.playerStatus || "idle"} | ${queue.connected ? "connected" : "not connected"} | ${queue.queueLength || 0} queued`
     : "unavailable";
   const activeNowPlaying = queueList?.nowPlaying || queue?.nowPlaying;
-  const nowPlayingText = activeNowPlaying
-    ? `${activeNowPlaying.title || "Unknown"} (${formatTrackDuration(activeNowPlaying.duration)})`
-    : "Nothing currently playing";
+  const nowPlayingSummaryMarkup = getTrackSummaryMarkup(activeNowPlaying, { includeDuration: true });
+  const nowPlayingCompactMarkup = getTrackSummaryMarkup(activeNowPlaying, { compact: true, includeDuration: true });
+  const nowPlayingPipMarkup = getTrackSummaryMarkup(activeNowPlaying, { pip: true, includeDuration: true });
   const pipMode = isPipViewport();
   const playbackProgressMarkup = getPlaybackProgressMarkup({ pip: pipMode });
   const themeToggleLabel = state.themeMode === THEME_DARK ? "Light Mode" : "Dark Mode";
@@ -782,7 +1058,7 @@ function renderDashboard() {
             aria-label="${escapeHtml(connection.label)}"
           ></span>
         </div>
-        <p class="pip-now-playing">${escapeHtml(nowPlayingText)}</p>
+        ${nowPlayingPipMarkup}
         ${playbackProgressMarkup}
       </article>
     `
@@ -791,9 +1067,11 @@ function renderDashboard() {
         <h2>Playback</h2>
         <dl>
           <dt>Status</dt><dd id="queue-status">${escapeHtml(queueStatusText)}</dd>
-          <dt>Now Playing</dt><dd id="queue-now-playing">${escapeHtml(nowPlayingText)}</dd>
           <dt>Last Update</dt><dd id="queue-updated-at">${escapeHtml(formatTime(queue?.updatedAt || Date.now()))}</dd>
         </dl>
+        <div id="queue-now-playing" class="now-playing-section">
+          ${nowPlayingSummaryMarkup}
+        </div>
         ${playbackProgressMarkup}
         <div class="action-row">
           <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
@@ -830,7 +1108,9 @@ function renderDashboard() {
       <section class="menu-panel${state.activeTab === TAB_QUEUE ? " active" : ""}" data-panel="${TAB_QUEUE}">
         <article class="panel-card">
           <h2>Queue Overview</h2>
-          <p class="muted">Now playing: ${escapeHtml(nowPlayingText)}</p>
+          <div class="queue-overview-now-playing">
+            ${nowPlayingCompactMarkup}
+          </div>
           <dl>
             <dt>Loop</dt><dd id="queue-loop">${escapeHtml(loopMode)}</dd>
             <dt>Queue Length</dt><dd>${escapeHtml(String(queueLength))}</dd>
@@ -925,6 +1205,8 @@ function renderDashboard() {
 }
 
 function wireDashboardEvents() {
+  hydrateTrackThumbnails();
+
   root.querySelectorAll(".tab-btn").forEach((button) => {
     button.addEventListener("click", () => {
       const tab = button.getAttribute("data-tab");

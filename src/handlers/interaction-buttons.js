@@ -3,6 +3,7 @@ const {
   QUEUE_MOVE_MENU_PAGE_SIZE: CONFIG_QUEUE_MOVE_MENU_PAGE_SIZE,
   QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE,
 } = require("../config/constants");
+const { createActivityInviteService } = require("../activity/invite-service");
 const { createQueueViewService } = require("./queue-view-service");
 const {
   clearMapEntryWithTimeout,
@@ -55,7 +56,11 @@ function createButtonInteractionHandler(deps) {
     maybeRefreshNowPlayingUpNext = async () => {},
     stopAndLeaveQueue,
     queueService = null,
+    activityInviteService = null,
+    getActivityApplicationId = () => "",
+    resolveVoiceChannelById = async () => null,
   } = deps;
+  const inviteService = activityInviteService || createActivityInviteService();
   const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : CONFIG_QUEUE_VIEW_PAGE_SIZE;
   const queueMoveMenuPageSize = Number.isFinite(QUEUE_MOVE_MENU_PAGE_SIZE)
     ? QUEUE_MOVE_MENU_PAGE_SIZE
@@ -89,6 +94,102 @@ function createButtonInteractionHandler(deps) {
       return LOOP_MODES.SINGLE;
     }
     return LOOP_MODES.QUEUE;
+  }
+
+  function resolveActivityApplicationId(interaction) {
+    const fromInteraction = String(
+      interaction?.applicationId
+      || interaction?.client?.application?.id
+      || ""
+    ).trim();
+    if (fromInteraction) {
+      return fromInteraction;
+    }
+    const fromDeps = String(getActivityApplicationId?.() || "").trim();
+    return fromDeps || "";
+  }
+
+  async function resolveQueueVoiceChannel(queue, guildId) {
+    if (queue?.voiceChannel && typeof queue.voiceChannel.createInvite === "function") {
+      return queue.voiceChannel;
+    }
+    const queueVoiceChannelId = String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim();
+    if (!queueVoiceChannelId) {
+      return null;
+    }
+    try {
+      const resolved = await resolveVoiceChannelById(guildId, queueVoiceChannelId);
+      if (resolved && typeof resolved.createInvite === "function") {
+        return resolved;
+      }
+    } catch (error) {
+      logError("Failed to resolve queue voice channel for activity invite", {
+        guildId,
+        channelId: queueVoiceChannelId,
+        error,
+      });
+    }
+    return null;
+  }
+
+  function getActivityInviteFailureMessage(error) {
+    if (error?.code === 50234) {
+      return "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again.";
+    }
+    if (error?.code === 50013 || error?.code === 50001) {
+      return "I couldn't create an Activity invite in this voice channel. Check that I can create invites there.";
+    }
+    return "Couldn't create an Activity invite right now. Try /launch to verify setup.";
+  }
+
+  async function replyWithActivityInvite(interaction, queue, member) {
+    const voiceChannelCheck = getVoiceChannelCheck(member, queue, "open this activity");
+    if (voiceChannelCheck) {
+      await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const voiceChannel = await resolveQueueVoiceChannel(queue, interaction.guildId);
+    if (!voiceChannel) {
+      await interaction.reply({
+        content: "I couldn't resolve the active voice channel for this queue.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const applicationId = resolveActivityApplicationId(interaction);
+    if (!applicationId) {
+      await interaction.reply({
+        content: "Couldn't determine this app's ID to create an Activity invite.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    try {
+      const inviteResult = await inviteService.getOrCreateInvite({
+        voiceChannel,
+        applicationId,
+        reason: `Activity launch requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
+      });
+      const launchVerb = inviteResult.reused ? "Reused" : "Created";
+      await interaction.reply({
+        content: `${launchVerb} an Activity invite for **${voiceChannel.name || "voice"}**.\n${inviteResult.url}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      logError("Failed to create activity invite from button", {
+        guildId: interaction.guildId,
+        channelId: voiceChannel?.id,
+        user: interaction.user?.tag || interaction.user?.id,
+        error,
+      });
+      await interaction.reply({
+        content: getActivityInviteFailureMessage(error),
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   return async function handleButtonInteraction(interaction) {
@@ -175,6 +276,10 @@ function createButtonInteractionHandler(deps) {
           content: "That now playing message is no longer active. Use /playing to post a new one.",
           flags: MessageFlags.Ephemeral,
         });
+        return;
+      }
+      if (customId === "np_activity") {
+        await replyWithActivityInvite(interaction, queue, member);
         return;
       }
       if (!isSameVoiceChannel(member, queue)) {
@@ -478,6 +583,10 @@ function createButtonInteractionHandler(deps) {
       }
       if (interaction.user.id !== queueView.ownerId) {
         await interaction.reply({ content: "Only the requester can control this queue view.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (customId === "queue_activity") {
+        await replyWithActivityInvite(interaction, queue, member);
         return;
       }
       let postUpdateAction = null;

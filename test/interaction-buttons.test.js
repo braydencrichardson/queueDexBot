@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { MessageFlags } = require("discord.js");
 
 const { createButtonInteractionHandler } = require("../src/handlers/interaction-buttons");
 
@@ -530,4 +531,179 @@ test("queue_nowplaying opens now playing and closes queue view controls", async 
   assert.equal(deferred, true);
   assert.equal(queueViews.has("queue-msg-1"), false);
   assert.deepEqual(closedPayload, { content: "Queue view closed (now playing opened).", components: [] });
+});
+
+test("np_activity replies with an ephemeral activity invite link", async () => {
+  let inviteCallCount = 0;
+  let replyPayload = null;
+  let deferred = false;
+  const queue = {
+    nowPlayingMessageId: "np-msg-1",
+    tracks: [{ id: "t1", title: "Song 1" }],
+    current: { id: "c1", title: "Now Playing" },
+    voiceChannel: {
+      id: "voice-1",
+      name: "Music VC",
+      guild: { id: "guild-1" },
+      createInvite: async () => {
+        inviteCallCount += 1;
+        return {
+          code: "np-activity",
+          url: "https://discord.gg/np-activity",
+          expiresTimestamp: Date.now() + 15 * 60 * 1000,
+        };
+      },
+    },
+    player: {
+      state: { status: "playing" },
+    },
+  };
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews: new Map(),
+    logInfo: () => {},
+    logError: () => {},
+    sendNowPlaying: async () => {},
+    stopAndLeaveQueue: () => {},
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "np_activity",
+    applicationId: "app-1",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" }, voice: { channel: { id: "voice-1" } } }),
+      },
+    },
+    message: { id: "np-msg-1", channel: {}, edit: async () => {} },
+    deferUpdate: async () => {
+      deferred = true;
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+    channel: { send: async () => ({ id: "x" }) },
+  });
+
+  assert.equal(inviteCallCount, 1);
+  assert.equal(deferred, false);
+  assert.deepEqual(replyPayload, {
+    content: "Created an Activity invite for **Music VC**.\nhttps://discord.gg/np-activity",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
+test("queue_activity replies with invite link without closing queue view", async () => {
+  let replyPayload = null;
+  let queueViewEdited = false;
+  const queue = {
+    tracks: [{ id: "t1", title: "Song 1" }],
+    current: { id: "c1", title: "Now Playing" },
+    voiceChannel: {
+      id: "voice-1",
+      name: "Music VC",
+      guild: { id: "guild-1" },
+      createInvite: async () => ({
+        code: "queue-activity",
+        url: "https://discord.gg/queue-activity",
+        expiresTimestamp: Date.now() + 15 * 60 * 1000,
+      }),
+    },
+    player: {
+      state: { status: "playing" },
+    },
+  };
+  const queueViews = new Map([
+    ["queue-msg-1", {
+      guildId: "guild-1",
+      ownerId: "user-1",
+      channelId: "text-1",
+      page: 1,
+      pageSize: 10,
+      selectedTrackId: null,
+      stale: false,
+      timeout: setTimeout(() => {}, 60000),
+    }],
+  ]);
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews,
+    logInfo: () => {},
+    logError: () => {},
+    sendNowPlaying: async () => {},
+    stopAndLeaveQueue: () => {},
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "queue_activity",
+    applicationId: "app-1",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" }, voice: { channel: { id: "voice-1" } } }),
+      },
+    },
+    message: { id: "queue-msg-1" },
+    channel: { id: "text-1" },
+    client: {
+      channels: {
+        cache: new Map([
+          ["text-1", {
+            messages: {
+              fetch: async () => ({
+                edit: async () => {
+                  queueViewEdited = true;
+                },
+              }),
+            },
+          }],
+        ]),
+      },
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+    update: async () => {
+      throw new Error("queue_activity should not call update");
+    },
+  });
+
+  assert.equal(queueViewEdited, false);
+  assert.equal(queueViews.has("queue-msg-1"), true);
+  assert.deepEqual(replyPayload, {
+    content: "Created an Activity invite for **Music VC**.\nhttps://discord.gg/queue-activity",
+    flags: MessageFlags.Ephemeral,
+  });
+  clearTimeout(queueViews.get("queue-msg-1")?.timeout);
 });

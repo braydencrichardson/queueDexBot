@@ -473,17 +473,6 @@ dd {
   background: var(--danger);
 }
 
-.pip-now-playing {
-  margin: 0;
-  font-size: 0.88rem;
-  line-height: 1.3;
-  color: var(--text-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 .playback-panel.pip .playback-progress-wrap {
   margin-top: 0.45rem;
   padding: 0.42rem 0.5rem;
@@ -558,6 +547,163 @@ dd {
   margin-bottom: 0;
 }
 
+.track-summary {
+  margin-top: 0.55rem;
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.track-summary-thumb-link {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.55rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  text-decoration: none;
+}
+
+.track-summary-thumb-static {
+  cursor: default;
+}
+
+.track-summary-thumb-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.track-summary-thumb-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--primary) 34%, transparent),
+    color-mix(in srgb, var(--secondary) 28%, transparent)
+  );
+}
+
+.track-summary-body {
+  min-width: 0;
+}
+
+.track-summary-title {
+  line-height: 1.2;
+}
+
+.track-summary-title-link,
+.track-summary-title-text {
+  color: var(--text-primary);
+  font-weight: 700;
+  text-decoration: none;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.track-summary-title-link:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
+}
+
+.track-summary-title-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.track-summary-artist {
+  margin: 0.15rem 0 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-summary-meta {
+  margin: 0.12rem 0 0;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+}
+
+.track-summary-empty {
+  margin: 0;
+}
+
+.track-summary-compact {
+  margin-top: 0;
+  grid-template-columns: 2.2rem minmax(0, 1fr);
+  gap: 0.45rem;
+}
+
+.track-summary-compact .track-summary-thumb-link {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 0.45rem;
+}
+
+.track-summary-compact .track-summary-title-link,
+.track-summary-compact .track-summary-title-text {
+  -webkit-line-clamp: 1;
+  font-size: 0.89rem;
+}
+
+.track-summary-compact .track-summary-artist {
+  margin-top: 0.06rem;
+  font-size: 0.7rem;
+}
+
+.track-summary-compact .track-summary-meta {
+  margin-top: 0.05rem;
+  font-size: 0.7rem;
+}
+
+.track-summary-pip {
+  margin-top: 0.42rem;
+  grid-template-columns: 2.4rem minmax(0, 1fr);
+  gap: 0.45rem;
+}
+
+.track-summary-pip .track-summary-thumb-link {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 0.45rem;
+}
+
+.track-summary-pip .track-summary-title-link,
+.track-summary-pip .track-summary-title-text {
+  font-size: 0.84rem;
+}
+
+.track-summary-pip .track-summary-artist {
+  font-size: 0.7rem;
+}
+
+.track-summary-pip .track-summary-meta {
+  font-size: 0.68rem;
+}
+
+.now-playing-section {
+  margin-top: 0.8rem;
+}
+
+.queue-overview-now-playing {
+  margin-bottom: 0.82rem;
+}
+
 .queue-list {
   margin: 0;
   padding-left: 1rem;
@@ -613,9 +759,8 @@ dd {
 .queue-track-main {
   min-width: 14rem;
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: flex-start;
+  gap: 0.55rem;
   color: var(--text-secondary);
 }
 
@@ -623,16 +768,12 @@ dd {
   font-family: "IBM Plex Mono", "Fira Code", monospace;
   font-size: 0.76rem;
   color: var(--text-muted);
+  margin-top: 0.2rem;
 }
 
-.queue-track-title {
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.queue-track-meta {
-  font-size: 0.82rem;
-  color: var(--text-muted);
+.queue-track-main .track-summary {
+  flex: 1;
+  min-width: 0;
 }
 
 .queue-track-actions {

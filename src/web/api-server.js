@@ -9,6 +9,16 @@ const MAX_JSON_BODY_BYTES = 64 * 1024;
 const STATE_TTL_MS = 5 * 60 * 1000;
 const SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
+const THUMBNAIL_PROXY_TIMEOUT_MS = 8000;
+const THUMBNAIL_PROXY_MAX_BYTES = 5 * 1024 * 1024;
+const THUMBNAIL_PROXY_CACHE_TTL_MS = 10 * 60 * 1000;
+const THUMBNAIL_PROXY_CACHE_MAX_ENTRIES = 400;
+const THUMBNAIL_PROXY_ALLOWED_HOST_SUFFIXES = [
+  "ytimg.com",
+  "ggpht.com",
+  "sndcdn.com",
+  "scdn.co",
+];
 
 function parseCookies(cookieHeader) {
   const parsed = {};
@@ -143,16 +153,133 @@ function summarizeGuild(guildPayload) {
   };
 }
 
+function normalizeExternalUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.startsWith("//") ? `https:${raw}` : raw;
+  try {
+    const parsed = new URL(normalized);
+    const protocol = String(parsed.protocol || "").toLowerCase();
+    if (protocol !== "https:" && protocol !== "http:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getYoutubeVideoIdFromValue(value) {
+  if (!value) {
+    return null;
+  }
+  const raw = String(value).trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(raw)) {
+    return raw;
+  }
+  try {
+    const parsed = new URL(raw);
+    const host = String(parsed.hostname || "").toLowerCase();
+    if (host === "youtu.be") {
+      const id = parsed.pathname.split("/").filter(Boolean)[0];
+      return /^[a-zA-Z0-9_-]{11}$/.test(id || "") ? id : null;
+    }
+    if (host.endsWith("youtube.com")) {
+      const queryId = parsed.searchParams.get("v");
+      if (/^[a-zA-Z0-9_-]{11}$/.test(queryId || "")) {
+        return queryId;
+      }
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      if ((pathParts[0] === "shorts" || pathParts[0] === "embed") && /^[a-zA-Z0-9_-]{11}$/.test(pathParts[1] || "")) {
+        return pathParts[1];
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function summarizeTrackArtist(track) {
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  if (track.artist) {
+    return String(track.artist);
+  }
+  if (track.channel) {
+    return String(track.channel);
+  }
+  const spotifyArtists = Array.isArray(track?.spotifyMeta?.artists)
+    ? track.spotifyMeta.artists.filter(Boolean)
+    : [];
+  return spotifyArtists[0] || null;
+}
+
+function summarizeTrackDisplayUrl(track) {
+  const displayUrl = normalizeExternalUrl(track?.displayUrl);
+  if (displayUrl) {
+    return displayUrl;
+  }
+  return normalizeExternalUrl(track?.url);
+}
+
+function summarizeTrackThumbnailUrl(track) {
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  const directCandidates = [
+    track.thumbnailUrl,
+    track.thumbnail,
+    track.thumbnail_url,
+    track.artworkUrl,
+    track.artwork_url,
+    track.artwork,
+    track.imageUrl,
+    track.image_url,
+    track.image,
+    track.coverUrl,
+    track.cover_url,
+    track.cover,
+    track.posterUrl,
+    track.poster_url,
+    track.poster,
+  ];
+  for (const candidate of directCandidates) {
+    const normalized = normalizeExternalUrl(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const source = String(track.source || "").toLowerCase();
+  const youtubeId = getYoutubeVideoIdFromValue(track?.url)
+    || getYoutubeVideoIdFromValue(track?.displayUrl)
+    || getYoutubeVideoIdFromValue(track?.id);
+  if (youtubeId && source.includes("youtube")) {
+    return `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`;
+  }
+  return null;
+}
+
 function summarizeTrack(track) {
   if (!track) {
     return null;
   }
+  const normalizedUrl = normalizeExternalUrl(track.url);
+  const displayUrl = summarizeTrackDisplayUrl(track) || normalizedUrl;
   return {
     id: track.id || null,
     title: track.title || "Unknown",
-    url: track.url || null,
+    url: normalizedUrl || null,
+    displayUrl: displayUrl || null,
     duration: Number.isFinite(track.duration) ? track.duration : null,
     source: track.source || "unknown",
+    artist: summarizeTrackArtist(track),
+    channel: track.channel || null,
+    thumbnailUrl: summarizeTrackThumbnailUrl(track),
     requester: track.requester || null,
     pendingResolve: Boolean(track.pendingResolve),
   };
@@ -264,6 +391,16 @@ function normalizeUserIdList(rawIds) {
     .filter(Boolean);
 }
 
+function isAllowedThumbnailHost(hostname) {
+  const normalizedHostname = String(hostname || "").trim().toLowerCase();
+  if (!normalizedHostname) {
+    return false;
+  }
+  return THUMBNAIL_PROXY_ALLOWED_HOST_SUFFIXES.some((suffix) =>
+    normalizedHostname === suffix || normalizedHostname.endsWith(`.${suffix}`)
+  );
+}
+
 function getQueueVoiceChannelId(queue) {
   return String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim() || null;
 }
@@ -365,6 +502,7 @@ function createApiServer(options) {
   const oauthConfigured = Boolean(oauthClientId && oauthClientSecret);
   const pendingWebStates = new Map();
   const sessions = new Map();
+  const thumbnailCache = new Map();
   const stopQueueAction = typeof stopAndLeaveQueue === "function"
     ? stopAndLeaveQueue
     : (queue, reason) => {
@@ -1113,6 +1251,143 @@ function createApiServer(options) {
     });
   }
 
+  function getCachedThumbnail(sourceUrl) {
+    const cached = thumbnailCache.get(sourceUrl);
+    if (!cached) {
+      return null;
+    }
+    if (!Number.isFinite(cached.expiresAt) || cached.expiresAt <= Date.now()) {
+      thumbnailCache.delete(sourceUrl);
+      return null;
+    }
+    return cached;
+  }
+
+  function setCachedThumbnail(sourceUrl, payload) {
+    if (!sourceUrl || !payload?.body || !payload?.contentType) {
+      return;
+    }
+    if (thumbnailCache.size >= THUMBNAIL_PROXY_CACHE_MAX_ENTRIES) {
+      const oldestKey = thumbnailCache.keys().next().value;
+      if (oldestKey) {
+        thumbnailCache.delete(oldestKey);
+      }
+    }
+    thumbnailCache.set(sourceUrl, {
+      contentType: payload.contentType,
+      body: payload.body,
+      expiresAt: Date.now() + THUMBNAIL_PROXY_CACHE_TTL_MS,
+    });
+  }
+
+  function sendThumbnail(response, contentType, body) {
+    response.statusCode = 200;
+    response.setHeader("Content-Type", contentType || "application/octet-stream");
+    response.setHeader("Content-Length", String(body.length));
+    response.setHeader("Cache-Control", "private, max-age=900");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.end(body);
+  }
+
+  async function handleActivityThumbnail(request, response, requestUrl) {
+    const session = getSessionFromRequest(request);
+    if (!session) {
+      sendJson(response, 401, { error: "Unauthorized" });
+      return;
+    }
+
+    const rawSourceUrl = String(requestUrl.searchParams.get("src") || "").trim();
+    const sourceUrl = normalizeExternalUrl(rawSourceUrl);
+    if (!sourceUrl) {
+      sendJson(response, 400, { error: "Missing or invalid src query parameter" });
+      return;
+    }
+
+    let parsedSourceUrl;
+    try {
+      parsedSourceUrl = new URL(sourceUrl);
+    } catch {
+      sendJson(response, 400, { error: "Invalid thumbnail source URL" });
+      return;
+    }
+
+    if (String(parsedSourceUrl.protocol || "").toLowerCase() !== "https:") {
+      sendJson(response, 400, { error: "Only https thumbnail URLs are supported" });
+      return;
+    }
+    if (!isAllowedThumbnailHost(parsedSourceUrl.hostname)) {
+      sendJson(response, 403, { error: "Thumbnail host is not allowed" });
+      return;
+    }
+
+    const cached = getCachedThumbnail(sourceUrl);
+    if (cached) {
+      sendThumbnail(response, cached.contentType, cached.body);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      controller.abort();
+    }, THUMBNAIL_PROXY_TIMEOUT_MS);
+
+    let upstream;
+    try {
+      upstream = await fetch(sourceUrl, {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "queueDexBot-thumbnail-proxy/1.0",
+        },
+      });
+    } catch (error) {
+      const isTimeout = String(error?.name || "").toLowerCase() === "aborterror";
+      sendJson(response, isTimeout ? 504 : 502, {
+        error: isTimeout ? "Thumbnail request timed out" : "Failed to fetch thumbnail",
+      });
+      return;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+
+    if (!upstream.ok) {
+      sendJson(response, upstream.status === 404 ? 404 : 502, {
+        error: upstream.status === 404 ? "Thumbnail not found" : `Thumbnail fetch failed (${upstream.status})`,
+      });
+      return;
+    }
+
+    const contentType = String(upstream.headers.get("content-type") || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    if (!contentType.startsWith("image/")) {
+      sendJson(response, 415, { error: "Thumbnail response was not an image" });
+      return;
+    }
+
+    let body;
+    try {
+      const buffer = await upstream.arrayBuffer();
+      if (!buffer || buffer.byteLength <= 0) {
+        sendJson(response, 502, { error: "Thumbnail response body was empty" });
+        return;
+      }
+      if (buffer.byteLength > THUMBNAIL_PROXY_MAX_BYTES) {
+        sendJson(response, 413, { error: "Thumbnail response exceeded max size" });
+        return;
+      }
+      body = Buffer.from(buffer);
+    } catch {
+      sendJson(response, 502, { error: "Failed reading thumbnail response" });
+      return;
+    }
+
+    setCachedThumbnail(sourceUrl, { contentType, body });
+    sendThumbnail(response, contentType, body);
+  }
+
   async function handleActivityExchange(request, response) {
     if (!requireJsonRequest(request, response)) {
       return;
@@ -1506,6 +1781,11 @@ function createApiServer(options) {
 
       if (request.method === "GET" && pathname === "/api/activity/queue") {
         await handleActivityQueueList(request, response, requestUrl);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/activity/thumbnail") {
+        await handleActivityThumbnail(request, response, requestUrl);
         return;
       }
 

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { MessageFlags } = require("discord.js");
+const { InviteTargetType, MessageFlags } = require("discord.js");
 
 const { createCommandInteractionHandler } = require("../src/handlers/interaction-commands");
 
@@ -275,9 +275,9 @@ test("launch requires caller in voice channel", async () => {
   });
 });
 
-test("launch reports missing EMBEDDED app flag without attempting launch callback", async () => {
+test("launch reports missing EMBEDDED app flag without creating voice activity invite", async () => {
   let replyPayload = null;
-  let launchCalled = false;
+  let inviteCalled = false;
   const { deps } = createDeps();
   const handler = createCommandInteractionHandler(deps);
   const interaction = {
@@ -286,7 +286,18 @@ test("launch reports missing EMBEDDED app flag without attempting launch callbac
     channelId: "text-1",
     channel: { id: "text-1" },
     user: { id: "user-1", tag: "User#0001" },
-    member: { voice: { channel: { id: "vc-1", name: "General" } } },
+    member: {
+      voice: {
+        channel: {
+          id: "vc-1",
+          name: "General",
+          createInvite: async () => {
+            inviteCalled = true;
+            return { code: "should-not-happen", url: "https://discord.gg/should-not-happen" };
+          },
+        },
+      },
+    },
     commandName: "launch",
     options: {},
     client: {
@@ -295,9 +306,54 @@ test("launch reports missing EMBEDDED app flag without attempting launch callbac
         fetch: async () => ({ flags: { has: () => false } }),
       },
     },
-    launchActivity: async () => {
-      launchCalled = true;
-      return undefined;
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(inviteCalled, false);
+  assert.equal(
+    String(replyPayload?.content || "").includes("missing EMBEDDED flag"),
+    true
+  );
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+});
+
+test("launch creates a voice activity invite in caller voice channel", async () => {
+  let inviteOptions = null;
+  let replyPayload = null;
+  const { deps } = createDeps();
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    applicationId: "app-1",
+    user: { id: "user-1", tag: "User#0001" },
+    member: {
+      voice: {
+        channel: {
+          id: "vc-1",
+          name: "General",
+          createInvite: async (options) => {
+            inviteOptions = options;
+            return {
+              code: "voice-activity",
+              url: "https://discord.gg/voice-activity",
+            };
+          },
+        },
+      },
+    },
+    commandName: "launch",
+    options: {},
+    client: {
+      application: {
+        flags: { has: () => true },
+      },
     },
     reply: async (payload) => {
       replyPayload = payload;
@@ -306,26 +362,54 @@ test("launch reports missing EMBEDDED app flag without attempting launch callbac
 
   await handler(interaction);
 
-  assert.equal(launchCalled, false);
+  assert.equal(inviteOptions?.targetType, InviteTargetType.EmbeddedApplication);
+  assert.equal(inviteOptions?.targetApplication, "app-1");
+  assert.equal(inviteOptions?.unique, false);
+  assert.equal(inviteOptions?.maxAge, 7200);
   assert.equal(
-    String(replyPayload?.content || "").includes("missing EMBEDDED flag"),
+    String(replyPayload?.content || "").includes("Created an Activity invite for **General**."),
     true
   );
-  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("https://discord.gg/voice-activity"),
+    true
+  );
+  assert.deepEqual(replyPayload, {
+    content: "Created an Activity invite for **General**.\nhttps://discord.gg/voice-activity",
+    flags: MessageFlags.Ephemeral,
+  });
 });
 
-test("launch calls launchActivity and posts a success follow-up", async () => {
-  let launchWithResponse = null;
-  let followUpPayload = null;
+test("launch reuses cached voice activity invite while it is still valid", async () => {
+  let createInviteCallCount = 0;
+  const replies = [];
   const { deps } = createDeps();
   const handler = createCommandInteractionHandler(deps);
-  const interaction = {
+
+  const baseInteraction = {
     isCommand: () => true,
     guildId: "guild-1",
     channelId: "text-1",
     channel: { id: "text-1" },
+    applicationId: "app-1",
     user: { id: "user-1", tag: "User#0001" },
-    member: { voice: { channel: { id: "vc-1", name: "General" } } },
+    member: {
+      voice: {
+        channel: {
+          id: "vc-1",
+          name: "General",
+          guild: { id: "guild-1" },
+          createInvite: async () => {
+            createInviteCallCount += 1;
+            return {
+              code: "voice-activity",
+              url: "https://discord.gg/voice-activity",
+              expiresTimestamp: Date.now() + 30 * 60 * 1000,
+            };
+          },
+        },
+      },
+    },
     commandName: "launch",
     options: {},
     client: {
@@ -333,27 +417,18 @@ test("launch calls launchActivity and posts a success follow-up", async () => {
         flags: { has: () => true },
       },
     },
-    launchActivity: async ({ withResponse }) => {
-      launchWithResponse = withResponse;
-      return {
-        interaction: {
-          activityInstanceId: "activity-1",
-        },
-      };
+    reply: async (payload) => {
+      replies.push(payload);
     },
-    followUp: async (payload) => {
-      followUpPayload = payload;
-    },
-    reply: async () => {},
   };
 
-  await handler(interaction);
+  await handler(baseInteraction);
+  await handler(baseInteraction);
 
-  assert.equal(launchWithResponse, true);
-  assert.deepEqual(followUpPayload, {
-    content: "Launched activity in **General**. Instance: `activity-1`.",
-    flags: MessageFlags.Ephemeral,
-  });
+  assert.equal(createInviteCallCount, 1);
+  assert.equal(replies.length, 2);
+  assert.equal(String(replies[0]?.content || "").includes("Created an Activity invite"), true);
+  assert.equal(String(replies[1]?.content || "").includes("Reused an Activity invite"), true);
 });
 
 test("play resolves tracks before joining voice", async () => {

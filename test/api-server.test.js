@@ -61,12 +61,19 @@ function createMockResponse() {
       return headers.get(String(name).toLowerCase());
     },
     end(content = "") {
-      bodyChunks.push(Buffer.from(String(content)));
+      if (Buffer.isBuffer(content)) {
+        bodyChunks.push(content);
+      } else if (content instanceof Uint8Array) {
+        bodyChunks.push(Buffer.from(content));
+      } else {
+        bodyChunks.push(Buffer.from(String(content)));
+      }
       resolveDone();
     },
     async toResult() {
       await done;
-      const rawBody = Buffer.concat(bodyChunks).toString("utf8");
+      const bodyBuffer = Buffer.concat(bodyChunks);
+      const rawBody = bodyBuffer.toString("utf8");
       let json = null;
       if (rawBody) {
         try {
@@ -78,6 +85,7 @@ function createMockResponse() {
       return {
         statusCode,
         headers,
+        bodyBuffer,
         rawBody,
         json,
       };
@@ -424,6 +432,84 @@ test("activity queue endpoint returns paged queue data", async () => {
     assert.equal(response.json?.tracks[0]?.title, "Two");
     assert.equal(response.json?.tracks[1]?.position, 3);
     assert.equal(response.json?.tracks[1]?.title, "Three");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity thumbnail proxy returns image bytes for authenticated session", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const target = String(url || "");
+    if (target === "https://discord.com/api/v10/users/@me") {
+      return jsonResponse({
+        id: "user-1",
+        username: "userone",
+        global_name: "User One",
+      });
+    }
+    if (target === "https://discord.com/api/v10/users/@me/guilds") {
+      return jsonResponse([{ id: "guild-1", name: "Guild One", owner: true, permissions: "0" }]);
+    }
+    if (target === "https://i1.sndcdn.com/artworks-test-large.jpg") {
+      return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), {
+        status: 200,
+        headers: {
+          "Content-Type": "image/jpeg",
+        },
+      });
+    }
+    throw new Error(`Unexpected fetch URL in test: ${target}`);
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: `/api/activity/thumbnail?src=${encodeURIComponent("https://i1.sndcdn.com/artworks-test-large.jpg")}`,
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers.get("content-type"), "image/jpeg");
+    assert.equal(response.bodyBuffer.length > 0, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity thumbnail proxy rejects non-allowlisted hosts", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: `/api/activity/thumbnail?src=${encodeURIComponent("https://example.com/test.jpg")}`,
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json?.error, "Thumbnail host is not allowed");
   } finally {
     global.fetch = originalFetch;
   }

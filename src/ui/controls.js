@@ -3,7 +3,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
 } = require("discord.js");
-const { LOOP_MODES } = require("../queue/loop");
 
 function buildQueuedActionComponents(options = {}) {
   const { includeMoveControls = true } = options;
@@ -39,28 +38,7 @@ function buildQueuedActionComponents(options = {}) {
   return [row];
 }
 
-function normalizeLoopMode(loopMode) {
-  const value = String(loopMode || "").trim().toLowerCase();
-  if (value === LOOP_MODES.SINGLE || value === LOOP_MODES.QUEUE) {
-    return value;
-  }
-  return LOOP_MODES.OFF;
-}
-
-function getLoopButtonConfig(loopMode) {
-  const normalized = normalizeLoopMode(loopMode);
-  if (normalized === LOOP_MODES.SINGLE) {
-    return { label: "Loop", style: ButtonStyle.Primary, emoji: "🔂" };
-  }
-  if (normalized === LOOP_MODES.QUEUE) {
-    return { label: "Loop", style: ButtonStyle.Success, emoji: "🔁" };
-  }
-  return { label: "Loop", style: ButtonStyle.Secondary, emoji: "❌" };
-}
-
-function buildNowPlayingControls(options = {}) {
-  const { loopMode = LOOP_MODES.OFF } = options;
-  const loopButton = getLoopButtonConfig(loopMode);
+function buildNowPlayingControls() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("np_queue")
@@ -68,15 +46,15 @@ function buildNowPlayingControls(options = {}) {
       .setEmoji("📜")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
+      .setCustomId("np_activity")
+      .setLabel("Open Activity")
+      .setEmoji("🎮")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("np_toggle")
       .setLabel("Play/Pause")
       .setEmoji("⏯️")
       .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("np_loop")
-      .setLabel(loopButton.label)
-      .setEmoji(loopButton.emoji)
-      .setStyle(loopButton.style),
     new ButtonBuilder()
       .setCustomId("np_skip")
       .setLabel("Skip")

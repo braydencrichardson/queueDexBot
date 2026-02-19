@@ -306,6 +306,11 @@ function buildQueueViewComponents(queueView, queue) {
       .setEmoji("🎶")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
+      .setCustomId("queue_activity")
+      .setLabel("Open Activity")
+      .setEmoji("🎮")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("queue_close")
       .setLabel("Close")
       .setEmoji("❌")

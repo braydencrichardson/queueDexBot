@@ -40,6 +40,7 @@ const { enqueueTracks, ensureTrackId, getTrackIndexById, getQueuedTrackIndex, fo
 const { createQueuePlayback } = require("./src/queue/playback");
 const { createQueueSession } = require("./src/queue/session");
 const { createQueueService } = require("./src/queue/service");
+const { createActivityInviteService } = require("./src/activity/invite-service");
 const { buildQueueViewComponents, formatQueueViewContent, buildMoveMenu } = require("./src/ui/queueView");
 const { buildQueuedActionComponents, buildNowPlayingControls, buildPlaylistQueuedComponents } = require("./src/ui/controls");
 const { formatMovePrompt } = require("./src/ui/messages");
@@ -114,6 +115,48 @@ function logError(message, data) {
 }
 
 const { sendDevAlert } = logger;
+const activityInviteService = createActivityInviteService();
+
+function getActivityApplicationId() {
+  return String(client.application?.id || env.oauthClientId || "").trim();
+}
+
+async function resolveVoiceChannelById(guildId, channelId) {
+  const normalizedGuildId = String(guildId || "").trim();
+  const normalizedChannelId = String(channelId || "").trim();
+  if (!normalizedGuildId || !normalizedChannelId) {
+    return null;
+  }
+
+  const guild = client.guilds?.cache?.get(normalizedGuildId);
+  if (!guild) {
+    return null;
+  }
+
+  const cached = guild.channels?.cache?.get(normalizedChannelId)
+    || client.channels?.cache?.get(normalizedChannelId);
+  if (cached) {
+    return cached;
+  }
+
+  if (typeof guild.channels?.fetch === "function") {
+    try {
+      return await guild.channels.fetch(normalizedChannelId);
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof client.channels?.fetch === "function") {
+    try {
+      return await client.channels.fetch(normalizedChannelId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
 
 const {
   getSoundcloudClientId,
@@ -488,6 +531,9 @@ registerInteractionHandler(client, {
   hasSpotifyCredentials,
   stopAndLeaveQueue,
   queueService,
+  activityInviteService,
+  getActivityApplicationId,
+  resolveVoiceChannelById,
 });
 
 client.login(env.token).catch((error) => {

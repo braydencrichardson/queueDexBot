@@ -2,6 +2,7 @@ const { ApplicationFlagsBitField, MessageFlags } = require("discord.js");
 const { QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
 const { getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
+const { createActivityInviteService } = require("../activity/invite-service");
 const {
   formatQueueClearedNotice,
   formatQueueRemovedNotice,
@@ -49,7 +50,11 @@ function createCommandInteractionHandler(deps) {
     hasSpotifyCredentials,
     stopAndLeaveQueue,
     queueService = null,
+    activityInviteService = null,
+    getActivityApplicationId = () => "",
   } = deps;
+  const inviteService = activityInviteService || createActivityInviteService();
+
   const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : CONFIG_QUEUE_VIEW_PAGE_SIZE;
   const queueViewService = createQueueViewService({
     queueViews,
@@ -179,6 +184,19 @@ function createCommandInteractionHandler(deps) {
       logError("Failed to fetch application flags while checking activity support", error);
       return false;
     }
+  }
+
+  function resolveActivityApplicationId(interaction) {
+    const fromInteraction = String(
+      interaction?.applicationId
+      || interaction?.client?.application?.id
+      || ""
+    ).trim();
+    if (fromInteraction) {
+      return fromInteraction;
+    }
+    const fromDeps = String(getActivityApplicationId?.() || "").trim();
+    return fromDeps || "";
   }
 
   return async function handleCommandInteraction(interaction) {
@@ -452,10 +470,10 @@ function createCommandInteractionHandler(deps) {
         await safeReplyOrFollowUp(interaction, buildEphemeralPayload("Join a voice channel first."), "launch validation");
         return;
       }
-      if (typeof interaction.launchActivity !== "function") {
+      if (typeof voiceChannel.createInvite !== "function") {
         await safeReplyOrFollowUp(
           interaction,
-          buildEphemeralPayload("Activity launch is not available in this runtime. Upgrade discord.js and redeploy commands."),
+          buildEphemeralPayload("I couldn't create an Activity invite for your voice channel in this runtime."),
           "launch runtime validation"
         );
         return;
@@ -471,19 +489,30 @@ function createCommandInteractionHandler(deps) {
         );
         return;
       }
+      const applicationId = resolveActivityApplicationId(interaction);
+      if (!applicationId) {
+        await safeReplyOrFollowUp(
+          interaction,
+          buildEphemeralPayload("Couldn't determine this app's ID to create an Activity invite."),
+          "launch app id validation"
+        );
+        return;
+      }
 
       try {
-        const response = await interaction.launchActivity({ withResponse: true });
-        const activityInstanceId = response?.interaction?.activityInstanceId
-          || response?.resource?.activityInstance?.id
-          || null;
-        const launchNotice = activityInstanceId
-          ? `Launched activity in **${voiceChannel.name}**. Instance: \`${activityInstanceId}\`.`
-          : `Launched activity in **${voiceChannel.name}**.`;
-        await interaction.followUp({
-          content: launchNotice,
-          flags: MessageFlags.Ephemeral,
+        const inviteResult = await inviteService.getOrCreateInvite({
+          voiceChannel,
+          applicationId,
+          reason: `Activity launch requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
         });
+        const launchVerb = inviteResult.reused ? "Reused" : "Created";
+        await safeReplyOrFollowUp(
+          interaction,
+          buildEphemeralPayload(
+            `${launchVerb} an Activity invite for **${voiceChannel.name}**.\n${inviteResult.url}`
+          ),
+          "launch success response"
+        );
       } catch (error) {
         logError("Failed to launch activity", {
           guild: interaction.guildId,
@@ -493,6 +522,8 @@ function createCommandInteractionHandler(deps) {
         });
         const message = error?.code === 50234
           ? "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again."
+          : (error?.code === 50013 || error?.code === 50001)
+            ? "I couldn't create an Activity invite in your voice channel. Check that I can create invites there."
           : "Couldn't launch this activity. Ensure Activities is enabled for this app and try again.";
         try {
           await safeReplyOrFollowUp(interaction, buildEphemeralPayload(message), "launch error response");
