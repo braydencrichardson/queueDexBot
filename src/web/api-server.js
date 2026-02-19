@@ -289,7 +289,12 @@ function createApiServer(options) {
     logInfo = () => {},
     logError = () => {},
     isBotInGuild = () => true,
+    getBotGuilds = () => [],
     getUserVoiceChannelId = async () => null,
+    getAdminEvents = () => [],
+    getProviderStatus = () => null,
+    verifyProviderAuthStatus = async () => null,
+    reinitializeProviders = async () => null,
     queueService = null,
     stopAndLeaveQueue = null,
     maybeRefreshNowPlayingUpNext = async () => {},
@@ -344,6 +349,7 @@ function createApiServer(options) {
       accessToken: payload.accessToken || null,
       tokenType: payload.tokenType || "Bearer",
       adminBypassVoiceChannelCheck: false,
+      adminBypassGuildAccess: false,
     });
     return sessions.get(sessionId);
   }
@@ -361,6 +367,7 @@ function createApiServer(options) {
     return {
       isAdmin,
       bypassVoiceChannelCheck: isAdmin && Boolean(session?.adminBypassVoiceChannelCheck),
+      bypassGuildAccess: isAdmin && Boolean(session?.adminBypassGuildAccess),
     };
   }
 
@@ -406,6 +413,12 @@ function createApiServer(options) {
     if (!botInGuild) {
       return false;
     }
+
+    const adminSettings = getSessionAdminSettings(session);
+    if (adminSettings.isAdmin && adminSettings.bypassGuildAccess) {
+      return true;
+    }
+
     if (!Array.isArray(session.guilds) || !session.guilds.length) {
       // If guilds scope wasn't granted, we can't verify membership server-side.
       return true;
@@ -441,6 +454,7 @@ function createApiServer(options) {
     guildId,
     requireQueue = true,
     requireVoiceChannelMatch = false,
+    requireAdmin = false,
   }) {
     const session = getSessionFromRequest(request);
     if (!session) {
@@ -466,6 +480,10 @@ function createApiServer(options) {
     }
 
     const adminSettings = getSessionAdminSettings(session);
+    if (requireAdmin && !adminSettings.isAdmin) {
+      sendJson(response, 403, { error: "Forbidden" });
+      return null;
+    }
 
     if (requireVoiceChannelMatch && queue && !adminSettings.bypassVoiceChannelCheck) {
       const queueVoiceChannelId = getQueueVoiceChannelId(queue);
@@ -506,6 +524,23 @@ function createApiServer(options) {
       admin: adminSettings,
       guildId: normalizedGuildId,
       queue,
+    };
+  }
+
+  function resolveAdminSessionContext(request, response) {
+    const session = getSessionFromRequest(request);
+    if (!session) {
+      sendJson(response, 401, { error: "Unauthorized" });
+      return null;
+    }
+    const adminSettings = getSessionAdminSettings(session);
+    if (!adminSettings.isAdmin) {
+      sendJson(response, 403, { error: "Forbidden" });
+      return null;
+    }
+    return {
+      session,
+      admin: adminSettings,
     };
   }
 
@@ -726,32 +761,247 @@ function createApiServer(options) {
       return;
     }
 
-    const hasBypassField = Object.hasOwn(body, "bypass_voice_check")
+    const hasVoiceBypassField = Object.hasOwn(body, "bypass_voice_check")
       || Object.hasOwn(body, "bypassVoiceCheck")
       || Object.hasOwn(body, "bypassVoiceChannelCheck");
-    if (!hasBypassField) {
-      sendJson(response, 400, { error: "Missing bypass_voice_check" });
+    const hasGuildBypassField = Object.hasOwn(body, "bypass_guild_access")
+      || Object.hasOwn(body, "bypassGuildAccess")
+      || Object.hasOwn(body, "controlAllGuilds");
+    if (!hasVoiceBypassField && !hasGuildBypassField) {
+      sendJson(response, 400, { error: "Missing admin setting field" });
       return;
     }
 
-    const bypassVoiceChannelCheck = toBoolean(
-      body.bypass_voice_check ?? body.bypassVoiceCheck ?? body.bypassVoiceChannelCheck,
-      false
-    );
-    session.adminBypassVoiceChannelCheck = bypassVoiceChannelCheck;
+    if (hasVoiceBypassField) {
+      const bypassVoiceChannelCheck = toBoolean(
+        body.bypass_voice_check ?? body.bypassVoiceCheck ?? body.bypassVoiceChannelCheck,
+        false
+      );
+      session.adminBypassVoiceChannelCheck = bypassVoiceChannelCheck;
+    }
+    if (hasGuildBypassField) {
+      const bypassGuildAccess = toBoolean(
+        body.bypass_guild_access ?? body.bypassGuildAccess ?? body.controlAllGuilds,
+        false
+      );
+      session.adminBypassGuildAccess = bypassGuildAccess;
+    }
+
+    const settings = getSessionAdminSettings(session);
 
     logInfo("Updated activity admin settings", {
       userId: session?.user?.id || null,
-      bypassVoiceChannelCheck,
+      bypassVoiceChannelCheck: settings.bypassVoiceChannelCheck,
+      bypassGuildAccess: settings.bypassGuildAccess,
     });
 
     sendJson(response, 200, {
       ok: true,
-      admin: {
-        isAdmin: true,
-        bypassVoiceChannelCheck,
-      },
+      admin: settings,
     });
+  }
+
+  async function handleAdminGuildList(request, response) {
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    let guilds;
+    try {
+      guilds = await getBotGuilds();
+    } catch (error) {
+      logError("Failed to load bot guild list for admin endpoint", error);
+      sendJson(response, 500, { error: "Failed to load guild list" });
+      return;
+    }
+
+    const normalizedGuilds = Array.isArray(guilds)
+      ? guilds
+        .map((guild) => ({
+          id: String(guild?.id || "").trim(),
+          name: String(guild?.name || "").trim() || null,
+        }))
+        .filter((guild) => guild.id)
+      : [];
+
+    sendJson(response, 200, {
+      guilds: normalizedGuilds,
+      total: normalizedGuilds.length,
+      fetchedAt: Date.now(),
+    });
+  }
+
+  async function handleAdminEvents(request, response, requestUrl) {
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    const level = String(requestUrl.searchParams.get("level") || "info").trim().toLowerCase();
+    const limitParam = toFiniteInteger(requestUrl.searchParams.get("limit"));
+    const limit = limitParam === null ? 100 : Math.min(500, Math.max(1, limitParam));
+
+    let events = [];
+    try {
+      events = await getAdminEvents({
+        minLevel: level,
+        limit,
+      });
+    } catch (error) {
+      logError("Failed to load admin events", error);
+      sendJson(response, 500, { error: "Failed to load admin events" });
+      return;
+    }
+
+    sendJson(response, 200, {
+      level,
+      limit,
+      events: Array.isArray(events) ? events : [],
+      fetchedAt: Date.now(),
+    });
+  }
+
+  async function handleAdminProviderStatus(request, response) {
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    let status = null;
+    try {
+      status = await getProviderStatus();
+    } catch (error) {
+      logError("Failed to load provider status", error);
+      sendJson(response, 500, { error: "Failed to load provider status" });
+      return;
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      providers: status,
+      fetchedAt: Date.now(),
+    });
+  }
+
+  async function handleAdminProviderVerify(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    try {
+      const verification = await verifyProviderAuthStatus();
+      sendJson(response, 200, {
+        ok: true,
+        verification,
+      });
+    } catch (error) {
+      logError("Failed to verify provider auth status", error);
+      sendJson(response, 500, { error: "Failed to verify provider auth status" });
+    }
+  }
+
+  async function handleAdminProviderReinitialize(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    try {
+      const result = await reinitializeProviders();
+      sendJson(response, 200, {
+        ok: true,
+        result: result && typeof result === "object" ? result : null,
+      });
+    } catch (error) {
+      logError("Failed to reinitialize providers from admin endpoint", error);
+      sendJson(response, 500, { error: "Failed to reinitialize providers" });
+    }
+  }
+
+  async function handleAdminQueueForceCleanup(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const guildId = String(body.guild_id || body.guildId || "").trim();
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: true,
+      requireVoiceChannelMatch: false,
+      requireAdmin: true,
+    });
+    if (!context) {
+      return;
+    }
+
+    stopQueueAction(context.queue, "Admin force cleanup from activity/web");
+    sendJson(response, 200, {
+      ok: true,
+      guildId: context.guildId,
+      data: summarizeQueue(context.queue),
+    });
+  }
+
+  async function handleAdminQueueRefreshNowPlaying(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const guildId = String(body.guild_id || body.guildId || "").trim();
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: true,
+      requireVoiceChannelMatch: false,
+      requireAdmin: true,
+    });
+    if (!context) {
+      return;
+    }
+
+    try {
+      await maybeRefreshNowPlayingUpNext(context.queue);
+      await sendNowPlaying(context.queue, false);
+      sendJson(response, 200, {
+        ok: true,
+        guildId: context.guildId,
+      });
+    } catch (error) {
+      logError("Failed to refresh now playing from admin endpoint", {
+        guildId: context.guildId,
+        error,
+      });
+      sendJson(response, 500, { error: "Failed to refresh now playing" });
+    }
   }
 
   async function handleActivityQueueList(request, response, requestUrl) {
@@ -1164,6 +1414,41 @@ function createApiServer(options) {
 
       if (request.method === "POST" && pathname === "/api/activity/admin/settings") {
         await handleAdminSettings(request, response);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/activity/admin/events") {
+        await handleAdminEvents(request, response, requestUrl);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/activity/admin/guilds") {
+        await handleAdminGuildList(request, response);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/activity/admin/providers/status") {
+        await handleAdminProviderStatus(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/admin/providers/verify") {
+        await handleAdminProviderVerify(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/admin/providers/reinitialize") {
+        await handleAdminProviderReinitialize(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/admin/queue/force-cleanup") {
+        await handleAdminQueueForceCleanup(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/admin/queue/refresh-now-playing") {
+        await handleAdminQueueRefreshNowPlaying(request, response);
         return;
       }
 

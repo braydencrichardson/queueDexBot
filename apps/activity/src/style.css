@@ -262,6 +262,15 @@ dd {
   background: rgba(255, 255, 255, 0.9);
 }
 
+#admin-events-level {
+  border: 1px solid rgba(32, 52, 83, 0.2);
+  border-radius: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  color: #1f2e4b;
+  background: rgba(255, 255, 255, 0.9);
+}
+
 .queue-track-list {
   margin: 0.8rem 0 0;
   padding: 0;
@@ -327,6 +336,36 @@ dd {
   width: 1rem;
   height: 1rem;
   accent-color: #1a8a76;
+}
+
+.toggle-row-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #223356;
+  font-size: 0.83rem;
+  font-weight: 600;
+}
+
+.toggle-row-inline input {
+  width: 0.95rem;
+  height: 0.95rem;
+  accent-color: #1a8a76;
+}
+
+.admin-log-view {
+  margin: 0.75rem 0 0;
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(32, 52, 83, 0.14);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0.65rem;
+  font-size: 0.74rem;
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  color: #1f2e4b;
 }
 
 .panel-card-wide {
@@ -399,6 +438,10 @@ dd {
   }
 
   #queue-loop-mode {
+    width: 100%;
+  }
+
+  #admin-events-level {
     width: 100%;
   }
 

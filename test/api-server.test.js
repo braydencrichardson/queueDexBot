@@ -504,6 +504,7 @@ test("auth me includes admin flags when session user is configured as admin", as
     assert.equal(response.json?.authenticated, true);
     assert.equal(response.json?.admin?.isAdmin, true);
     assert.equal(response.json?.admin?.bypassVoiceChannelCheck, false);
+    assert.equal(response.json?.admin?.bypassGuildAccess, false);
   } finally {
     global.fetch = originalFetch;
   }
@@ -592,6 +593,7 @@ test("activity admin can enable voice-check bypass for current session", async (
     assert.equal(adminUpdateResponse.json?.ok, true);
     assert.equal(adminUpdateResponse.json?.admin?.isAdmin, true);
     assert.equal(adminUpdateResponse.json?.admin?.bypassVoiceChannelCheck, true);
+    assert.equal(adminUpdateResponse.json?.admin?.bypassGuildAccess, false);
 
     const authMeResponse = await dispatch(serverApi, {
       method: "GET",
@@ -604,6 +606,7 @@ test("activity admin can enable voice-check bypass for current session", async (
     assert.equal(authMeResponse.statusCode, 200);
     assert.equal(authMeResponse.json?.admin?.isAdmin, true);
     assert.equal(authMeResponse.json?.admin?.bypassVoiceChannelCheck, true);
+    assert.equal(authMeResponse.json?.admin?.bypassGuildAccess, false);
 
     const controlResponse = await dispatch(serverApi, {
       method: "POST",
@@ -621,6 +624,280 @@ test("activity admin can enable voice-check bypass for current session", async (
     assert.equal(controlResponse.statusCode, 200);
     assert.equal(controlResponse.json?.ok, true);
     assert.equal(pauseCalled, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity admin can enable guild-access bypass and control guild outside session guild list", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-2", queue]]),
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const deniedBeforeToggle = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/state?guild_id=guild-2",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(deniedBeforeToggle.statusCode, 403);
+
+    const adminUpdateResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/settings",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        bypass_guild_access: true,
+      }),
+    });
+
+    assert.equal(adminUpdateResponse.statusCode, 200);
+    assert.equal(adminUpdateResponse.json?.ok, true);
+    assert.equal(adminUpdateResponse.json?.admin?.isAdmin, true);
+    assert.equal(adminUpdateResponse.json?.admin?.bypassGuildAccess, true);
+    assert.equal(adminUpdateResponse.json?.admin?.bypassVoiceChannelCheck, false);
+
+    const allowedAfterToggle = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/state?guild_id=guild-2",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(allowedAfterToggle.statusCode, 200);
+    assert.equal(allowedAfterToggle.json?.guildId, "guild-2");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("admin events endpoint returns filtered entries for admin users", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    getAdminEvents: ({ minLevel, limit }) => ([
+      { id: 1, time: "2026-01-01T00:00:00.000Z", level: minLevel, message: "event-1" },
+    ].slice(0, limit)),
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/admin/events?level=warn&limit=5",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.level, "warn");
+    assert.equal(response.json?.limit, 5);
+    assert.equal(Array.isArray(response.json?.events), true);
+    assert.equal(response.json?.events.length, 1);
+    assert.equal(response.json?.events[0]?.level, "warn");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("admin guild list endpoint returns bot guild list for admin users", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    getBotGuilds: () => ([
+      { id: "guild-1", name: "Guild One" },
+      { id: "guild-2", name: "Guild Two" },
+    ]),
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/admin/guilds",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(Array.isArray(response.json?.guilds), true);
+    assert.equal(response.json?.guilds.length, 2);
+    assert.equal(response.json?.guilds[0]?.id, "guild-1");
+    assert.equal(response.json?.guilds[1]?.id, "guild-2");
+    assert.equal(response.json?.total, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("admin provider endpoints return status and verification payloads", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let reinitializeCalled = false;
+  const serverApi = createApiServer({
+    queues: new Map(),
+    getProviderStatus: () => ({
+      soundcloud: { ready: true },
+      youtube: { ready: false },
+      spotify: { ready: true },
+    }),
+    verifyProviderAuthStatus: async () => ({
+      overallOk: false,
+      youtube: { ok: false, cookieCheck: { ok: false, reason: "expired" } },
+    }),
+    reinitializeProviders: async () => {
+      reinitializeCalled = true;
+      return { soundcloudReady: true, youtubeReady: true, spotifyReady: true };
+    },
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const statusResponse = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/admin/providers/status",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(statusResponse.statusCode, 200);
+    assert.equal(statusResponse.json?.ok, true);
+    assert.equal(statusResponse.json?.providers?.soundcloud?.ready, true);
+    assert.equal(statusResponse.json?.providers?.youtube?.ready, false);
+
+    const verifyResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/providers/verify",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({}),
+    });
+
+    assert.equal(verifyResponse.statusCode, 200);
+    assert.equal(verifyResponse.json?.ok, true);
+    assert.equal(verifyResponse.json?.verification?.overallOk, false);
+    assert.equal(verifyResponse.json?.verification?.youtube?.ok, false);
+
+    const reinitializeResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/providers/reinitialize",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({}),
+    });
+
+    assert.equal(reinitializeResponse.statusCode, 200);
+    assert.equal(reinitializeResponse.json?.ok, true);
+    assert.equal(reinitializeCalled, true);
+    assert.equal(reinitializeResponse.json?.result?.youtubeReady, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("admin queue force cleanup stops and clears selected guild queue", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let stopCalled = false;
+  const queue = {
+    current: { id: "track-1", title: "Song" },
+    tracks: [{ id: "t-1", title: "One" }],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "playing" },
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    stopAndLeaveQueue: (targetQueue) => {
+      stopCalled = true;
+      targetQueue.current = null;
+      targetQueue.tracks = [];
+      targetQueue.connection = null;
+      targetQueue.voiceChannel = null;
+    },
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/queue/force-cleanup",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.ok, true);
+    assert.equal(stopCalled, true);
+    assert.equal(response.json?.data?.connected, false);
+    assert.equal(response.json?.data?.queueLength, 0);
+    assert.equal(response.json?.data?.nowPlaying, null);
   } finally {
     global.fetch = originalFetch;
   }

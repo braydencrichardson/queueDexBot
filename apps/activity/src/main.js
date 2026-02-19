@@ -6,6 +6,9 @@ const SDK_READY_TIMEOUT_MS = 10000;
 const UPTIME_INTERVAL_MS = 1000;
 const API_POLL_INTERVAL_MS = 5000;
 const QUEUE_LIST_LIMIT = 200;
+const ADMIN_EVENTS_LIMIT = 120;
+const PREF_SHOW_GUILD_IDS = "qdex_show_guild_ids";
+const PREF_ADMIN_EVENTS_STICK_BOTTOM = "qdex_admin_events_stick_bottom";
 const DEFAULT_EMBEDDED_OAUTH_SCOPES = "identify";
 const DEFAULT_WEB_OAUTH_SCOPES = "identify guilds";
 const BUILD_ID = typeof __QDEX_ACTIVITY_BUILD__ !== "undefined" ? __QDEX_ACTIVITY_BUILD__ : "dev-unknown";
@@ -14,6 +17,34 @@ const TAB_PLAYER = "player";
 const TAB_QUEUE = "queue";
 const TAB_DEBUG = "debug";
 const TAB_ADMIN = "admin";
+
+function loadBooleanPreference(key, fallback) {
+  try {
+    const storage = globalThis?.localStorage;
+    if (!storage) {
+      return fallback;
+    }
+    const raw = storage.getItem(key);
+    if (raw === null) {
+      return fallback;
+    }
+    return raw === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function saveBooleanPreference(key, value) {
+  try {
+    const storage = globalThis?.localStorage;
+    if (!storage) {
+      return;
+    }
+    storage.setItem(key, value ? "1" : "0");
+  } catch {
+    // ignore local preference persistence failures
+  }
+}
 
 const state = {
   mode: "unknown",
@@ -28,6 +59,14 @@ const state = {
   authSummary: null,
   queueSummary: null,
   queueList: null,
+  adminProviders: null,
+  adminEvents: [],
+  adminEventsLevel: "info",
+  adminBotGuilds: [],
+  adminVerification: null,
+  adminEventsStickToBottom: loadBooleanPreference(PREF_ADMIN_EVENTS_STICK_BOTTOM, true),
+  adminEventsOffsetFromBottom: null,
+  showGuildIdsInSelector: loadBooleanPreference(PREF_SHOW_GUILD_IDS, false),
   notice: "",
   noticeError: false,
   hasMountedDashboard: false,
@@ -144,6 +183,14 @@ function formatTrackDuration(seconds) {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+function toPrettyJson(value) {
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return String(value ?? "");
+  }
+}
+
 function stopLiveTicker() {
   if (liveTicker) {
     clearInterval(liveTicker);
@@ -223,8 +270,17 @@ function getUserLabel() {
 }
 
 function getGuildOptionList() {
-  const guilds = Array.isArray(state.authSummary?.guilds) ? state.authSummary.guilds : [];
-  return guilds.filter((entry) => entry?.id && entry?.name);
+  const adminState = getAdminState();
+  if (adminState.isAdmin && adminState.bypassGuildAccess) {
+    const adminGuilds = Array.isArray(state.adminBotGuilds) ? state.adminBotGuilds : [];
+    const normalizedAdminGuilds = adminGuilds.filter((entry) => entry?.id && entry?.name);
+    if (normalizedAdminGuilds.length) {
+      return normalizedAdminGuilds;
+    }
+  }
+
+  const userGuilds = Array.isArray(state.authSummary?.guilds) ? state.authSummary.guilds : [];
+  return userGuilds.filter((entry) => entry?.id && entry?.name);
 }
 
 function getAdminState() {
@@ -232,13 +288,41 @@ function getAdminState() {
   return {
     isAdmin: Boolean(admin?.isAdmin),
     bypassVoiceChannelCheck: Boolean(admin?.bypassVoiceChannelCheck),
+    bypassGuildAccess: Boolean(admin?.bypassGuildAccess),
   };
+}
+
+function getGuildLabel(guild, { includeId = false } = {}) {
+  const id = String(guild?.id || "").trim();
+  const name = String(guild?.name || "").trim();
+  if (!id && !name) {
+    return "unknown";
+  }
+  if (!includeId || !id) {
+    return name || id;
+  }
+  if (!name) {
+    return id;
+  }
+  return `${name} (${id})`;
 }
 
 function getGuildSelectionMarkup() {
   const guildOptions = getGuildOptionList();
+  const selectedGuildId = state.selectedGuildId || guildOptions[0]?.id || state.sdkContext.guildId || "unknown";
+
+  if (state.mode === "embedded") {
+    const matched = guildOptions.find((guild) => guild.id === selectedGuildId) || { id: selectedGuildId, name: selectedGuildId };
+    return `
+      <div class="guild-picker">
+        <label>Guild</label>
+        <span class="guild-readonly">${escapeHtml(getGuildLabel(matched, { includeId: state.showGuildIdsInSelector }))}</span>
+      </div>
+    `;
+  }
+
   if (!guildOptions.length) {
-    const fallbackGuildId = state.selectedGuildId || state.sdkContext.guildId || "unknown";
+    const fallbackGuildId = selectedGuildId;
     return `
       <div class="guild-picker">
         <label>Guild</label>
@@ -247,9 +331,8 @@ function getGuildSelectionMarkup() {
     `;
   }
 
-  const selectedGuildId = state.selectedGuildId || guildOptions[0].id;
   const optionMarkup = guildOptions
-    .map((guild) => `<option value="${escapeHtml(guild.id)}"${guild.id === selectedGuildId ? " selected" : ""}>${escapeHtml(guild.name)} (${escapeHtml(guild.id)})</option>`)
+    .map((guild) => `<option value="${escapeHtml(guild.id)}"${guild.id === selectedGuildId ? " selected" : ""}>${escapeHtml(getGuildLabel(guild, { includeId: state.showGuildIdsInSelector }))}</option>`)
     .join("");
   return `
     <div class="guild-picker">
@@ -308,7 +391,97 @@ function getQueueTrackListMarkup() {
   `;
 }
 
+function getAdminPanelMarkup(adminState) {
+  if (!adminState.isAdmin) {
+    return "";
+  }
+
+  const providerStatus = state.adminProviders;
+  const verification = state.adminVerification;
+  const events = Array.isArray(state.adminEvents) ? state.adminEvents : [];
+
+  const providerSummary = providerStatus
+    ? `SC:${providerStatus?.soundcloud?.ready ? "ready" : "not-ready"} | YT:${providerStatus?.youtube?.ready ? "ready" : "not-ready"} | SP:${providerStatus?.spotify?.ready ? "ready" : "not-ready"}`
+    : "not loaded";
+
+  const verificationSummary = verification
+    ? `${verification.overallOk ? "ok" : "issues"} (${Number.isFinite(verification.durationMs) ? `${verification.durationMs}ms` : "n/a"})`
+    : "not run";
+
+  const eventLines = events.length
+    ? events.map((entry) => {
+      const head = `[${entry?.time || "unknown"}] [${entry?.level || "info"}] ${entry?.message || ""}`;
+      const dataText = entry?.data === undefined ? "" : ` ${toPrettyJson(entry.data)}`;
+      return `${head}${dataText}`;
+    }).join("\n")
+    : "No admin events yet.";
+
+  return `
+      <section class="menu-panel${state.activeTab === TAB_ADMIN ? " active" : ""}" data-panel="${TAB_ADMIN}">
+        <article class="panel-card">
+          <h2>Admin Overrides</h2>
+          <p class="muted">These controls apply only to your current web/activity session.</p>
+          <label class="toggle-row">
+            <input type="checkbox" id="admin-bypass-voice-check"${adminState.bypassVoiceChannelCheck ? " checked" : ""}>
+            <span>Bypass voice channel presence check for API controls</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="admin-bypass-guild-access"${adminState.bypassGuildAccess ? " checked" : ""}>
+            <span>Allow selecting any guild the bot is in</span>
+          </label>
+        </article>
+        <article class="panel-card">
+          <h2>Provider Health</h2>
+          <dl>
+            <dt>Status</dt><dd>${escapeHtml(providerSummary)}</dd>
+            <dt>Verify</dt><dd>${escapeHtml(verificationSummary)}</dd>
+          </dl>
+          <div class="action-row">
+            <button type="button" class="btn" data-admin-action="providers-refresh">Refresh Status</button>
+            <button type="button" class="btn" data-admin-action="providers-verify">Verify Cookie/Auth</button>
+            <button type="button" class="btn btn-danger" data-admin-action="providers-reinitialize">Reinitialize Providers</button>
+          </div>
+          <pre class="admin-log-view">${escapeHtml(toPrettyJson(providerStatus || {}))}</pre>
+          <pre class="admin-log-view">${escapeHtml(toPrettyJson(verification || {}))}</pre>
+        </article>
+        <article class="panel-card">
+          <h2>Queue Repair</h2>
+          <p class="muted">Applies to selected guild: <strong>${escapeHtml(state.selectedGuildId || "none")}</strong></p>
+          <div class="action-row">
+            <button type="button" class="btn btn-danger" data-admin-action="queue-force-cleanup">Force Cleanup</button>
+            <button type="button" class="btn" data-admin-action="queue-refresh-now-playing">Refresh Now Playing Message</button>
+          </div>
+        </article>
+        <article class="panel-card">
+          <h2>Admin Event Feed</h2>
+          <div class="queue-toolbar">
+            <label for="admin-events-level">Level</label>
+            <select id="admin-events-level">
+              <option value="debug"${state.adminEventsLevel === "debug" ? " selected" : ""}>debug+</option>
+              <option value="info"${state.adminEventsLevel === "info" ? " selected" : ""}>info+</option>
+              <option value="warn"${state.adminEventsLevel === "warn" ? " selected" : ""}>warn+</option>
+              <option value="error"${state.adminEventsLevel === "error" ? " selected" : ""}>error+</option>
+            </select>
+            <label class="toggle-row-inline">
+              <input type="checkbox" id="admin-events-stick-bottom"${state.adminEventsStickToBottom ? " checked" : ""}>
+              <span>Stick to bottom</span>
+            </label>
+            <button type="button" class="btn" data-admin-action="events-refresh">Refresh Events</button>
+          </div>
+          <pre id="admin-events-view" class="admin-log-view">${escapeHtml(eventLines)}</pre>
+        </article>
+      </section>
+  `;
+}
+
 function renderDashboard() {
+  const existingAdminEventsView = root.querySelector("#admin-events-view");
+  if (existingAdminEventsView) {
+    state.adminEventsOffsetFromBottom = existingAdminEventsView.scrollHeight
+      - existingAdminEventsView.scrollTop
+      - existingAdminEventsView.clientHeight;
+  }
+
   const queue = getCurrentQueueData();
   const queueList = getQueueListData();
   const mode = state.mode || "unknown";
@@ -399,20 +572,7 @@ function renderDashboard() {
           ${getQueueTrackListMarkup()}
         </article>
       </section>
-      ${adminState.isAdmin
-        ? `
-      <section class="menu-panel${state.activeTab === TAB_ADMIN ? " active" : ""}" data-panel="${TAB_ADMIN}">
-        <article class="panel-card">
-          <h2>Admin Overrides</h2>
-          <p class="muted">Use with care. These controls apply only to your current web/activity session.</p>
-          <label class="toggle-row">
-            <input type="checkbox" id="admin-bypass-voice-check"${adminState.bypassVoiceChannelCheck ? " checked" : ""}>
-            <span>Bypass voice channel presence check for API controls</span>
-          </label>
-        </article>
-      </section>
-        `
-        : ""}
+      ${getAdminPanelMarkup(adminState)}
       <section class="menu-panel${state.activeTab === TAB_DEBUG ? " active" : ""}" data-panel="${TAB_DEBUG}">
         <article class="panel-card">
           <h2>Session / Debug</h2>
@@ -428,6 +588,10 @@ function renderDashboard() {
             <dt>Instance</dt><dd>${escapeHtml(state.sdkContext.instanceId || "n/a")}</dd>
             <dt>Trace</dt><dd>${escapeHtml(formatDebugEvents() || "none")}</dd>
           </dl>
+          <label class="toggle-row">
+            <input type="checkbox" id="debug-show-guild-ids"${state.showGuildIdsInSelector ? " checked" : ""}>
+            <span>Show guild IDs in selector labels</span>
+          </label>
         </article>
       </section>
       <p class="footer-note">Local clock: <span id="clock">${escapeHtml(formatTime(new Date()))}</span></p>
@@ -435,6 +599,19 @@ function renderDashboard() {
   `;
 
   wireDashboardEvents();
+
+  const adminEventsView = root.querySelector("#admin-events-view");
+  if (adminEventsView) {
+    if (state.adminEventsStickToBottom) {
+      adminEventsView.scrollTop = adminEventsView.scrollHeight;
+    } else if (Number.isFinite(state.adminEventsOffsetFromBottom)) {
+      const nextScrollTop = adminEventsView.scrollHeight
+        - adminEventsView.clientHeight
+        - state.adminEventsOffsetFromBottom;
+      adminEventsView.scrollTop = Math.max(0, nextScrollTop);
+    }
+  }
+
   state.hasMountedDashboard = true;
 }
 
@@ -551,6 +728,77 @@ function wireDashboardEvents() {
       void sendAdminSettings({
         bypass_voice_check: Boolean(bypassVoiceCheckToggle.checked),
       });
+    });
+  }
+
+  const bypassGuildAccessToggle = root.querySelector("#admin-bypass-guild-access");
+  if (bypassGuildAccessToggle) {
+    bypassGuildAccessToggle.addEventListener("change", () => {
+      void sendAdminSettings({
+        bypass_guild_access: Boolean(bypassGuildAccessToggle.checked),
+      });
+    });
+  }
+
+  root.querySelectorAll("[data-admin-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.getAttribute("data-admin-action");
+      if (!action) {
+        return;
+      }
+      if (action === "providers-refresh") {
+        void refreshAdminPanelDataAndRender("Admin status refreshed.");
+        return;
+      }
+      if (action === "providers-verify") {
+        void sendAdminCommand("/api/activity/admin/providers/verify");
+        return;
+      }
+      if (action === "providers-reinitialize") {
+        void sendAdminCommand("/api/activity/admin/providers/reinitialize");
+        return;
+      }
+      if (action === "queue-force-cleanup") {
+        void sendAdminGuildCommand("/api/activity/admin/queue/force-cleanup");
+        return;
+      }
+      if (action === "queue-refresh-now-playing") {
+        void sendAdminGuildCommand("/api/activity/admin/queue/refresh-now-playing");
+        return;
+      }
+      if (action === "events-refresh") {
+        void refreshAdminPanelDataAndRender("Admin events refreshed.");
+      }
+    });
+  });
+
+  const adminEventsLevelSelect = root.querySelector("#admin-events-level");
+  if (adminEventsLevelSelect) {
+    adminEventsLevelSelect.addEventListener("change", () => {
+      const nextLevel = String(adminEventsLevelSelect.value || "").trim().toLowerCase();
+      if (!nextLevel || nextLevel === state.adminEventsLevel) {
+        return;
+      }
+      state.adminEventsLevel = nextLevel;
+      void refreshAdminPanelDataAndRender();
+    });
+  }
+
+  const adminEventsStickBottomToggle = root.querySelector("#admin-events-stick-bottom");
+  if (adminEventsStickBottomToggle) {
+    adminEventsStickBottomToggle.addEventListener("change", () => {
+      state.adminEventsStickToBottom = Boolean(adminEventsStickBottomToggle.checked);
+      saveBooleanPreference(PREF_ADMIN_EVENTS_STICK_BOTTOM, state.adminEventsStickToBottom);
+      renderDashboard();
+    });
+  }
+
+  const showGuildIdsToggle = root.querySelector("#debug-show-guild-ids");
+  if (showGuildIdsToggle) {
+    showGuildIdsToggle.addEventListener("change", () => {
+      state.showGuildIdsInSelector = Boolean(showGuildIdsToggle.checked);
+      saveBooleanPreference(PREF_SHOW_GUILD_IDS, state.showGuildIdsInSelector);
+      renderDashboard();
     });
   }
 }
@@ -764,15 +1012,100 @@ function updateSelectedGuildFromAuth() {
     return;
   }
 
+  if (state.selectedGuildId && guilds.some((guild) => guild.id === state.selectedGuildId)) {
+    return;
+  }
+
   const preferredGuildId = resolveInitialGuildId();
   if (preferredGuildId && guilds.some((guild) => guild.id === preferredGuildId)) {
     state.selectedGuildId = preferredGuildId;
+    setGuildQueryParam(state.selectedGuildId);
     return;
   }
-  if (!state.selectedGuildId && guilds.length) {
+  if (guilds.length) {
     state.selectedGuildId = guilds[0].id;
     setGuildQueryParam(state.selectedGuildId);
+    return;
   }
+
+  state.selectedGuildId = null;
+  setGuildQueryParam(null);
+}
+
+async function refreshAdminProvidersStatus() {
+  if (!getAdminState().isAdmin) {
+    state.adminProviders = null;
+    return;
+  }
+  const payload = await fetchJson("/api/activity/admin/providers/status", {
+    credentials: "include",
+  });
+  state.adminProviders = payload?.providers || null;
+}
+
+async function refreshAdminGuildList() {
+  const adminState = getAdminState();
+  if (!adminState.isAdmin || !adminState.bypassGuildAccess) {
+    state.adminBotGuilds = [];
+    return;
+  }
+
+  const payload = await fetchJson("/api/activity/admin/guilds", {
+    credentials: "include",
+  });
+  const guilds = Array.isArray(payload?.guilds) ? payload.guilds : [];
+  state.adminBotGuilds = guilds
+    .filter((guild) => guild?.id)
+    .map((guild) => ({
+      id: String(guild.id),
+      name: String(guild.name || guild.id),
+    }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+async function refreshAdminEvents() {
+  if (!getAdminState().isAdmin) {
+    state.adminEvents = [];
+    return;
+  }
+  const level = encodeURIComponent(state.adminEventsLevel || "info");
+  const payload = await fetchJson(`/api/activity/admin/events?level=${level}&limit=${ADMIN_EVENTS_LIMIT}`, {
+    credentials: "include",
+  });
+  state.adminEvents = Array.isArray(payload?.events) ? payload.events : [];
+}
+
+async function refreshAdminPanelData() {
+  if (!getAdminState().isAdmin) {
+    state.adminProviders = null;
+    state.adminEvents = [];
+    state.adminVerification = null;
+    return;
+  }
+  const refreshResults = await Promise.allSettled([
+    refreshAdminProvidersStatus(),
+    refreshAdminEvents(),
+    refreshAdminGuildList(),
+  ]);
+  refreshResults.forEach((result) => {
+    if (result.status === "rejected") {
+      pushDebugEvent("admin.refresh.failed", result.reason?.message || String(result.reason));
+    }
+  });
+}
+
+async function refreshAdminPanelDataAndRender(successNotice = "") {
+  try {
+    await refreshAdminPanelData();
+    if (successNotice) {
+      state.notice = successNotice;
+      state.noticeError = false;
+    }
+  } catch (error) {
+    state.notice = `Admin refresh failed: ${error?.message || String(error)}`;
+    state.noticeError = true;
+  }
+  renderDashboard();
 }
 
 async function refreshDashboardData() {
@@ -786,6 +1119,7 @@ async function refreshDashboardData() {
   }
 
   state.authSummary = authSummary;
+  await refreshAdminPanelData();
   updateSelectedGuildFromAuth();
 
   await refreshQueueDataForSelectedGuild();
@@ -899,6 +1233,79 @@ async function sendQueueAction(action, actionOptions = {}) {
   }
 }
 
+async function sendAdminCommand(path, body = {}) {
+  const adminState = getAdminState();
+  if (!adminState.isAdmin) {
+    state.notice = "Admin access is required for this action.";
+    state.noticeError = true;
+    renderDashboard();
+    return null;
+  }
+
+  pushDebugEvent("admin.command.start", path);
+  try {
+    const payload = await fetchJson(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify(body || {}),
+    });
+
+    if (path === "/api/activity/admin/providers/verify" && payload?.verification) {
+      state.adminVerification = payload.verification;
+    }
+    if (path === "/api/activity/admin/providers/reinitialize") {
+      state.adminVerification = null;
+    }
+
+    await refreshAdminPanelData();
+    state.notice = "Admin command applied.";
+    state.noticeError = false;
+    pushDebugEvent("admin.command.success", path);
+    renderDashboard();
+    return payload;
+  } catch (error) {
+    state.notice = `Admin command failed: ${error?.message || String(error)}`;
+    state.noticeError = true;
+    pushDebugEvent("admin.command.failed", state.notice);
+    renderDashboard();
+    return null;
+  }
+}
+
+async function sendAdminGuildCommand(path) {
+  if (!state.selectedGuildId) {
+    state.notice = "Select a guild first.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+
+  const payload = await sendAdminCommand(path, {
+    guild_id: state.selectedGuildId,
+  });
+  if (!payload) {
+    return;
+  }
+
+  if (path === "/api/activity/admin/queue/force-cleanup" && payload?.data) {
+    state.queueSummary = {
+      guildId: payload.guildId || state.selectedGuildId,
+      data: payload.data,
+    };
+    await refreshQueueListForSelectedGuild();
+    renderDashboard();
+    return;
+  }
+
+  if (path === "/api/activity/admin/queue/refresh-now-playing") {
+    await refreshQueueDataForSelectedGuild();
+    renderDashboard();
+  }
+}
+
 async function sendAdminSettings(settings) {
   const adminState = getAdminState();
   if (!adminState.isAdmin) {
@@ -924,10 +1331,14 @@ async function sendAdminSettings(settings) {
         ...(payload?.admin || {}),
       },
     };
+    await refreshAdminPanelData();
+    updateSelectedGuildFromAuth();
+    await refreshQueueDataForSelectedGuild();
     const bypassEnabled = Boolean(payload?.admin?.bypassVoiceChannelCheck);
-    state.notice = `Admin setting updated: voice-check bypass ${bypassEnabled ? "enabled" : "disabled"}.`;
+    const guildBypassEnabled = Boolean(payload?.admin?.bypassGuildAccess);
+    state.notice = `Admin settings updated: voice bypass ${bypassEnabled ? "enabled" : "disabled"}, all-guild access ${guildBypassEnabled ? "enabled" : "disabled"}.`;
     state.noticeError = false;
-    pushDebugEvent("admin.settings.success", `bypass=${bypassEnabled}`);
+    pushDebugEvent("admin.settings.success", `voiceBypass=${bypassEnabled}; guildBypass=${guildBypassEnabled}`);
     renderDashboard();
   } catch (error) {
     state.notice = `Admin setting update failed: ${error?.message || String(error)}`;
@@ -950,6 +1361,10 @@ async function logoutWebSession() {
   state.authSummary = null;
   state.queueSummary = null;
   state.queueList = null;
+  state.adminProviders = null;
+  state.adminEvents = [];
+  state.adminBotGuilds = [];
+  state.adminVerification = null;
   state.selectedGuildId = null;
   renderWebLogin();
 }

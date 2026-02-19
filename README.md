@@ -225,6 +225,9 @@ Web mode notes:
 - After login, you can select a guild and use basic controls (`pause`, `resume`, `skip`, `stop`, `clear queue`) from the web UI.
 - Activity/web controls require the user to be in the same voice channel as the bot when the bot is connected.
 - Admin users listed in `AUTH_ADMIN_USER_IDS` can enable a session-level bypass for this voice check in the Activity Admin tab.
+- The Activity Admin tab also includes provider status/verification, queue repair actions, and an admin event feed.
+- Admin users can optionally toggle all-guild access in the Activity Admin tab to select/control any guild where the bot is present.
+- Embedded mode now shows the guild as read-only text (not a selectable dropdown).
 - Guild selector is filtered to guilds where both the user and bot are present.
 - Session/Discord diagnostics are available under the `Debug` tab in the UI.
 
@@ -233,7 +236,14 @@ Activity API notes:
 - `GET /api/activity/queue?guild_id=...&offset=0&limit=100`: paged queue listing for richer UIs (e.g. drag-drop).
 - `POST /api/activity/control`: playback actions (`pause|resume|skip|stop|clear`).
 - `POST /api/activity/queue/action`: queue actions (`clear|shuffle|move|move_to_front|remove|loop`).
-- `POST /api/activity/admin/settings`: admin-only settings endpoint (`bypass_voice_check`).
+- `POST /api/activity/admin/settings`: admin-only settings endpoint (`bypass_voice_check`, `bypass_guild_access`).
+- `GET /api/activity/admin/guilds`: admin-only list of all guilds where the bot is currently present.
+- `GET /api/activity/admin/events?level=info&limit=120`: admin-only in-memory event feed.
+- `GET /api/activity/admin/providers/status`: admin-only provider readiness status snapshot.
+- `POST /api/activity/admin/providers/verify`: admin-only cookie/auth verification run.
+- `POST /api/activity/admin/providers/reinitialize`: admin-only provider reinit action.
+- `POST /api/activity/admin/queue/force-cleanup`: admin-only force stop/leave/clear for a guild queue.
+- `POST /api/activity/admin/queue/refresh-now-playing`: admin-only repair for now-playing/up-next message state.
 - Mutation endpoints enforce guild access and same-voice-channel checks when the bot is connected.
 
 Notes:

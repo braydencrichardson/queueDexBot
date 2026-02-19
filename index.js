@@ -48,6 +48,7 @@ const { normalizeQueryInput } = require("./src/utils/query");
 const { registerInteractionHandler } = require("./src/handlers/interaction");
 const { registerReadyHandler } = require("./src/handlers/ready");
 const { registerVoiceStateHandler } = require("./src/handlers/voice-state");
+const { createAdminEventFeed } = require("./src/web/admin-event-feed");
 const { createApiServer } = require("./src/web/api-server");
 
 dotenv.config();
@@ -75,7 +76,7 @@ const {
   pendingMoves,
   pendingQueuedActions,
 } = createRuntimeState();
-const { logInfo, logError, sendDevAlert } = createDevLogger({
+const logger = createDevLogger({
   client,
   devAlertChannelId: env.devAlertChannelId,
   devLogChannelId: env.devLogChannelId,
@@ -88,11 +89,38 @@ const { logInfo, logError, sendDevAlert } = createDevLogger({
   discordLogLevel: env.devLogLevel,
   discordAlertLevel: env.devAlertLevel,
 });
+const adminEventFeed = createAdminEventFeed({
+  maxEntries: 500,
+});
+
+function logInfo(message, data) {
+  logger.logInfo(message, data);
+  adminEventFeed.push({
+    level: "info",
+    service: env.logServiceName || "controller",
+    message,
+    data,
+  });
+}
+
+function logError(message, data) {
+  logger.logError(message, data);
+  adminEventFeed.push({
+    level: "error",
+    service: env.logServiceName || "controller",
+    message,
+    data,
+  });
+}
+
+const { sendDevAlert } = logger;
 
 const {
   getSoundcloudClientId,
   getSoundcloudCookieHeader,
   getYoutubeCookiesNetscapePath,
+  getProviderStatus,
+  verifyProviderAuthStatus,
   hasSpotifyCredentials,
   tryCheckYoutubeCookiesOnFailure,
   ensureSoundcloudReady,
@@ -229,6 +257,12 @@ const apiServer = env.authServerEnabled
       }
       return Boolean(client.guilds?.cache?.has(normalizedGuildId));
     },
+    getBotGuilds: () => Array.from(client.guilds?.cache?.values?.() || [])
+      .map((guild) => ({
+        id: guild?.id || null,
+        name: guild?.name || null,
+      }))
+      .filter((guild) => guild.id),
     getUserVoiceChannelId: async (guildId, userId) => {
       const normalizedGuildId = String(guildId || "").trim();
       const normalizedUserId = String(userId || "").trim();
@@ -255,6 +289,10 @@ const apiServer = env.authServerEnabled
       }
       return member?.voice?.channelId || member?.voice?.channel?.id || null;
     },
+    getAdminEvents: ({ minLevel, limit }) => adminEventFeed.list({ minLevel, limit }),
+    getProviderStatus,
+    verifyProviderAuthStatus,
+    reinitializeProviders,
     queueService,
     stopAndLeaveQueue,
     maybeRefreshNowPlayingUpNext,
