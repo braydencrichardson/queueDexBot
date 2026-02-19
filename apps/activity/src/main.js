@@ -8,6 +8,8 @@ const API_POLL_INTERVAL_MS = 5000;
 const API_PENDING_TIMEOUT_MS = 9000;
 const API_DISCONNECTED_TIMEOUT_MS = 20000;
 const DEBUG_TAB_VISIBILITY_TIMEOUT_MS = 30000;
+const PIP_MAX_WIDTH_PX = 420;
+const PIP_MAX_HEIGHT_PX = 260;
 const QUEUE_LIST_LIMIT = 200;
 const ADMIN_EVENTS_LIMIT = 120;
 const PREF_SHOW_GUILD_IDS = "qdex_show_guild_ids";
@@ -20,6 +22,8 @@ const TAB_PLAYER = "player";
 const TAB_QUEUE = "queue";
 const TAB_DEBUG = "debug";
 const TAB_ADMIN = "admin";
+const THEME_DARK = "dark";
+const THEME_LIGHT = "light";
 const CONNECTION_STATUS_DISCONNECTED = "disconnected";
 const CONNECTION_STATUS_AUTHORIZING = "authorizing";
 const CONNECTION_STATUS_PENDING = "pending";
@@ -74,6 +78,7 @@ const state = {
   adminEventsStickToBottom: loadBooleanPreference(PREF_ADMIN_EVENTS_STICK_BOTTOM, true),
   adminEventsOffsetFromBottom: null,
   showGuildIdsInSelector: loadBooleanPreference(PREF_SHOW_GUILD_IDS, false),
+  themeMode: THEME_DARK,
   debugTabVisible: false,
   connectionStatus: CONNECTION_STATUS_DISCONNECTED,
   lastApiAttemptAt: null,
@@ -87,6 +92,7 @@ const state = {
 let liveTicker = null;
 let statePoller = null;
 let debugTabHideTimer = null;
+let viewportWatcherBound = false;
 const debugEvents = [];
 
 function escapeHtml(value) {
@@ -105,6 +111,33 @@ function getApiUrl(path) {
   }
   const normalizedBase = rawBase.endsWith("/") ? rawBase.slice(0, -1) : rawBase;
   return `${normalizedBase}${path}`;
+}
+
+function setPipBodyMode(enabled) {
+  if (!document?.body?.classList) {
+    return;
+  }
+  document.body.classList.toggle("pip-active", Boolean(enabled));
+}
+
+function setThemeBodyMode(mode) {
+  if (!document?.body?.classList) {
+    return;
+  }
+  const nextMode = mode === THEME_LIGHT ? THEME_LIGHT : THEME_DARK;
+  document.body.classList.toggle("theme-dark", nextMode === THEME_DARK);
+  document.body.classList.toggle("theme-light", nextMode === THEME_LIGHT);
+}
+
+function applyThemeMode(mode) {
+  state.themeMode = mode === THEME_LIGHT ? THEME_LIGHT : THEME_DARK;
+  setThemeBodyMode(state.themeMode);
+}
+
+function isPipViewport() {
+  const width = Math.max(0, Number(window.innerWidth) || 0);
+  const height = Math.max(0, Number(window.innerHeight) || 0);
+  return width <= PIP_MAX_WIDTH_PX && height <= PIP_MAX_HEIGHT_PX;
 }
 
 function parseScopes(rawValue, fallback) {
@@ -254,6 +287,7 @@ function getConnectionStatusPresentation() {
   updateConnectionStatusFromTelemetry();
   if (state.connectionStatus === CONNECTION_STATUS_AUTHORIZING) {
     return {
+      statusKey: CONNECTION_STATUS_AUTHORIZING,
       label: "Authorizing",
       chipClass: "chip-authorizing",
       hint: "Authorizing session.",
@@ -261,6 +295,7 @@ function getConnectionStatusPresentation() {
   }
   if (state.connectionStatus === CONNECTION_STATUS_PENDING) {
     return {
+      statusKey: CONNECTION_STATUS_PENDING,
       label: "Pending",
       chipClass: "chip-pending",
       hint: "API heartbeat is delayed.",
@@ -268,12 +303,14 @@ function getConnectionStatusPresentation() {
   }
   if (state.connectionStatus === CONNECTION_STATUS_DISCONNECTED) {
     return {
+      statusKey: CONNECTION_STATUS_DISCONNECTED,
       label: "Disconnected",
       chipClass: "chip-disconnected",
       hint: "API heartbeat timed out.",
     };
   }
   return {
+    statusKey: CONNECTION_STATUS_CONNECTED,
     label: "Connected",
     chipClass: "chip-ok",
     hint: "Connected to API.",
@@ -335,7 +372,29 @@ function showDebugTabAndOpen() {
   renderDashboard();
 }
 
+function ensureViewportWatcher() {
+  if (viewportWatcherBound) {
+    return;
+  }
+  viewportWatcherBound = true;
+  let pendingRaf = null;
+  window.addEventListener("resize", () => {
+    if (pendingRaf) {
+      cancelAnimationFrame(pendingRaf);
+    }
+    pendingRaf = requestAnimationFrame(() => {
+      pendingRaf = null;
+      if (!state.mode || state.mode === "unknown") {
+        return;
+      }
+      renderDashboard();
+    });
+  });
+}
+
 function renderStatus({ title, subtitle, rows = [], error = false, includeTrace = false }) {
+  setThemeBodyMode(state.themeMode);
+  setPipBodyMode(false);
   const traceRows = includeTrace ? [{ label: "Trace", value: formatDebugEvents() || "none" }] : [];
   const allRows = [{ label: "Build", value: BUILD_ID }, ...rows, ...traceRows];
   const rowHtml = allRows
@@ -361,6 +420,8 @@ function getWebLoginUrl() {
 }
 
 function renderWebLogin() {
+  setThemeBodyMode(state.themeMode);
+  setPipBodyMode(false);
   state.mode = "web";
   state.notice = "";
   state.noticeError = false;
@@ -443,33 +504,17 @@ function getGuildSelectionMarkup() {
 
   if (state.mode === "embedded") {
     const matched = guildOptions.find((guild) => guild.id === selectedGuildId) || { id: selectedGuildId, name: selectedGuildId };
-    return `
-      <div class="guild-picker">
-        <label>Guild</label>
-        <span class="guild-readonly">${escapeHtml(getGuildLabel(matched, { includeId: state.showGuildIdsInSelector }))}</span>
-      </div>
-    `;
+    return `<span class="guild-compact-readonly">${escapeHtml(getGuildLabel(matched, { includeId: state.showGuildIdsInSelector }))}</span>`;
   }
 
   if (!guildOptions.length) {
-    const fallbackGuildId = selectedGuildId;
-    return `
-      <div class="guild-picker">
-        <label>Guild</label>
-        <span class="guild-readonly">${escapeHtml(fallbackGuildId)}</span>
-      </div>
-    `;
+    return `<span class="guild-compact-readonly">${escapeHtml(selectedGuildId)}</span>`;
   }
 
   const optionMarkup = guildOptions
     .map((guild) => `<option value="${escapeHtml(guild.id)}"${guild.id === selectedGuildId ? " selected" : ""}>${escapeHtml(getGuildLabel(guild, { includeId: state.showGuildIdsInSelector }))}</option>`)
     .join("");
-  return `
-    <div class="guild-picker">
-      <label for="guild-select">Guild</label>
-      <select id="guild-select">${optionMarkup}</select>
-    </div>
-  `;
+  return `<select id="guild-select" class="guild-compact-select" aria-label="Guild">${optionMarkup}</select>`;
 }
 
 function getQueueListData() {
@@ -521,7 +566,8 @@ function getPlaybackProgressSnapshot() {
   };
 }
 
-function getPlaybackProgressMarkup() {
+function getPlaybackProgressMarkup(options = {}) {
+  const pip = Boolean(options?.pip);
   const progress = getPlaybackProgressSnapshot();
   if (!progress) {
     return `<p class="muted playback-progress-empty">Progress unavailable.</p>`;
@@ -531,6 +577,19 @@ function getPlaybackProgressMarkup() {
   const value = progress.hasDuration ? progress.elapsedSec : 0;
   const leftLabel = formatProgressTimestamp(progress.elapsedSec);
   const rightLabel = progress.hasDuration ? formatProgressTimestamp(progress.durationSec) : "unknown";
+  const percent = progress.hasDuration ? Math.max(0, Math.min(100, Math.round(progress.ratio * 100))) : 0;
+
+  if (pip) {
+    return `
+      <div class="playback-progress-wrap playback-progress-wrap-pip">
+        <label class="playback-progress-label" for="playback-progress-time">Progress</label>
+        <div class="progress-bar-static" aria-hidden="true">
+          <span id="playback-progress-fill" class="progress-bar-fill" style="width:${escapeHtml(String(percent))}%"></span>
+        </div>
+        <div class="playback-progress-time" id="playback-progress-time">${escapeHtml(`${leftLabel} / ${rightLabel}`)}</div>
+      </div>
+    `;
+  }
 
   return `
     <div class="playback-progress-wrap">
@@ -696,7 +755,9 @@ function renderDashboard() {
   const nowPlayingText = activeNowPlaying
     ? `${activeNowPlaying.title || "Unknown"} (${formatTrackDuration(activeNowPlaying.duration)})`
     : "Nothing currently playing";
-  const playbackProgressMarkup = getPlaybackProgressMarkup();
+  const pipMode = isPipViewport();
+  const playbackProgressMarkup = getPlaybackProgressMarkup({ pip: pipMode });
+  const themeToggleLabel = state.themeMode === THEME_DARK ? "Light Mode" : "Dark Mode";
   const queueLength = Number.isFinite(queueList?.total)
     ? queueList.total
     : (queue?.queueLength || 0);
@@ -706,37 +767,58 @@ function renderDashboard() {
   const connection = getConnectionStatusPresentation();
   const showDebugTabButton = state.debugTabVisible || state.activeTab === TAB_DEBUG;
   const noticeMarkup = state.notice
-    ? `<p class="subtitle ${state.noticeError ? "error" : ""}">${escapeHtml(state.notice)}</p>`
+    ? `<p class="command-feedback ${state.noticeError ? "error" : ""}">${escapeHtml(state.notice)}</p>`
     : "";
-  const tabSubtitle = adminState.isAdmin
-    ? "Use tabs for player, queue, admin, and diagnostics."
-    : "Use tabs for player, queue, and diagnostics.";
 
-  const shellClass = state.hasMountedDashboard ? "shell" : "shell shell-animated";
-  root.innerHTML = `
-    <section class="${shellClass}">
-      <div class="top-row">
-        <p class="kicker">queueDexBot Activity</p>
-        <button
-          type="button"
-          id="connection-status-btn"
-          class="chip chip-button ${connection.chipClass}"
-          title="${escapeHtml(`${connection.hint} Click to open debug tools.`)}"
-          aria-label="${escapeHtml(`${connection.label}. Click to open debug tools.`)}"
-        >${escapeHtml(connection.label)}</button>
-      </div>
-      <h1>queueDexBot Control Panel</h1>
-      <p class="subtitle">${escapeHtml(tabSubtitle)}</p>
-      ${noticeMarkup}
-      <div class="toolbar">
-        ${getGuildSelectionMarkup()}
-        <div class="toolbar-actions">
-          <button type="button" class="btn" id="refresh-now">Refresh</button>
-          ${mode === "web" ? '<button type="button" class="btn" id="logout-web">Logout</button>' : ""}
+  const playbackCardMarkup = pipMode
+    ? `
+      <article class="panel-card panel-card-pip">
+        <div class="pip-card-header">
+          <h2>Now Playing</h2>
+          <span
+            id="pip-connection-dot"
+            class="connection-dot connection-dot-${escapeHtml(connection.statusKey)}"
+            title="${escapeHtml(connection.hint)}"
+            aria-label="${escapeHtml(connection.label)}"
+          ></span>
         </div>
+        <p class="pip-now-playing">${escapeHtml(nowPlayingText)}</p>
+        ${playbackProgressMarkup}
+      </article>
+    `
+    : `
+      <article class="panel-card">
+        <h2>Playback</h2>
+        <dl>
+          <dt>Status</dt><dd id="queue-status">${escapeHtml(queueStatusText)}</dd>
+          <dt>Now Playing</dt><dd id="queue-now-playing">${escapeHtml(nowPlayingText)}</dd>
+          <dt>Last Update</dt><dd id="queue-updated-at">${escapeHtml(formatTime(queue?.updatedAt || Date.now()))}</dd>
+        </dl>
+        ${playbackProgressMarkup}
+        <div class="action-row">
+          <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
+          <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
+          <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
+          <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
+          <button type="button" class="btn" data-action="clear">Clear Queue</button>
+        </div>
+      </article>
+    `;
+
+  const topUtilityActionsMarkup = pipMode
+    ? ""
+    : `
+      <div class="top-row-secondary">
+        <button type="button" class="btn" id="refresh-now">Refresh</button>
+        ${mode === "web" ? '<button type="button" class="btn" id="logout-web">Logout</button>' : ""}
+        <button type="button" class="btn btn-secondary" id="theme-toggle">${escapeHtml(themeToggleLabel)}</button>
       </div>
+    `;
+
+  const menuSectionsMarkup = pipMode
+    ? ""
+    : `
       <nav class="menu-tabs">
-        <button type="button" class="tab-btn${state.activeTab === TAB_PLAYER ? " active" : ""}" data-tab="${TAB_PLAYER}">Player</button>
         <button type="button" class="tab-btn${state.activeTab === TAB_QUEUE ? " active" : ""}" data-tab="${TAB_QUEUE}">Queue</button>
         ${adminState.isAdmin
           ? `<button type="button" class="tab-btn${state.activeTab === TAB_ADMIN ? " active" : ""}" data-tab="${TAB_ADMIN}">Admin</button>`
@@ -745,24 +827,6 @@ function renderDashboard() {
           ? `<button type="button" class="tab-btn${state.activeTab === TAB_DEBUG ? " active" : ""}" data-tab="${TAB_DEBUG}">Debug</button>`
           : ""}
       </nav>
-      <section class="menu-panel${state.activeTab === TAB_PLAYER ? " active" : ""}" data-panel="${TAB_PLAYER}">
-        <article class="panel-card">
-          <h2>Playback</h2>
-          <dl>
-            <dt>Status</dt><dd id="queue-status">${escapeHtml(queueStatusText)}</dd>
-            <dt>Now Playing</dt><dd id="queue-now-playing">${escapeHtml(nowPlayingText)}</dd>
-            <dt>Last Update</dt><dd id="queue-updated-at">${escapeHtml(formatTime(queue?.updatedAt || Date.now()))}</dd>
-          </dl>
-          ${playbackProgressMarkup}
-          <div class="action-row">
-            <button type="button" class="btn btn-primary" data-action="pause">Pause</button>
-            <button type="button" class="btn btn-primary" data-action="resume">Resume</button>
-            <button type="button" class="btn btn-primary" data-action="skip">Skip</button>
-            <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
-            <button type="button" class="btn" data-action="clear">Clear Queue</button>
-          </div>
-        </article>
-      </section>
       <section class="menu-panel${state.activeTab === TAB_QUEUE ? " active" : ""}" data-panel="${TAB_QUEUE}">
         <article class="panel-card">
           <h2>Queue Overview</h2>
@@ -807,7 +871,39 @@ function renderDashboard() {
           </label>
         </article>
       </section>
-      <p class="footer-note">Local clock: <span id="clock">${escapeHtml(formatTime(new Date()))}</span></p>
+    `;
+
+  const topBarMarkup = pipMode
+    ? ""
+    : `
+      <div class="top-row">
+        <div class="top-row-main">
+          <p class="kicker">queueDexBot</p>
+          ${getGuildSelectionMarkup()}
+        </div>
+        <button
+          type="button"
+          id="connection-status-btn"
+          class="chip chip-button top-row-status ${connection.chipClass}"
+          title="${escapeHtml(`${connection.hint} Click to open debug tools.`)}"
+          aria-label="${escapeHtml(`${connection.label}. Click to open debug tools.`)}"
+        >${escapeHtml(connection.label)}</button>
+      </div>
+    `;
+
+  const feedbackMarkup = pipMode ? "" : noticeMarkup;
+  const shellClass = state.hasMountedDashboard ? "shell" : "shell shell-animated";
+  setThemeBodyMode(state.themeMode);
+  setPipBodyMode(pipMode);
+  root.innerHTML = `
+    <section class="${shellClass}${pipMode ? " pip-mode" : ""}">
+      ${topBarMarkup}
+      ${topUtilityActionsMarkup}
+      <section class="playback-panel${pipMode ? " pip" : ""}">
+        ${playbackCardMarkup}
+      </section>
+      ${menuSectionsMarkup}
+      ${feedbackMarkup}
     </section>
   `;
 
@@ -835,12 +931,14 @@ function wireDashboardEvents() {
       if (!tab) {
         return;
       }
-      if (tab !== TAB_DEBUG && state.activeTab === TAB_DEBUG && state.debugTabVisible) {
+      const wasDebugTab = state.activeTab === TAB_DEBUG;
+      const nextTab = state.activeTab === tab ? TAB_PLAYER : tab;
+      if (wasDebugTab && nextTab !== TAB_DEBUG && state.debugTabVisible) {
         scheduleDebugTabAutoHide();
-      } else if (tab === TAB_DEBUG && state.debugTabVisible) {
+      } else if (nextTab === TAB_DEBUG && state.debugTabVisible) {
         scheduleDebugTabAutoHide();
       }
-      state.activeTab = tab;
+      state.activeTab = nextTab;
       renderDashboard();
     });
   });
@@ -947,6 +1045,15 @@ function wireDashboardEvents() {
     });
   }
 
+  const themeToggleButton = root.querySelector("#theme-toggle");
+  if (themeToggleButton) {
+    themeToggleButton.addEventListener("click", () => {
+      const nextMode = state.themeMode === THEME_DARK ? THEME_LIGHT : THEME_DARK;
+      applyThemeMode(nextMode);
+      renderDashboard();
+    });
+  }
+
   const bypassVoiceCheckToggle = root.querySelector("#admin-bypass-voice-check");
   if (bypassVoiceCheckToggle) {
     bypassVoiceCheckToggle.addEventListener("change", () => {
@@ -1042,34 +1149,47 @@ function startLiveTicker() {
   stopLiveTicker();
   liveTicker = setInterval(() => {
     const uptimeNode = root.querySelector("#uptime");
-    const clockNode = root.querySelector("#clock");
     if (uptimeNode) {
       const connectedAt = state.connectedAt || new Date();
       uptimeNode.textContent = formatUptime(Date.now() - connectedAt.getTime());
-    }
-    if (clockNode) {
-      clockNode.textContent = formatTime(new Date());
     }
 
     const connectionStatusNode = root.querySelector("#connection-status-btn");
     if (connectionStatusNode) {
       const connection = getConnectionStatusPresentation();
-      connectionStatusNode.className = `chip chip-button ${connection.chipClass}`;
+      connectionStatusNode.className = `chip chip-button top-row-status ${connection.chipClass}`;
       connectionStatusNode.textContent = connection.label;
       connectionStatusNode.title = `${connection.hint} Click to open debug tools.`;
       connectionStatusNode.setAttribute("aria-label", `${connection.label}. Click to open debug tools.`);
     }
 
+    const pipConnectionDot = root.querySelector("#pip-connection-dot");
+    if (pipConnectionDot) {
+      const connection = getConnectionStatusPresentation();
+      pipConnectionDot.className = `connection-dot connection-dot-${connection.statusKey}`;
+      pipConnectionDot.title = connection.hint;
+      pipConnectionDot.setAttribute("aria-label", connection.label);
+    }
+
     const progressSliderNode = root.querySelector("#playback-progress-slider");
+    const progressFillNode = root.querySelector("#playback-progress-fill");
     const progressTimeNode = root.querySelector("#playback-progress-time");
-    if (progressSliderNode && progressTimeNode) {
+    if (progressTimeNode || progressSliderNode || progressFillNode) {
       const progress = getPlaybackProgressSnapshot();
       if (progress) {
-        progressSliderNode.max = String(progress.hasDuration ? progress.durationSec : 1);
-        progressSliderNode.value = String(progress.hasDuration ? progress.elapsedSec : 0);
+        if (progressSliderNode) {
+          progressSliderNode.max = String(progress.hasDuration ? progress.durationSec : 1);
+          progressSliderNode.value = String(progress.hasDuration ? progress.elapsedSec : 0);
+        }
+        if (progressFillNode) {
+          const percent = progress.hasDuration ? Math.max(0, Math.min(100, Math.round(progress.ratio * 100))) : 0;
+          progressFillNode.style.width = `${percent}%`;
+        }
         const leftLabel = formatProgressTimestamp(progress.elapsedSec);
         const rightLabel = progress.hasDuration ? formatProgressTimestamp(progress.durationSec) : "unknown";
-        progressTimeNode.textContent = `${leftLabel} / ${rightLabel}`;
+        if (progressTimeNode) {
+          progressTimeNode.textContent = `${leftLabel} / ${rightLabel}`;
+        }
       }
     }
   }, UPTIME_INTERVAL_MS);
@@ -1749,9 +1869,11 @@ async function bootstrapWebMode() {
 
 async function bootstrap() {
   debugEvents.length = 0;
+  applyThemeMode(state.themeMode);
   stopLiveTicker();
   stopStatePoller();
   stopDebugTabHideTimer();
+  ensureViewportWatcher();
   state.hasMountedDashboard = false;
   state.debugTabVisible = false;
   state.lastApiAttemptAt = null;
