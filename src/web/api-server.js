@@ -143,6 +143,21 @@ function summarizeGuild(guildPayload) {
   };
 }
 
+function summarizeTrack(track) {
+  if (!track) {
+    return null;
+  }
+  return {
+    id: track.id || null,
+    title: track.title || "Unknown",
+    url: track.url || null,
+    duration: Number.isFinite(track.duration) ? track.duration : null,
+    source: track.source || "unknown",
+    requester: track.requester || null,
+    pendingResolve: Boolean(track.pendingResolve),
+  };
+}
+
 function summarizeQueue(queue) {
   if (!queue) {
     return {
@@ -156,25 +171,10 @@ function summarizeQueue(queue) {
     };
   }
 
-  function toTrackSummary(track) {
-    if (!track) {
-      return null;
-    }
-    return {
-      id: track.id || null,
-      title: track.title || "Unknown",
-      url: track.url || null,
-      duration: Number.isFinite(track.duration) ? track.duration : null,
-      source: track.source || "unknown",
-      requester: track.requester || null,
-      pendingResolve: Boolean(track.pendingResolve),
-    };
-  }
-
   return {
     connected: Boolean(queue.connection),
-    nowPlaying: toTrackSummary(queue.current),
-    upNext: Array.isArray(queue.tracks) ? queue.tracks.slice(0, 5).map(toTrackSummary) : [],
+    nowPlaying: summarizeTrack(queue.current),
+    upNext: Array.isArray(queue.tracks) ? queue.tracks.slice(0, 5).map(summarizeTrack) : [],
     queueLength: Array.isArray(queue.tracks) ? queue.tracks.length : 0,
     loopMode: queue.loopMode || "off",
     playerStatus: queue?.player?.state?.status || "idle",
@@ -201,6 +201,14 @@ function normalizeScopes(rawScopes) {
     .trim()
     .replace(/\s+/g, " ");
   return normalized || DEFAULT_OAUTH_SCOPES;
+}
+
+function toFiniteInteger(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return Math.trunc(numeric);
 }
 
 function getQueueVoiceChannelId(queue) {
@@ -397,14 +405,117 @@ function createApiServer(options) {
     queue.voiceChannel = null;
   }
 
-  async function handleActivityControl(request, response) {
-    if (!requireJsonRequest(request, response)) {
-      return;
-    }
-
+  async function resolveAuthorizedActivityContext({
+    request,
+    response,
+    guildId,
+    requireQueue = true,
+    requireVoiceChannelMatch = false,
+  }) {
     const session = getSessionFromRequest(request);
     if (!session) {
       sendJson(response, 401, { error: "Unauthorized" });
+      return null;
+    }
+
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      sendJson(response, 400, { error: "Missing guild_id" });
+      return null;
+    }
+
+    if (!canAccessGuild(session, normalizedGuildId)) {
+      sendJson(response, 403, { error: "Forbidden for this guild" });
+      return null;
+    }
+
+    const queue = queues?.get?.(normalizedGuildId);
+    if (requireQueue && !queue) {
+      sendJson(response, 404, { error: "Queue is not initialized for this guild" });
+      return null;
+    }
+
+    if (requireVoiceChannelMatch && queue) {
+      const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+      if (queueVoiceChannelId) {
+        const userId = String(session?.user?.id || "").trim();
+        if (!userId) {
+          sendJson(response, 401, { error: "Session user is unavailable" });
+          return null;
+        }
+
+        let userVoiceChannelId = null;
+        try {
+          userVoiceChannelId = await getUserVoiceChannelId(normalizedGuildId, userId);
+        } catch (error) {
+          logError("Failed to resolve user voice channel for activity request", {
+            guildId: normalizedGuildId,
+            userId,
+            error,
+          });
+          sendJson(response, 500, { error: "Failed to verify voice channel access" });
+          return null;
+        }
+
+        const normalizedUserVoiceChannelId = String(userVoiceChannelId || "").trim() || null;
+        if (!normalizedUserVoiceChannelId) {
+          sendJson(response, 403, { error: "Join the bot voice channel to use controls" });
+          return null;
+        }
+        if (normalizedUserVoiceChannelId !== queueVoiceChannelId) {
+          sendJson(response, 403, { error: "You must be in the same voice channel as the bot" });
+          return null;
+        }
+      }
+    }
+
+    return {
+      session,
+      guildId: normalizedGuildId,
+      queue,
+    };
+  }
+
+  function summarizeQueueActionResult(result) {
+    if (!result || typeof result !== "object") {
+      return null;
+    }
+
+    const payload = {
+      action: result.action || null,
+    };
+    if (Number.isFinite(result.removedCount)) {
+      payload.removedCount = result.removedCount;
+    }
+    if (Number.isFinite(result.position)) {
+      payload.position = result.position;
+    }
+    if (Number.isFinite(result.fromPosition)) {
+      payload.fromPosition = result.fromPosition;
+    }
+    if (Number.isFinite(result.toPosition)) {
+      payload.toPosition = result.toPosition;
+    }
+    if (result.moved) {
+      payload.moved = summarizeTrack(result.moved);
+    }
+    if (result.removed) {
+      payload.removed = summarizeTrack(result.removed);
+    }
+    if (result.loopResult) {
+      payload.loop = {
+        previousMode: result.loopResult.previousMode || "off",
+        mode: result.loopResult.mode || "off",
+        changed: Boolean(result.loopResult.changed),
+        inserted: Boolean(result.loopResult.inserted),
+        removed: Number.isFinite(result.loopResult.removed) ? result.loopResult.removed : 0,
+      };
+    }
+    return payload;
+  }
+
+  async function handleActivityControl(request, response) {
+    if (!requireJsonRequest(request, response)) {
       return;
     }
 
@@ -418,57 +529,23 @@ function createApiServer(options) {
 
     const action = String(body.action || "").trim().toLowerCase();
     const guildId = String(body.guild_id || body.guildId || "").trim();
-    if (!guildId) {
-      sendJson(response, 400, { error: "Missing guild_id" });
-      return;
-    }
-    if (!canAccessGuild(session, guildId)) {
-      sendJson(response, 403, { error: "Forbidden for this guild" });
-      return;
-    }
-
-    const queue = queues?.get?.(guildId);
-    if (!queue) {
-      sendJson(response, 404, { error: "Queue is not initialized for this guild" });
-      return;
-    }
-
     if (!action) {
       sendJson(response, 400, { error: "Missing action" });
       return;
     }
 
-    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
-    if (queueVoiceChannelId) {
-      const userId = String(session?.user?.id || "").trim();
-      if (!userId) {
-        sendJson(response, 401, { error: "Session user is unavailable" });
-        return;
-      }
-
-      let userVoiceChannelId = null;
-      try {
-        userVoiceChannelId = await getUserVoiceChannelId(guildId, userId);
-      } catch (error) {
-        logError("Failed to resolve user voice channel for API control request", {
-          guildId,
-          userId,
-          error,
-        });
-        sendJson(response, 500, { error: "Failed to verify voice channel access" });
-        return;
-      }
-
-      const normalizedUserVoiceChannelId = String(userVoiceChannelId || "").trim() || null;
-      if (!normalizedUserVoiceChannelId) {
-        sendJson(response, 403, { error: "Join the bot voice channel to use controls" });
-        return;
-      }
-      if (normalizedUserVoiceChannelId !== queueVoiceChannelId) {
-        sendJson(response, 403, { error: "You must be in the same voice channel as the bot" });
-        return;
-      }
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: true,
+      requireVoiceChannelMatch: true,
+    });
+    if (!context) {
+      return;
     }
+
+    const { session, queue } = context;
 
     try {
       const result = await controlService.applyControlAction(queue, action, {
@@ -499,6 +576,135 @@ function createApiServer(options) {
       logError("Failed to apply activity/web control action", { action, guildId, error });
       sendJson(response, 500, { error: error.message || "Failed to apply action" });
     }
+  }
+
+  async function handleActivityQueueAction(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const action = String(body.action || "").trim().toLowerCase();
+    const guildId = String(body.guild_id || body.guildId || "").trim();
+    if (!action) {
+      sendJson(response, 400, { error: "Missing action" });
+      return;
+    }
+
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: true,
+      requireVoiceChannelMatch: true,
+    });
+    if (!context) {
+      return;
+    }
+
+    const { session, queue } = context;
+    const fromPosition = toFiniteInteger(body.from_position ?? body.fromPosition);
+    const toPosition = toFiniteInteger(body.to_position ?? body.toPosition);
+    const position = toFiniteInteger(body.position);
+    const mode = body.mode === undefined || body.mode === null
+      ? undefined
+      : String(body.mode).trim().toLowerCase();
+
+    try {
+      const result = await controlService.applyQueueAction(queue, action, {
+        fromPosition,
+        toPosition,
+        position,
+        mode,
+        refreshNowPlayingUpNextOnClear: true,
+        refreshNowPlayingUpNextOnShuffle: true,
+        refreshNowPlayingUpNextOnMove: true,
+        refreshNowPlayingUpNextOnRemove: true,
+        refreshNowPlayingUpNextOnLoop: true,
+        refreshNowPlayingOnLoop: true,
+      });
+      if (!result.ok) {
+        sendJson(response, result.statusCode || 400, {
+          error: result.error || "Failed to apply queue action",
+        });
+        return;
+      }
+
+      logInfo("Applied activity/web queue action", {
+        action,
+        guildId,
+        fromPosition,
+        toPosition,
+        position,
+        mode,
+        user: session?.user?.username || session?.user?.id || "unknown",
+      });
+
+      sendJson(response, 200, {
+        ok: true,
+        action,
+        guildId,
+        result: summarizeQueueActionResult(result),
+        data: summarizeQueue(queue),
+      });
+    } catch (error) {
+      logError("Failed to apply activity/web queue action", {
+        action,
+        guildId,
+        fromPosition,
+        toPosition,
+        position,
+        mode,
+        error,
+      });
+      sendJson(response, 500, { error: error.message || "Failed to apply queue action" });
+    }
+  }
+
+  async function handleActivityQueueList(request, response, requestUrl) {
+    const guildId = String(requestUrl.searchParams.get("guild_id") || "").trim();
+    const context = await resolveAuthorizedActivityContext({
+      request,
+      response,
+      guildId,
+      requireQueue: false,
+      requireVoiceChannelMatch: false,
+    });
+    if (!context) {
+      return;
+    }
+
+    const { queue } = context;
+    const offsetParam = toFiniteInteger(requestUrl.searchParams.get("offset"));
+    const limitParam = toFiniteInteger(requestUrl.searchParams.get("limit"));
+    const offset = offsetParam === null ? 0 : Math.max(0, offsetParam);
+    const limit = limitParam === null ? 100 : Math.min(200, Math.max(1, limitParam));
+
+    const allTracks = Array.isArray(queue?.tracks) ? queue.tracks : [];
+    const tracks = allTracks
+      .slice(offset, offset + limit)
+      .map((track, index) => ({
+        position: offset + index + 1,
+        ...summarizeTrack(track),
+      }));
+
+    sendJson(response, 200, {
+      guildId: context.guildId,
+      offset,
+      limit,
+      total: allTracks.length,
+      nowPlaying: summarizeTrack(queue?.current),
+      loopMode: queue?.loopMode || "off",
+      tracks,
+      updatedAt: Date.now(),
+    });
   }
 
   async function handleActivityExchange(request, response) {
@@ -853,8 +1059,18 @@ function createApiServer(options) {
         return;
       }
 
+      if (request.method === "GET" && pathname === "/api/activity/queue") {
+        await handleActivityQueueList(request, response, requestUrl);
+        return;
+      }
+
       if (request.method === "POST" && pathname === "/api/activity/control") {
         await handleActivityControl(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/queue/action") {
+        await handleActivityQueueAction(request, response);
         return;
       }
 

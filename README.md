@@ -226,6 +226,13 @@ Web mode notes:
 - Guild selector is filtered to guilds where both the user and bot are present.
 - Session/Discord diagnostics are available under the `Debug` tab in the UI.
 
+Activity API notes:
+- `GET /api/activity/state?guild_id=...`: compact queue/playback summary.
+- `GET /api/activity/queue?guild_id=...&offset=0&limit=100`: paged queue listing for richer UIs (e.g. drag-drop).
+- `POST /api/activity/control`: playback actions (`pause|resume|skip|stop|clear`).
+- `POST /api/activity/queue/action`: queue actions (`clear|shuffle|move|move_to_front|remove|loop`).
+- Mutation endpoints enforce guild access and same-voice-channel checks when the bot is connected.
+
 Notes:
 - URL Mapping target should be host/path only (no protocol).
 - Use a directory path target, not a file path.

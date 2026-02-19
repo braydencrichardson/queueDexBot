@@ -265,3 +265,215 @@ test("activity session endpoint enforces JSON content type", async () => {
     global.fetch = originalFetch;
   }
 });
+
+test("activity queue endpoint returns paged queue data", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: { id: "now-1", title: "Now", duration: 100 },
+    tracks: [
+      { id: "t-1", title: "One", duration: 11 },
+      { id: "t-2", title: "Two", duration: 22 },
+      { id: "t-3", title: "Three", duration: 33 },
+    ],
+    loopMode: "off",
+    player: { state: { status: "playing" } },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/queue?guild_id=guild-1&offset=1&limit=2",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.guildId, "guild-1");
+    assert.equal(response.json?.total, 3);
+    assert.equal(Array.isArray(response.json?.tracks), true);
+    assert.equal(response.json?.tracks.length, 2);
+    assert.equal(response.json?.tracks[0]?.position, 2);
+    assert.equal(response.json?.tracks[0]?.title, "Two");
+    assert.equal(response.json?.tracks[1]?.position, 3);
+    assert.equal(response.json?.tracks[1]?.title, "Three");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue action move reorders queue when authorized", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: { id: "now-1", title: "Now" },
+    tracks: [
+      { id: "t-1", title: "One" },
+      { id: "t-2", title: "Two" },
+      { id: "t-3", title: "Three" },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "playing" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/action",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "move",
+        from_position: 3,
+        to_position: 1,
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.ok, true);
+    assert.equal(response.json?.action, "move");
+    assert.equal(response.json?.result?.moved?.title, "Three");
+    assert.equal(response.json?.result?.fromPosition, 3);
+    assert.equal(response.json?.result?.toPosition, 1);
+    assert.deepEqual(queue.tracks.map((track) => track.title), ["Three", "One", "Two"]);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue action returns validation errors for invalid queue positions", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: { id: "now-1", title: "Now" },
+    tracks: [
+      { id: "t-1", title: "One" },
+      { id: "t-2", title: "Two" },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "playing" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/action",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "remove",
+        position: 99,
+      }),
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(String(response.json?.error || "").includes("Invalid queue position"), true);
+    assert.deepEqual(queue.tracks.map((track) => track.title), ["One", "Two"]);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue action requires user in bot voice channel", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: { id: "now-1", title: "Now" },
+    tracks: [
+      { id: "t-1", title: "One" },
+      { id: "t-2", title: "Two" },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "playing" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => null,
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/action",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "shuffle",
+      }),
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json?.error, "Join the bot voice channel to use controls");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
