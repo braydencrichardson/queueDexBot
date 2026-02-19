@@ -25,6 +25,14 @@ test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   assert.equal(Number.isNaN(env.authSessionTtlMs), true);
   assert.equal(env.authSessionCookieName, "qdex_session");
   assert.equal(env.authSessionCookieSecure, true);
+  assert.equal(env.logLevel, "info");
+  assert.equal(env.logDir, "logs");
+  assert.equal(env.logServiceName, "controller");
+  assert.equal(env.logPretty, true);
+  assert.equal(env.logMaxSizeBytes, 10 * 1024 * 1024);
+  assert.equal(env.logMaxFiles, 10);
+  assert.equal(env.devLogLevel, "info");
+  assert.equal(env.devAlertLevel, "error");
 });
 
 test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
@@ -52,6 +60,14 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
     AUTH_SESSION_TTL_MS: "3600000",
     AUTH_SESSION_COOKIE_NAME: "qdex_cookie",
     AUTH_SESSION_COOKIE_SECURE: "0",
+    LOG_LEVEL: "debug",
+    LOG_DIR: "/tmp/queuedex-logs",
+    LOG_SERVICE_NAME: "worker",
+    LOG_PRETTY: "0",
+    LOG_MAX_SIZE_BYTES: "5mb",
+    LOG_MAX_FILES: "42",
+    DEV_LOG_LEVEL: "debug",
+    DEV_ALERT_LEVEL: "warn",
   });
 
   assert.equal(env.token, "token");
@@ -78,6 +94,14 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   assert.equal(env.authSessionTtlMs, 3600000);
   assert.equal(env.authSessionCookieName, "qdex_cookie");
   assert.equal(env.authSessionCookieSecure, false);
+  assert.equal(env.logLevel, "debug");
+  assert.equal(env.logDir, "/tmp/queuedex-logs");
+  assert.equal(env.logServiceName, "worker");
+  assert.equal(env.logPretty, false);
+  assert.equal(env.logMaxSizeBytes, 5 * 1024 * 1024);
+  assert.equal(env.logMaxFiles, 42);
+  assert.equal(env.devLogLevel, "debug");
+  assert.equal(env.devAlertLevel, "warn");
 });
 
 test("loadEnvVars prefers explicit oauth client id over application id", () => {

@@ -1,3 +1,5 @@
+const fs = require("node:fs");
+const path = require("node:path");
 const util = require("util");
 const {
   DEV_LOG_INSPECT_BREAK_LENGTH,
@@ -5,92 +7,304 @@ const {
   DISCORD_MESSAGE_SAFE_MAX_LENGTH,
 } = require("../config/constants");
 
-function createDevLogger(deps) {
-  const { client, devAlertChannelId, devLogChannelId } = deps;
+const LOG_LEVELS = Object.freeze({
+  trace: 10,
+  debug: 20,
+  info: 30,
+  warn: 40,
+  error: 50,
+  fatal: 60,
+});
 
-  function formatLogMessage(stamp, message, data) {
-    let line = `[${stamp}] ${message}`;
-    if (data !== undefined) {
-      let dataText = "";
-      if (typeof data === "string") {
-        dataText = data;
-      } else {
-        try {
-          dataText = JSON.stringify(data);
-        } catch {
-          dataText = util.inspect(data, {
-            depth: DEV_LOG_INSPECT_DEPTH,
-            breakLength: DEV_LOG_INSPECT_BREAK_LENGTH,
-          });
+const DEFAULT_LOG_LEVEL = "info";
+const DEFAULT_DISCORD_LOG_LEVEL = "info";
+const DEFAULT_DISCORD_ALERT_LEVEL = "error";
+const DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_FILES = 10;
+
+function normalizeLevel(rawLevel, fallback = DEFAULT_LOG_LEVEL) {
+  const normalized = String(rawLevel || "")
+    .trim()
+    .toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(LOG_LEVELS, normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizePayload(payload) {
+  if (payload instanceof Error) {
+    return {
+      name: payload.name,
+      message: payload.message,
+      stack: payload.stack,
+      ...(payload.code ? { code: payload.code } : {}),
+    };
+  }
+  return payload;
+}
+
+function stringifyData(data) {
+  if (data === undefined) {
+    return "";
+  }
+  if (typeof data === "string") {
+    return data;
+  }
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return util.inspect(data, {
+      depth: DEV_LOG_INSPECT_DEPTH,
+      breakLength: DEV_LOG_INSPECT_BREAK_LENGTH,
+    });
+  }
+}
+
+function createRollingFileWriter({ filePath, maxSizeBytes, maxFiles, onError }) {
+  const safeMaxSizeBytes = Number.isFinite(maxSizeBytes) && maxSizeBytes > 0
+    ? Math.floor(maxSizeBytes)
+    : DEFAULT_MAX_FILE_SIZE_BYTES;
+  const safeMaxFiles = Number.isInteger(maxFiles) && maxFiles >= 0
+    ? maxFiles
+    : DEFAULT_MAX_FILES;
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+  function rotateIfNeeded(incomingBytes) {
+    let currentSize = 0;
+    try {
+      currentSize = fs.statSync(filePath).size;
+    } catch {
+      currentSize = 0;
+    }
+
+    if (currentSize + incomingBytes <= safeMaxSizeBytes) {
+      return;
+    }
+
+    try {
+      for (let index = safeMaxFiles; index >= 1; index -= 1) {
+        const source = `${filePath}.${index}`;
+        const destination = `${filePath}.${index + 1}`;
+        if (fs.existsSync(source)) {
+          if (index === safeMaxFiles) {
+            fs.rmSync(source, { force: true });
+          } else {
+            fs.renameSync(source, destination);
+          }
         }
       }
-      if (dataText) {
-        line += ` ${dataText}`;
-      }
-    }
-    return line;
-  }
 
-  async function sendDevAlert(message) {
-    if (!devAlertChannelId || !client?.user) {
-      return;
-    }
-    try {
-      const channel = await client.channels.fetch(devAlertChannelId);
-      if (!channel?.send) {
-        return;
+      if (fs.existsSync(filePath)) {
+        if (safeMaxFiles >= 1) {
+          fs.renameSync(filePath, `${filePath}.1`);
+        } else {
+          fs.rmSync(filePath, { force: true });
+        }
       }
-      await channel.send(message);
     } catch (error) {
-      console.log("Failed to send dev alert", error);
-    }
-  }
-
-  async function sendDevLog(message) {
-    if (!devLogChannelId || !client?.user) {
-      return;
-    }
-    try {
-      const channel = await client.channels.fetch(devLogChannelId);
-      if (!channel?.send) {
-        return;
+      if (typeof onError === "function") {
+        onError("Failed rotating log file", { filePath, error });
       }
-      const trimmed = String(message || "").slice(0, DISCORD_MESSAGE_SAFE_MAX_LENGTH);
-      if (!trimmed) {
-        return;
-      }
-      await channel.send(trimmed);
-    } catch (error) {
-      console.log("Failed to send dev log", error);
     }
-  }
-
-  function logInfo(message, data) {
-    const stamp = new Date().toISOString();
-    const line = formatLogMessage(stamp, message, data);
-    if (data !== undefined) {
-      console.log(`[${stamp}] ${message}`, data);
-      void sendDevLog(line);
-      return;
-    }
-    console.log(`[${stamp}] ${message}`);
-    void sendDevLog(line);
-  }
-
-  function logError(message, error) {
-    const stamp = new Date().toISOString();
-    const line = formatLogMessage(stamp, message, error);
-    if (error !== undefined) {
-      console.error(`[${stamp}] ${message}`, error);
-    } else {
-      console.error(`[${stamp}] ${message}`);
-    }
-    void sendDevLog(line);
-    void sendDevAlert(line);
   }
 
   return {
+    write(line) {
+      const output = `${line}\n`;
+      const incomingBytes = Buffer.byteLength(output, "utf8");
+
+      rotateIfNeeded(incomingBytes);
+      try {
+        fs.appendFileSync(filePath, output, "utf8");
+      } catch (error) {
+        if (typeof onError === "function") {
+          onError("Failed writing log file", { filePath, error });
+        }
+      }
+    },
+  };
+}
+
+function formatConsoleLine(entry) {
+  const head = `[${entry.time}] [${entry.service}] [${entry.level}] ${entry.message}`;
+  const data = stringifyData(entry.data);
+  return data ? `${head} ${data}` : head;
+}
+
+function formatDiscordLine(entry) {
+  const head = `[${entry.time}] [${entry.service}] [${entry.level}] ${entry.message}`;
+  const data = stringifyData(entry.data);
+  const line = data ? `${head} ${data}` : head;
+  return String(line).slice(0, DISCORD_MESSAGE_SAFE_MAX_LENGTH);
+}
+
+function createDevLogger(deps) {
+  const {
+    client,
+    devAlertChannelId,
+    devLogChannelId,
+    level = DEFAULT_LOG_LEVEL,
+    service = "controller",
+    pretty = true,
+    logDir = "logs",
+    maxFileSizeBytes = DEFAULT_MAX_FILE_SIZE_BYTES,
+    maxFiles = DEFAULT_MAX_FILES,
+    discordLogLevel = DEFAULT_DISCORD_LOG_LEVEL,
+    discordAlertLevel = DEFAULT_DISCORD_ALERT_LEVEL,
+  } = deps || {};
+
+  const normalizedService = String(service || "controller").trim() || "controller";
+  const minimumLevelName = normalizeLevel(level, DEFAULT_LOG_LEVEL);
+  const minimumLevelValue = LOG_LEVELS[minimumLevelName];
+  const discordLogLevelValue = LOG_LEVELS[normalizeLevel(discordLogLevel, DEFAULT_DISCORD_LOG_LEVEL)];
+  const discordAlertLevelValue = LOG_LEVELS[normalizeLevel(discordAlertLevel, DEFAULT_DISCORD_ALERT_LEVEL)];
+  const safeLogDir = path.join(path.resolve(String(logDir || "logs")), normalizedService);
+
+  const appWriter = createRollingFileWriter({
+    filePath: path.join(safeLogDir, "app.log"),
+    maxSizeBytes: maxFileSizeBytes,
+    maxFiles,
+    onError: (message, data) => {
+      console.error(message, data);
+    },
+  });
+
+  const errorWriter = createRollingFileWriter({
+    filePath: path.join(safeLogDir, "error.log"),
+    maxSizeBytes: maxFileSizeBytes,
+    maxFiles,
+    onError: (message, data) => {
+      console.error(message, data);
+    },
+  });
+
+  const channelCache = new Map();
+
+  async function resolveChannel(channelId) {
+    const normalizedId = String(channelId || "").trim();
+    if (!normalizedId || !client?.user || !client?.channels?.fetch) {
+      return null;
+    }
+
+    const cached = channelCache.get(normalizedId);
+    if (cached?.send) {
+      return cached;
+    }
+
+    try {
+      const channel = await client.channels.fetch(normalizedId);
+      if (channel?.send) {
+        channelCache.set(normalizedId, channel);
+        return channel;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function sendDiscordLine(channelId, line) {
+    const trimmed = String(line || "").slice(0, DISCORD_MESSAGE_SAFE_MAX_LENGTH);
+    if (!trimmed) {
+      return;
+    }
+
+    const channel = await resolveChannel(channelId);
+    if (!channel) {
+      return;
+    }
+
+    try {
+      await channel.send(trimmed);
+    } catch (error) {
+      console.error("Failed to send Discord log line", { channelId, error });
+    }
+  }
+
+  async function sendEntryToDiscord(entry) {
+    const levelValue = LOG_LEVELS[entry.level] || LOG_LEVELS.info;
+    const line = formatDiscordLine(entry);
+    if (levelValue >= discordLogLevelValue) {
+      await sendDiscordLine(devLogChannelId, line);
+    }
+    if (levelValue >= discordAlertLevelValue) {
+      await sendDiscordLine(devAlertChannelId, line);
+    }
+  }
+
+  function writeEntry(levelName, message, data) {
+    const normalizedLevel = normalizeLevel(levelName, DEFAULT_LOG_LEVEL);
+    const levelValue = LOG_LEVELS[normalizedLevel];
+    if (levelValue < minimumLevelValue) {
+      return;
+    }
+
+    const entry = {
+      time: new Date().toISOString(),
+      level: normalizedLevel,
+      service: normalizedService,
+      pid: process.pid,
+      message: String(message || "").trim() || "(empty message)",
+      data: data === undefined ? undefined : normalizePayload(data),
+    };
+
+    const jsonLine = JSON.stringify(entry);
+    appWriter.write(jsonLine);
+    if (levelValue >= LOG_LEVELS.error) {
+      errorWriter.write(jsonLine);
+    }
+
+    if (pretty) {
+      const line = formatConsoleLine(entry);
+      if (levelValue >= LOG_LEVELS.error) {
+        console.error(line);
+      } else {
+        console.log(line);
+      }
+    } else if (levelValue >= LOG_LEVELS.error) {
+      console.error(jsonLine);
+    } else {
+      console.log(jsonLine);
+    }
+
+    void sendEntryToDiscord(entry);
+  }
+
+  function logTrace(message, data) {
+    writeEntry("trace", message, data);
+  }
+
+  function logDebug(message, data) {
+    writeEntry("debug", message, data);
+  }
+
+  function logInfo(message, data) {
+    writeEntry("info", message, data);
+  }
+
+  function logWarn(message, data) {
+    writeEntry("warn", message, data);
+  }
+
+  function logError(message, error) {
+    writeEntry("error", message, error);
+  }
+
+  async function sendDevAlert(message) {
+    await sendDiscordLine(devAlertChannelId, message);
+  }
+
+  async function sendDevLog(message) {
+    await sendDiscordLine(devLogChannelId, message);
+  }
+
+  return {
+    logTrace,
+    logDebug,
     logInfo,
+    logWarn,
     logError,
     sendDevAlert,
     sendDevLog,

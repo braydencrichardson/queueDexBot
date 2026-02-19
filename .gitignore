@@ -9,6 +9,7 @@ pnpm-debug.log*
 dist/
 build/
 coverage/
+logs/
 .DS_Store
 .youtubecookies.json
 .soundcloudcookies.json

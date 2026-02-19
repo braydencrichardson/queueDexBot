@@ -39,6 +39,7 @@ const { createTrackResolver } = require("./src/providers/track-resolver");
 const { enqueueTracks, ensureTrackId, getTrackIndexById, getQueuedTrackIndex, formatDuration } = require("./src/queue/utils");
 const { createQueuePlayback } = require("./src/queue/playback");
 const { createQueueSession } = require("./src/queue/session");
+const { createQueueService } = require("./src/queue/service");
 const { buildQueueViewComponents, formatQueueViewContent, buildMoveMenu } = require("./src/ui/queueView");
 const { buildQueuedActionComponents, buildNowPlayingControls, buildPlaylistQueuedComponents } = require("./src/ui/controls");
 const { formatMovePrompt } = require("./src/ui/messages");
@@ -78,6 +79,14 @@ const { logInfo, logError, sendDevAlert } = createDevLogger({
   client,
   devAlertChannelId: env.devAlertChannelId,
   devLogChannelId: env.devLogChannelId,
+  level: env.logLevel,
+  service: env.logServiceName,
+  pretty: env.logPretty,
+  logDir: env.logDir,
+  maxFileSizeBytes: env.logMaxSizeBytes,
+  maxFiles: env.logMaxFiles,
+  discordLogLevel: env.devLogLevel,
+  discordAlertLevel: env.devAlertLevel,
 });
 
 const {
@@ -198,6 +207,12 @@ const {
   },
 });
 
+const queueService = createQueueService({
+  stopAndLeaveQueue,
+  maybeRefreshNowPlayingUpNext,
+  sendNowPlaying,
+});
+
 const apiServer = env.authServerEnabled
   ? createApiServer({
     queues,
@@ -239,6 +254,7 @@ const apiServer = env.authServerEnabled
       }
       return member?.voice?.channelId || member?.voice?.channel?.id || null;
     },
+    queueService,
     stopAndLeaveQueue,
     maybeRefreshNowPlayingUpNext,
     sendNowPlaying,
@@ -431,6 +447,7 @@ registerInteractionHandler(client, {
   isSpotifyUrl,
   hasSpotifyCredentials,
   stopAndLeaveQueue,
+  queueService,
 });
 
 client.login(env.token).catch((error) => {

@@ -48,6 +48,7 @@ function createCommandInteractionHandler(deps) {
     isSpotifyUrl,
     hasSpotifyCredentials,
     stopAndLeaveQueue,
+    queueService = null,
   } = deps;
   const queueViewPageSize = Number.isFinite(QUEUE_VIEW_PAGE_SIZE) ? QUEUE_VIEW_PAGE_SIZE : CONFIG_QUEUE_VIEW_PAGE_SIZE;
   const queueViewService = createQueueViewService({
@@ -529,7 +530,15 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
-      queue.player.pause();
+      if (queueService?.pause) {
+        const result = await queueService.pause(queue, { refreshNowPlaying: false });
+        if (!result.ok) {
+          await interaction.reply({ content: result.error || "Failed to pause playback.", flags: MessageFlags.Ephemeral });
+          return;
+        }
+      } else {
+        queue.player.pause();
+      }
       logInfo("Pausing playback");
       await interaction.reply("Paused.");
       return;
@@ -545,7 +554,15 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
-      queue.player.unpause();
+      if (queueService?.resume) {
+        const result = await queueService.resume(queue, { refreshNowPlaying: false });
+        if (!result.ok) {
+          await interaction.reply({ content: result.error || "Failed to resume playback.", flags: MessageFlags.Ephemeral });
+          return;
+        }
+      } else {
+        queue.player.unpause();
+      }
       logInfo("Resuming playback");
       await interaction.reply("Resumed.");
       return;
@@ -561,8 +578,16 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
+      if (queueService?.skip) {
+        const result = await queueService.skip(queue);
+        if (!result.ok) {
+          await interaction.reply({ content: result.error || "Failed to skip track.", flags: MessageFlags.Ephemeral });
+          return;
+        }
+      } else {
+        queue.player.stop(true);
+      }
       logInfo("Skipping track");
-      queue.player.stop(true);
       await interaction.reply("Skipped.");
       return;
     }
@@ -577,7 +602,15 @@ function createCommandInteractionHandler(deps) {
         await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
         return;
       }
-      stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
+      if (queueService?.stop) {
+        const result = await queueService.stop(queue, { reason: "Stopping playback and clearing queue" });
+        if (!result.ok) {
+          await interaction.reply({ content: result.error || "Failed to stop playback.", flags: MessageFlags.Ephemeral });
+          return;
+        }
+      } else {
+        stopAndLeaveQueue(queue, "Stopping playback and clearing queue");
+      }
       await interaction.reply("Stopped and cleared the queue.");
       return;
     }
@@ -611,9 +644,18 @@ function createCommandInteractionHandler(deps) {
           await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
           return;
         }
-        const removedCount = queue.tracks.length;
-        queue.tracks = [];
-        await maybeRefreshNowPlayingUpNext(queue);
+        let removedCount = queue.tracks.length;
+        if (queueService?.clear) {
+          const result = await queueService.clear(queue, { refreshNowPlayingUpNext: true });
+          if (!result.ok) {
+            await interaction.reply({ content: result.error || "Failed to clear queue.", flags: MessageFlags.Ephemeral });
+            return;
+          }
+          removedCount = Number.isFinite(result.removedCount) ? result.removedCount : removedCount;
+        } else {
+          queue.tracks = [];
+          await maybeRefreshNowPlayingUpNext(queue);
+        }
         await interaction.reply(formatQueueClearedNotice(removedCount));
         return;
       }

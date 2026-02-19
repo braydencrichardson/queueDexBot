@@ -104,6 +104,19 @@ Dev logging:
 
 - `DEV_ALERT_CHANNEL_ID`: Optional Discord channel for alert messages.
 - `DEV_LOG_CHANNEL_ID`: Optional Discord channel for verbose log forwarding.
+- `DEV_ALERT_LEVEL`: Minimum level sent to `DEV_ALERT_CHANNEL_ID` (default: `error`).
+- `DEV_LOG_LEVEL`: Minimum level sent to `DEV_LOG_CHANNEL_ID` (default: `info`).
+
+Structured file logging:
+
+- `LOG_LEVEL`: Minimum app log level (`trace|debug|info|warn|error|fatal`, default: `info`).
+- `LOG_DIR`: Base log directory (default: `logs`).
+- `LOG_SERVICE_NAME`: Service folder under `LOG_DIR` (default: `controller`).
+- `LOG_PRETTY`: `1` (default) for readable console output, `0` for JSON lines.
+- `LOG_MAX_SIZE_BYTES`: Rotate when log file reaches this size (bytes or `kb|mb|gb`, default: `10mb`).
+- `LOG_MAX_FILES`: Number of rotated files to keep per log stream (default: `10`).
+
+Log files are written to `<LOG_DIR>/<LOG_SERVICE_NAME>/app.log` and `<LOG_DIR>/<LOG_SERVICE_NAME>/error.log` (plus rotated suffixes).
 
 ## Register Commands
 

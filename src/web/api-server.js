@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 const http = require("node:http");
+const { createQueueService } = require("../queue/service");
 
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DEFAULT_OAUTH_SCOPES = "identify guilds";
@@ -269,6 +270,7 @@ function createApiServer(options) {
     logError = () => {},
     isBotInGuild = () => true,
     getUserVoiceChannelId = async () => null,
+    queueService = null,
     stopAndLeaveQueue = null,
     maybeRefreshNowPlayingUpNext = async () => {},
     sendNowPlaying = async () => {},
@@ -296,6 +298,17 @@ function createApiServer(options) {
   const oauthConfigured = Boolean(oauthClientId && oauthClientSecret);
   const pendingWebStates = new Map();
   const sessions = new Map();
+  const stopQueueAction = typeof stopAndLeaveQueue === "function"
+    ? stopAndLeaveQueue
+    : (queue, reason) => {
+      logInfo("Using API stop fallback queue cleanup", { reason });
+      stopQueueFallback(queue);
+    };
+  const controlService = queueService || createQueueService({
+    stopAndLeaveQueue: stopQueueAction,
+    maybeRefreshNowPlayingUpNext,
+    sendNowPlaying,
+  });
 
   function createSession(payload) {
     const sessionId = crypto.randomUUID();
@@ -457,44 +470,17 @@ function createApiServer(options) {
       }
     }
 
-    const hasCurrent = Boolean(queue.current);
     try {
-      if (action === "pause") {
-        if (!hasCurrent) {
-          sendJson(response, 409, { error: "Nothing is playing." });
-          return;
-        }
-        queue.player.pause();
-      } else if (action === "resume") {
-        if (!hasCurrent) {
-          sendJson(response, 409, { error: "Nothing is playing." });
-          return;
-        }
-        queue.player.unpause();
-      } else if (action === "skip") {
-        if (!hasCurrent) {
-          sendJson(response, 409, { error: "Nothing is playing." });
-          return;
-        }
-        queue.player.stop(true);
-      } else if (action === "stop") {
-        if (typeof stopAndLeaveQueue === "function") {
-          stopAndLeaveQueue(queue, "Stopping playback and clearing queue (Activity/web control)");
-        } else {
-          stopQueueFallback(queue);
-        }
-      } else if (action === "clear") {
-        queue.tracks = [];
-      } else {
-        sendJson(response, 400, { error: `Unsupported action: ${action}` });
+      const result = await controlService.applyControlAction(queue, action, {
+        refreshNowPlayingUpNextOnClear: true,
+        refreshNowPlayingOnPauseResume: true,
+        stopReason: "Stopping playback and clearing queue (Activity/web control)",
+      });
+      if (!result.ok) {
+        sendJson(response, result.statusCode || 400, {
+          error: result.error || "Failed to apply action",
+        });
         return;
-      }
-
-      if (action === "clear") {
-        await maybeRefreshNowPlayingUpNext(queue);
-      }
-      if (action === "pause" || action === "resume") {
-        await sendNowPlaying(queue, false);
       }
 
       logInfo("Applied activity/web control action", {
