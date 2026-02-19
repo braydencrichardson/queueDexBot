@@ -441,6 +441,8 @@ const apiServer = env.authServerEnabled
       sessionTtlMs: env.authSessionTtlMs,
       cookieName: env.authSessionCookieName,
       cookieSecure: env.authSessionCookieSecure,
+      sessionStoreEnabled: env.authSessionStoreEnabled,
+      sessionStorePath: env.authSessionStorePath,
       adminUserIds: env.authAdminUserIds,
     },
   })

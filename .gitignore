@@ -10,6 +10,7 @@ dist/
 build/
 coverage/
 logs/
+data/
 .DS_Store
 .youtubecookies.json
 .soundcloudcookies.json

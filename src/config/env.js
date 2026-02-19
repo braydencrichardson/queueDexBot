@@ -100,6 +100,8 @@ function loadEnvVars(sourceEnv = process.env) {
     authSessionTtlMs: parseInt(sourceEnv.AUTH_SESSION_TTL_MS || "", 10),
     authSessionCookieName: sourceEnv.AUTH_SESSION_COOKIE_NAME || "qdex_session",
     authSessionCookieSecure: parseBooleanEnv(sourceEnv.AUTH_SESSION_COOKIE_SECURE, true),
+    authSessionStoreEnabled: parseBooleanEnv(sourceEnv.AUTH_SESSION_STORE_ENABLED, true),
+    authSessionStorePath: sourceEnv.AUTH_SESSION_STORE_PATH || "data/auth-sessions.json",
     authAdminUserIds: parseIdListEnv(sourceEnv.AUTH_ADMIN_USER_IDS),
     logLevel: String(sourceEnv.LOG_LEVEL || "info").trim().toLowerCase() || "info",
     logDir: sourceEnv.LOG_DIR || "logs",

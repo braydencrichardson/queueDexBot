@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const { createApiServer } = require("../src/web/api-server");
 
@@ -388,6 +391,58 @@ test("auth refresh-guilds returns conflict when session lacks guilds scope", asy
     );
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test("auth session persists across api server restarts when session store is enabled", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qdex-session-store-"));
+  const sessionStorePath = path.join(tempDir, "sessions.json");
+  const serverConfig = {
+    cookieSecure: false,
+    sessionStoreEnabled: true,
+    sessionStorePath,
+  };
+
+  try {
+    const firstServer = createApiServer({
+      queues: new Map(),
+      config: serverConfig,
+    });
+
+    const cookie = await createSessionCookie(firstServer);
+    const beforeRestart = await dispatch(firstServer, {
+      method: "GET",
+      path: "/auth/me",
+      headers: {
+        cookie,
+      },
+    });
+    assert.equal(beforeRestart.statusCode, 200);
+    assert.equal(beforeRestart.json?.authenticated, true);
+    assert.equal(beforeRestart.json?.user?.id, "user-1");
+    assert.equal(fs.existsSync(sessionStorePath), true);
+
+    const restartedServer = createApiServer({
+      queues: new Map(),
+      config: serverConfig,
+    });
+
+    const afterRestart = await dispatch(restartedServer, {
+      method: "GET",
+      path: "/auth/me",
+      headers: {
+        cookie,
+      },
+    });
+    assert.equal(afterRestart.statusCode, 200);
+    assert.equal(afterRestart.json?.authenticated, true);
+    assert.equal(afterRestart.json?.user?.id, "user-1");
+  } finally {
+    global.fetch = originalFetch;
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 

@@ -28,6 +28,8 @@ test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   assert.equal(Number.isNaN(env.authSessionTtlMs), true);
   assert.equal(env.authSessionCookieName, "qdex_session");
   assert.equal(env.authSessionCookieSecure, true);
+  assert.equal(env.authSessionStoreEnabled, true);
+  assert.equal(env.authSessionStorePath, "data/auth-sessions.json");
   assert.deepEqual(env.authAdminUserIds, []);
   assert.equal(env.logLevel, "info");
   assert.equal(env.logDir, "logs");
@@ -67,6 +69,8 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
     AUTH_SESSION_TTL_MS: "3600000",
     AUTH_SESSION_COOKIE_NAME: "qdex_cookie",
     AUTH_SESSION_COOKIE_SECURE: "0",
+    AUTH_SESSION_STORE_ENABLED: "0",
+    AUTH_SESSION_STORE_PATH: "/tmp/qdex-sessions.json",
     AUTH_ADMIN_USER_IDS: "123, 456 789,123",
     LOG_LEVEL: "debug",
     LOG_DIR: "/tmp/queuedex-logs",
@@ -105,6 +109,8 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   assert.equal(env.authSessionTtlMs, 3600000);
   assert.equal(env.authSessionCookieName, "qdex_cookie");
   assert.equal(env.authSessionCookieSecure, false);
+  assert.equal(env.authSessionStoreEnabled, false);
+  assert.equal(env.authSessionStorePath, "/tmp/qdex-sessions.json");
   assert.deepEqual(env.authAdminUserIds, ["123", "456", "789"]);
   assert.equal(env.logLevel, "debug");
   assert.equal(env.logDir, "/tmp/queuedex-logs");

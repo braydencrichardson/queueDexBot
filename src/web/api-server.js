@@ -1,10 +1,13 @@
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const http = require("node:http");
+const path = require("node:path");
 const { createQueueService } = require("../queue/service");
 
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DEFAULT_OAUTH_SCOPES = "identify guilds";
 const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const DEFAULT_SESSION_STORE_PATH = path.join("data", "auth-sessions.json");
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const STATE_TTL_MS = 5 * 60 * 1000;
 const SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -497,6 +500,9 @@ function createApiServer(options) {
   const cookieName = String(config.cookieName || "qdex_session").trim() || "qdex_session";
   const cookieSecure = toBoolean(config.cookieSecure, true);
   const cookieSameSite = cookieSecure ? "None" : "Lax";
+  const sessionStoreEnabled = toBoolean(config.sessionStoreEnabled, true);
+  const rawSessionStorePath = String(config.sessionStorePath || DEFAULT_SESSION_STORE_PATH).trim() || DEFAULT_SESSION_STORE_PATH;
+  const sessionStorePath = path.resolve(rawSessionStorePath);
   const adminUserIds = new Set(normalizeUserIdList(config.adminUserIds));
 
   const oauthConfigured = Boolean(oauthClientId && oauthClientSecret);
@@ -515,6 +521,161 @@ function createApiServer(options) {
     sendNowPlaying,
   });
 
+  function normalizePersistedSessionUser(user) {
+    if (!user || typeof user !== "object") {
+      return null;
+    }
+    const id = String(user.id || "").trim() || null;
+    const username = String(user.username || "").trim() || null;
+    const globalName = String(user.globalName || user.global_name || "").trim() || null;
+    const avatar = String(user.avatar || "").trim() || null;
+    if (!id && !username) {
+      return null;
+    }
+    return {
+      id,
+      username,
+      globalName,
+      avatar,
+    };
+  }
+
+  function normalizePersistedSessionGuild(guild) {
+    if (!guild || typeof guild !== "object") {
+      return null;
+    }
+    const id = String(guild.id || "").trim() || null;
+    if (!id) {
+      return null;
+    }
+    const name = String(guild.name || "").trim() || null;
+    return {
+      id,
+      name,
+      owner: Boolean(guild.owner),
+      permissions: guild.permissions || null,
+    };
+  }
+
+  function serializeSessionForStore(session) {
+    if (!session || typeof session !== "object") {
+      return null;
+    }
+    return {
+      id: String(session.id || "").trim() || null,
+      createdAt: Number.isFinite(session.createdAt) ? session.createdAt : Date.now(),
+      expiresAt: Number.isFinite(session.expiresAt) ? session.expiresAt : Date.now(),
+      user: normalizePersistedSessionUser(session.user),
+      guilds: Array.isArray(session.guilds)
+        ? session.guilds.map(normalizePersistedSessionGuild).filter(Boolean)
+        : [],
+      scopes: normalizeScopes(session.scopes || oauthScopes),
+      accessToken: String(session.accessToken || "").trim() || null,
+      tokenType: String(session.tokenType || "Bearer").trim() || "Bearer",
+      adminBypassVoiceChannelCheck: Boolean(session.adminBypassVoiceChannelCheck),
+      adminBypassGuildAccess: Boolean(session.adminBypassGuildAccess),
+    };
+  }
+
+  function normalizeStoredSession(rawSession) {
+    if (!rawSession || typeof rawSession !== "object") {
+      return null;
+    }
+    const id = String(rawSession.id || "").trim();
+    if (!id) {
+      return null;
+    }
+    const now = Date.now();
+    const createdAt = Number.isFinite(rawSession.createdAt) ? rawSession.createdAt : now;
+    const expiresAt = Number.isFinite(rawSession.expiresAt) ? rawSession.expiresAt : (now - 1);
+    if (expiresAt <= now) {
+      return null;
+    }
+    const user = normalizePersistedSessionUser(rawSession.user);
+    if (!user?.id) {
+      return null;
+    }
+    return {
+      id,
+      createdAt,
+      expiresAt,
+      user,
+      guilds: Array.isArray(rawSession.guilds)
+        ? rawSession.guilds.map(normalizePersistedSessionGuild).filter(Boolean)
+        : [],
+      scopes: normalizeScopes(rawSession.scopes || oauthScopes),
+      accessToken: String(rawSession.accessToken || "").trim() || null,
+      tokenType: String(rawSession.tokenType || "Bearer").trim() || "Bearer",
+      adminBypassVoiceChannelCheck: Boolean(rawSession.adminBypassVoiceChannelCheck),
+      adminBypassGuildAccess: Boolean(rawSession.adminBypassGuildAccess),
+    };
+  }
+
+  function persistSessionsToStore() {
+    if (!sessionStoreEnabled) {
+      return;
+    }
+    try {
+      fs.mkdirSync(path.dirname(sessionStorePath), { recursive: true });
+      const payload = {
+        version: 1,
+        savedAt: Date.now(),
+        sessions: Array.from(sessions.values())
+          .map(serializeSessionForStore)
+          .filter(Boolean),
+      };
+      fs.writeFileSync(sessionStorePath, JSON.stringify(payload), "utf8");
+    } catch (error) {
+      logError("Failed to persist auth session store", {
+        sessionStorePath,
+        error,
+      });
+    }
+  }
+
+  function loadSessionsFromStore() {
+    if (!sessionStoreEnabled) {
+      return;
+    }
+    if (!fs.existsSync(sessionStorePath)) {
+      return;
+    }
+    try {
+      const raw = fs.readFileSync(sessionStorePath, "utf8");
+      if (!String(raw || "").trim()) {
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const rawSessions = Array.isArray(parsed)
+        ? parsed
+        : (Array.isArray(parsed?.sessions) ? parsed.sessions : []);
+      let loadedCount = 0;
+      let droppedCount = 0;
+      rawSessions.forEach((entry) => {
+        const normalized = normalizeStoredSession(entry);
+        if (!normalized) {
+          droppedCount += 1;
+          return;
+        }
+        sessions.set(normalized.id, normalized);
+        loadedCount += 1;
+      });
+      if (droppedCount > 0) {
+        persistSessionsToStore();
+      }
+      logInfo("Loaded auth sessions from store", {
+        sessionStorePath,
+        loadedCount,
+        droppedCount,
+      });
+    } catch (error) {
+      logError("Failed to load auth session store", {
+        sessionStorePath,
+        error,
+      });
+    }
+  }
+
   function createSession(payload) {
     const sessionId = crypto.randomUUID();
     const expiresAt = Date.now() + sessionTtlMs;
@@ -530,6 +691,7 @@ function createApiServer(options) {
       adminBypassVoiceChannelCheck: false,
       adminBypassGuildAccess: false,
     });
+    persistSessionsToStore();
     return sessions.get(sessionId);
   }
 
@@ -573,10 +735,13 @@ function createApiServer(options) {
     }
     if (session.expiresAt <= Date.now()) {
       sessions.delete(session.id);
+      persistSessionsToStore();
       return null;
     }
     return session;
   }
+
+  loadSessionsFromStore();
 
   function canAccessGuild(session, guildId) {
     if (!session || !guildId) {
@@ -748,6 +913,7 @@ function createApiServer(options) {
       ? guildPayload.map(summarizeGuild).filter(Boolean)
       : [];
     session.guilds = guilds;
+    persistSessionsToStore();
     return guilds;
   }
 
@@ -993,6 +1159,7 @@ function createApiServer(options) {
       );
       session.adminBypassGuildAccess = bypassGuildAccess;
     }
+    persistSessionsToStore();
 
     const settings = getSessionAdminSettings(session);
 
@@ -1744,6 +1911,7 @@ function createApiServer(options) {
         const session = getSessionFromRequest(request);
         if (session) {
           sessions.delete(session.id);
+          persistSessionsToStore();
         }
         response.setHeader("Set-Cookie", serializeCookie({
           name: cookieName,
@@ -1860,11 +2028,16 @@ function createApiServer(options) {
         pendingWebStates.delete(state);
       }
     });
+    let removedSessions = 0;
     sessions.forEach((session, sessionId) => {
       if (!session || session.expiresAt <= now) {
         sessions.delete(sessionId);
+        removedSessions += 1;
       }
     });
+    if (removedSessions > 0) {
+      persistSessionsToStore();
+    }
   }, SESSION_CLEANUP_INTERVAL_MS);
   if (typeof cleanupInterval.unref === "function") {
     cleanupInterval.unref();
@@ -1879,6 +2052,9 @@ function createApiServer(options) {
           oauthConfigured,
           oauthWebRedirectUri: oauthWebRedirectUri || null,
           oauthActivityRedirectUri: oauthActivityRedirectUri || null,
+          sessionStoreEnabled,
+          sessionStorePath: sessionStoreEnabled ? sessionStorePath : null,
+          sessionCount: sessions.size,
         });
       });
       server.on("error", (error) => {

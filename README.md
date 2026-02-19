@@ -69,6 +69,8 @@ Discord OAuth / API server (for Activity + future web view):
 - `AUTH_SESSION_TTL_MS`: Optional session TTL in ms (default: 8 hours).
 - `AUTH_SESSION_COOKIE_NAME`: Session cookie name (default: `qdex_session`).
 - `AUTH_SESSION_COOKIE_SECURE`: `1` (default) or `0`.
+- `AUTH_SESSION_STORE_ENABLED`: `1` (default) to persist auth sessions across process restarts, `0` for in-memory only.
+- `AUTH_SESSION_STORE_PATH`: Session store file path (default: `data/auth-sessions.json`).
 - `AUTH_ADMIN_USER_IDS`: Optional comma/space-separated Discord user IDs for Activity admin overrides.
 
 yt-dlp / YouTube:
