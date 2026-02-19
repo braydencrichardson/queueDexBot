@@ -25,11 +25,8 @@ function formatActivityInviteResponse({
   if (!normalizedInviteUrl) {
     throw new Error("inviteUrl is required");
   }
-  const launchVerb = reused ? "Reused" : "Created";
-  const safeVoiceChannelName = String(voiceChannelName || "voice").trim() || "voice";
   const lines = [
-    `${launchVerb} an Activity invite for **${safeVoiceChannelName}**.`,
-    normalizedInviteUrl,
+    `Activity: <${normalizedInviteUrl}>`,
   ];
 
   const normalizedWebUrl = normalizeHttpUrl(activityWebUrl);

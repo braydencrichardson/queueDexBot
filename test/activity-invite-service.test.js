@@ -59,3 +59,48 @@ test("activity invite service reuses invite per guild/channel/app and rotates wh
   assert.equal(createInviteCalls[0].options.unique, false);
   assert.equal(createInviteCalls[0].options.maxAge, 7200);
 });
+
+test("activity invite service clears pending entry after invite failure so retries can succeed", async () => {
+  const service = createActivityInviteService();
+  let createInviteCalls = 0;
+  let shouldFailFirstAttempt = true;
+
+  const voiceChannel = {
+    id: "voice-1",
+    name: "General",
+    guild: { id: "guild-1" },
+    createInvite: async () => {
+      createInviteCalls += 1;
+      if (shouldFailFirstAttempt) {
+        shouldFailFirstAttempt = false;
+        const error = new Error("Missing Permissions");
+        error.code = 50013;
+        throw error;
+      }
+      return {
+        code: "retry-ok",
+        url: "https://discord.gg/retry-ok",
+        expiresTimestamp: Date.now() + 15 * 60 * 1000,
+      };
+    },
+  };
+
+  await assert.rejects(
+    service.getOrCreateInvite({
+      voiceChannel,
+      applicationId: "app-1",
+      reason: "first-fails",
+    }),
+    (error) => error?.code === 50013
+  );
+
+  const second = await service.getOrCreateInvite({
+    voiceChannel,
+    applicationId: "app-1",
+    reason: "retry-works",
+  });
+
+  assert.equal(createInviteCalls, 2);
+  assert.equal(second.reused, false);
+  assert.equal(second.url, "https://discord.gg/retry-ok");
+});

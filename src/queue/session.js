@@ -58,6 +58,7 @@ function createQueueSession(deps) {
       queues.set(guildId, {
         guildId,
         textChannel: null,
+        textChannelId: null,
         voiceChannel: null,
         connection: null,
         player: createAudioPlayer({
@@ -82,6 +83,7 @@ function createQueueSession(deps) {
         suppressNextIdle: false,
         deferredResolveInFlight: false,
         loopMode: LOOP_MODES.OFF,
+        activityFeed: [],
       });
     }
     return queues.get(guildId);

@@ -886,7 +886,7 @@ test("np_activity replies with an ephemeral activity invite link", async () => {
   assert.equal(inviteCallCount, 1);
   assert.equal(deferred, false);
   assert.deepEqual(replyPayload, {
-    content: "Created an Activity invite for **Music VC**.\nhttps://discord.gg/np-activity",
+    content: "Activity: <https://discord.gg/np-activity>",
     flags: MessageFlags.Ephemeral,
   });
 });
@@ -984,7 +984,7 @@ test("queue_activity replies with invite link without closing queue view", async
   assert.equal(queueViewEdited, false);
   assert.equal(queueViews.has("queue-msg-1"), true);
   assert.deepEqual(replyPayload, {
-    content: "Created an Activity invite for **Music VC**.\nhttps://discord.gg/queue-activity",
+    content: "Activity: <https://discord.gg/queue-activity>",
     flags: MessageFlags.Ephemeral,
   });
   clearTimeout(queueViews.get("queue-msg-1")?.timeout);

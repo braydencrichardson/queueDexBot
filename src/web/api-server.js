@@ -4,6 +4,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { createQueueService } = require("../queue/service");
 const { enqueueTracks, formatDuration, getQueuedTrackIndex } = require("../queue/utils");
+const { listQueueEvents } = require("../queue/event-feed");
 const { formatQueuedMessage, formatQueuedPlaylistMessage } = require("../ui/messages");
 const {
   buildControlActionFeedback,
@@ -24,6 +25,7 @@ const THUMBNAIL_PROXY_MAX_BYTES = 5 * 1024 * 1024;
 const THUMBNAIL_PROXY_CACHE_TTL_MS = 10 * 60 * 1000;
 const THUMBNAIL_PROXY_CACHE_MAX_ENTRIES = 400;
 const ACTIVITY_SEARCH_CHOOSER_TTL_MS = 90 * 1000;
+const ACTIVITY_USER_FEED_LIMIT = 20;
 const THUMBNAIL_PROXY_ALLOWED_HOST_SUFFIXES = [
   "ytimg.com",
   "ggpht.com",
@@ -392,6 +394,11 @@ function summarizeQueue(queue) {
       queueLength: 0,
       loopMode: "off",
       playerStatus: "idle",
+      attachments: {
+        voice: null,
+        text: null,
+      },
+      activityFeed: [],
       updatedAt: Date.now(),
     };
   }
@@ -404,6 +411,8 @@ function summarizeQueue(queue) {
     queueLength: Array.isArray(queue.tracks) ? queue.tracks.length : 0,
     loopMode: queue.loopMode || "off",
     playerStatus: queue?.player?.state?.status || "idle",
+    attachments: summarizeQueueAttachments(queue),
+    activityFeed: listQueueEvents(queue, { limit: ACTIVITY_USER_FEED_LIMIT }),
     updatedAt: Date.now(),
   };
 }
@@ -461,6 +470,62 @@ function isAllowedThumbnailHost(hostname) {
 
 function getQueueVoiceChannelId(queue) {
   return String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim() || null;
+}
+
+function summarizeChannelAttachment(channel, fallbackId = null) {
+  const id = String(channel?.id || fallbackId || "").trim() || null;
+  if (!id) {
+    return null;
+  }
+  const rawName = String(channel?.name || "").trim();
+  return {
+    id,
+    name: rawName || null,
+  };
+}
+
+function summarizeQueueAttachments(queue) {
+  if (!queue) {
+    return {
+      voice: null,
+      text: null,
+    };
+  }
+  const voiceChannelId = getQueueVoiceChannelId(queue);
+  const textChannelId = String(
+    queue?.textChannel?.id
+    || queue?.textChannelId
+    || queue?.nowPlayingChannelId
+    || ""
+  ).trim() || null;
+  return {
+    voice: summarizeChannelAttachment(queue?.voiceChannel, voiceChannelId),
+    text: summarizeChannelAttachment(queue?.textChannel, textChannelId),
+  };
+}
+
+function buildVoiceAccessHint({
+  canStartSearch,
+  bypassVoiceCheck,
+  queueVoiceChannelId,
+  userVoiceChannelId,
+  sameVoiceChannel,
+}) {
+  if (canStartSearch) {
+    return null;
+  }
+  if (bypassVoiceCheck) {
+    return null;
+  }
+  if (queueVoiceChannelId) {
+    if (!userVoiceChannelId) {
+      return "Join the bot voice channel before searching.";
+    }
+    if (!sameVoiceChannel) {
+      return "Join the same voice channel as the bot before searching.";
+    }
+  }
+  return "Join a voice channel before searching.";
 }
 
 async function exchangeDiscordCode({
@@ -528,6 +593,7 @@ function createApiServer(options) {
     getQueueForGuild = null,
     getBotGuilds = () => [],
     getUserVoiceChannelId = async () => null,
+    resolveTextChannelById = async () => null,
     getAdminEvents = () => [],
     getProviderStatus = () => null,
     verifyProviderAuthStatus = async () => null,
@@ -778,6 +844,52 @@ function createApiServer(options) {
       isAdmin,
       bypassVoiceChannelCheck: isAdmin && Boolean(session?.adminBypassVoiceChannelCheck),
       bypassGuildAccess: isAdmin && Boolean(session?.adminBypassGuildAccess),
+    };
+  }
+
+  async function getActivityVoiceAccessState({ guildId, queue, session, admin }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+    const bypassVoiceCheck = Boolean(admin?.bypassVoiceChannelCheck);
+    const userId = String(session?.user?.id || "").trim();
+    let userVoiceChannelId = null;
+
+    if (userId && normalizedGuildId) {
+      try {
+        userVoiceChannelId = await getUserVoiceChannelId(normalizedGuildId, userId);
+      } catch (error) {
+        logError("Failed to resolve user voice channel for activity state", {
+          guildId: normalizedGuildId,
+          userId,
+          error,
+        });
+      }
+    }
+
+    const normalizedUserVoiceChannelId = String(userVoiceChannelId || "").trim() || null;
+    const sameVoiceChannel = Boolean(
+      queueVoiceChannelId
+      && normalizedUserVoiceChannelId
+      && normalizedUserVoiceChannelId === queueVoiceChannelId
+    );
+    const canUseControls = bypassVoiceCheck || !queueVoiceChannelId || sameVoiceChannel;
+    const canStartSearch = bypassVoiceCheck || (queueVoiceChannelId
+      ? sameVoiceChannel
+      : Boolean(normalizedUserVoiceChannelId));
+    return {
+      bypassVoiceCheck,
+      queueVoiceChannelId,
+      userVoiceChannelId: normalizedUserVoiceChannelId,
+      sameVoiceChannel,
+      canUseControls,
+      canStartSearch,
+      searchBlockedHint: buildVoiceAccessHint({
+        canStartSearch,
+        bypassVoiceCheck,
+        queueVoiceChannelId,
+        userVoiceChannelId: normalizedUserVoiceChannelId,
+        sameVoiceChannel,
+      }),
     };
   }
 
@@ -1214,6 +1326,50 @@ function createApiServer(options) {
     }
   }
 
+  async function maybeAttachQueueTextChannel({ queue, guildId, body, source }) {
+    if (!queue || !body || typeof body !== "object") {
+      return false;
+    }
+
+    const requestedTextChannelId = String(body.text_channel_id ?? body.textChannelId ?? "").trim();
+    if (!requestedTextChannelId) {
+      return false;
+    }
+
+    const currentTextChannelId = String(queue?.textChannel?.id || queue?.textChannelId || "").trim() || null;
+    if (currentTextChannelId === requestedTextChannelId && queue?.textChannel?.send) {
+      queue.textChannelId = currentTextChannelId;
+      return true;
+    }
+
+    if (typeof resolveTextChannelById !== "function") {
+      return false;
+    }
+
+    try {
+      const resolvedChannel = await resolveTextChannelById(guildId, requestedTextChannelId);
+      if (!resolvedChannel?.send) {
+        return false;
+      }
+      queue.textChannel = resolvedChannel;
+      queue.textChannelId = String(resolvedChannel.id || requestedTextChannelId).trim();
+      logInfo("Attached queue text channel from activity/web request", {
+        guildId,
+        textChannelId: queue.textChannelId,
+        source: source || "unknown",
+      });
+      return true;
+    } catch (error) {
+      logError("Failed to attach queue text channel from activity/web request", {
+        guildId,
+        requestedTextChannelId,
+        source: source || "unknown",
+        error,
+      });
+      return false;
+    }
+  }
+
   async function queueTracksFromActivityRequest({ context, tracks, source }) {
     const queue = context?.queue;
     if (!queue || !Array.isArray(tracks) || !tracks.length) {
@@ -1335,6 +1491,12 @@ function createApiServer(options) {
     if (!context) {
       return;
     }
+    await maybeAttachQueueTextChannel({
+      queue: context.queue,
+      guildId: context.guildId,
+      body,
+      source: "queue_search",
+    });
 
     const normalizedQuery = String(normalizeQueryInput(rawQuery) || "").trim();
     if (!normalizedQuery) {
@@ -1498,6 +1660,12 @@ function createApiServer(options) {
     if (!context) {
       return;
     }
+    await maybeAttachQueueTextChannel({
+      queue: context.queue,
+      guildId: context.guildId,
+      body,
+      source: "queue_search_select",
+    });
 
     const chooser = getActivitySearchChooser(searchId);
     if (!chooser) {
@@ -1584,6 +1752,12 @@ function createApiServer(options) {
     if (!context) {
       return;
     }
+    await maybeAttachQueueTextChannel({
+      queue: context.queue,
+      guildId: context.guildId,
+      body,
+      source: "control",
+    });
 
     const { session, queue } = context;
     const isResumeAction = action === "resume";
@@ -1682,6 +1856,12 @@ function createApiServer(options) {
     if (!context) {
       return;
     }
+    await maybeAttachQueueTextChannel({
+      queue: context.queue,
+      guildId: context.guildId,
+      body,
+      source: "queue_action",
+    });
 
     const { session, queue } = context;
     const fromPosition = toFiniteInteger(body.from_position ?? body.fromPosition);
@@ -2669,9 +2849,17 @@ function createApiServer(options) {
           return;
         }
         const queue = queues?.get?.(guildId);
+        const admin = getSessionAdminSettings(session);
+        const data = summarizeQueue(queue);
+        data.access = await getActivityVoiceAccessState({
+          guildId,
+          queue,
+          session,
+          admin,
+        });
         sendJson(response, 200, {
           guildId,
-          data: summarizeQueue(queue),
+          data,
         });
         return;
       }

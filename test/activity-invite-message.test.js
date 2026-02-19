@@ -11,8 +11,7 @@ test("formatActivityInviteResponse includes optional web URL when valid", () => 
     activityWebUrl: "https://activity.example.com",
   });
 
-  assert.equal(content.includes("Reused an Activity invite for **General**."), true);
-  assert.equal(content.includes("https://discord.gg/test123"), true);
+  assert.equal(content.includes("Activity: <https://discord.gg/test123>"), true);
   assert.equal(content.includes("Web: <https://activity.example.com/>"), true);
 });
 
@@ -24,6 +23,6 @@ test("formatActivityInviteResponse ignores invalid web URL", () => {
     activityWebUrl: "javascript:alert(1)",
   });
 
-  assert.equal(content.includes("Created an Activity invite for **General**."), true);
+  assert.equal(content.includes("Activity: <https://discord.gg/test123>"), true);
   assert.equal(content.includes("Web:"), false);
 });

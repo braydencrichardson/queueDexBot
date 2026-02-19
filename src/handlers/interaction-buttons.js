@@ -722,6 +722,7 @@ function createButtonInteractionHandler(deps) {
         // no-op; just re-render below
       } else if (customId === "queue_nowplaying") {
         queue.textChannel = interaction.channel;
+        queue.textChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
         await interaction.deferUpdate();
         const nowPlayingMessage = await sendNowPlaying(queue, true);
         if (!nowPlayingMessage) {

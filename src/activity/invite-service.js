@@ -118,9 +118,14 @@ function createActivityInviteService(options = {}) {
     })();
 
     pendingInvites.set(cacheKey, createPromise);
-    createPromise.finally(() => {
-      pendingInvites.delete(cacheKey);
-    });
+    createPromise.then(
+      () => {
+        pendingInvites.delete(cacheKey);
+      },
+      () => {
+        pendingInvites.delete(cacheKey);
+      }
+    );
     return createPromise;
   }
 

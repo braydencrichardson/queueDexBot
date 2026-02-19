@@ -25,6 +25,7 @@ const BUILD_ID = typeof __QDEX_ACTIVITY_BUILD__ !== "undefined" ? __QDEX_ACTIVIT
 const TAB_PLAYER = "player";
 const TAB_UP_NEXT = "up_next";
 const TAB_QUEUE = "queue";
+const TAB_FEED = "feed";
 const TAB_DEBUG = "debug";
 const TAB_ADMIN = "admin";
 const THEME_DARK = "dark";
@@ -957,6 +958,158 @@ function getGuildSelectionMarkup() {
   return `<select id="guild-select" class="guild-compact-select" aria-label="Guild">${optionMarkup}</select>`;
 }
 
+function normalizeQueueAttachment(rawAttachment) {
+  if (!rawAttachment || typeof rawAttachment !== "object") {
+    return null;
+  }
+  const id = String(rawAttachment.id || "").trim();
+  if (!id) {
+    return null;
+  }
+  const name = String(rawAttachment.name || "").trim() || null;
+  return {
+    id,
+    name,
+  };
+}
+
+function getQueueChannelAttachments() {
+  const queue = getCurrentQueueData();
+  const attachments = queue?.attachments;
+  return {
+    voice: normalizeQueueAttachment(attachments?.voice),
+    text: normalizeQueueAttachment(attachments?.text),
+  };
+}
+
+function getQueueVoiceAccessState() {
+  const queue = getCurrentQueueData();
+  const access = queue?.access && typeof queue.access === "object" ? queue.access : {};
+  const attachments = getQueueChannelAttachments();
+  const queueVoiceChannelId = String(access.queueVoiceChannelId || attachments.voice?.id || "").trim() || null;
+  const userVoiceChannelId = String(access.userVoiceChannelId || "").trim() || null;
+  const bypassVoiceCheck = Boolean(access.bypassVoiceCheck);
+  const sameVoiceChannel = Boolean(access.sameVoiceChannel)
+    || Boolean(queueVoiceChannelId && userVoiceChannelId && queueVoiceChannelId === userVoiceChannelId);
+  const canUseControls = Boolean(access.canUseControls)
+    || bypassVoiceCheck
+    || !queueVoiceChannelId
+    || sameVoiceChannel;
+  const canStartSearch = Boolean(
+    access.canStartSearch
+    ?? (bypassVoiceCheck || (queueVoiceChannelId ? sameVoiceChannel : Boolean(userVoiceChannelId)))
+  );
+
+  let searchBlockedHint = String(access.searchBlockedHint || "").trim();
+  if (!searchBlockedHint && !canStartSearch) {
+    if (queueVoiceChannelId) {
+      searchBlockedHint = userVoiceChannelId
+        ? "Join the same voice channel as the bot before searching."
+        : "Join the bot voice channel before searching.";
+    } else {
+      searchBlockedHint = "Join a voice channel before searching.";
+    }
+  }
+
+  return {
+    queueVoiceChannelId,
+    userVoiceChannelId,
+    bypassVoiceCheck,
+    sameVoiceChannel,
+    canUseControls,
+    canStartSearch,
+    searchBlockedHint,
+  };
+}
+
+function getDiscordChannelUrl(channelId) {
+  const normalizedChannelId = String(channelId || "").trim();
+  if (!normalizedChannelId) {
+    return null;
+  }
+  const guildId = String(
+    state.selectedGuildId
+    || state.queueSummary?.guildId
+    || state.sdkContext.guildId
+    || ""
+  ).trim();
+  if (!guildId) {
+    return null;
+  }
+  return `https://discord.com/channels/${encodeURIComponent(guildId)}/${encodeURIComponent(normalizedChannelId)}`;
+}
+
+function formatVoiceAttachmentLabel(attachment) {
+  if (!attachment?.id) {
+    return "Voice: none";
+  }
+  const name = String(attachment.name || "").trim();
+  if (name) {
+    return `Voice: ${name}`;
+  }
+  return `Voice: ${attachment.id}`;
+}
+
+function formatTextAttachmentLabel(attachment) {
+  if (!attachment?.id) {
+    return "Text: none";
+  }
+  const name = String(attachment.name || "").trim();
+  if (name) {
+    return `Text: #${name}`;
+  }
+  return `Text: ${attachment.id}`;
+}
+
+function getQueueChannelIndicatorMarkup() {
+  const attachments = getQueueChannelAttachments();
+  const voice = attachments.voice;
+  const text = attachments.text;
+
+  const voiceTitle = voice?.id
+    ? `Current queue voice channel (${voice.id}).`
+    : "No active voice channel is attached to this queue.";
+  const textTitle = text?.id
+    ? `Current queue text channel (${text.id}).`
+    : "No text channel attached. Use /join in your target voice/text channel.";
+  const textChannelUrl = text?.id ? getDiscordChannelUrl(text.id) : null;
+  const textLabel = escapeHtml(formatTextAttachmentLabel(text));
+  const textIndicatorMarkup = textChannelUrl
+    ? `<a class="channel-indicator channel-indicator-link" href="${escapeHtml(textChannelUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(`${textTitle} Open channel in Discord.`)}">${textLabel}</a>`
+    : `<span class="channel-indicator${text?.id ? "" : " missing"}" title="${escapeHtml(textTitle)}">${textLabel}</span>`;
+
+  return `
+    <div class="channel-indicator-row">
+      <span class="channel-indicator${voice?.id ? "" : " missing"}" title="${escapeHtml(voiceTitle)}">${escapeHtml(formatVoiceAttachmentLabel(voice))}</span>
+      ${textIndicatorMarkup}
+    </div>
+  `;
+}
+
+function getQueueEventFeedMarkup() {
+  const queue = getCurrentQueueData();
+  const entries = Array.isArray(queue?.activityFeed) ? queue.activityFeed : [];
+  if (!entries.length) {
+    return `<p class="muted">No playback or queue updates yet.</p>`;
+  }
+  const newestFirst = entries.slice().reverse();
+  return `
+    <ul class="queue-event-feed-list">
+      ${newestFirst.map((entry) => {
+    const eventTime = Date.parse(String(entry?.time || ""));
+    const timeLabel = Number.isFinite(eventTime) ? formatTime(eventTime) : "--:--:--";
+    const message = String(entry?.message || "").trim() || "Queue event";
+    return `
+          <li class="queue-event-feed-row">
+            <span class="queue-event-feed-time">${escapeHtml(timeLabel)}</span>
+            <span class="queue-event-feed-message">${escapeHtml(message)}</span>
+          </li>
+        `;
+  }).join("")}
+    </ul>
+  `;
+}
+
 function getQueueListData() {
   return state.queueList;
 }
@@ -1035,9 +1188,14 @@ function isQueueSearchPanelVisible() {
 }
 
 function getQueueSearchToggleButtonMarkup() {
+  const voiceAccess = getQueueVoiceAccessState();
   const isVisible = isQueueSearchPanelVisible();
   const label = isVisible ? "Hide Search" : "Search";
-  return `<button type="button" class="btn${isVisible ? " btn-secondary" : ""}" data-search-toggle="toggle"${state.queueSearchBusy ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+  const searchDisabled = !voiceAccess.canStartSearch;
+  const titleAttr = searchDisabled && voiceAccess.searchBlockedHint
+    ? ` title="${escapeHtml(voiceAccess.searchBlockedHint)}"`
+    : "";
+  return `<button type="button" class="btn${isVisible ? " btn-secondary" : ""}" data-search-toggle="toggle"${state.queueSearchBusy || searchDisabled ? " disabled" : ""}${titleAttr}>${escapeHtml(label)}</button>`;
 }
 
 function clearQueueSearchChooser() {
@@ -1206,6 +1364,11 @@ function getQueueActionFeedMarkup() {
 }
 
 function getQueueSearchComposerMarkup() {
+  const voiceAccess = getQueueVoiceAccessState();
+  const searchDisabled = !voiceAccess.canStartSearch;
+  const disabledHint = searchDisabled
+    ? `<p class="muted queue-search-blocked-hint">${escapeHtml(voiceAccess.searchBlockedHint || "Join a voice channel before searching.")}</p>`
+    : "";
   const buttonLabel = state.queueSearchBusy ? "Searching..." : "Queue";
   return `
     <div class="queue-search-composer">
@@ -1220,11 +1383,12 @@ function getQueueSearchComposerMarkup() {
             spellcheck="false"
             placeholder="URL or search text"
             value="${escapeHtml(state.queueSearchQuery || "")}"
-            ${state.queueSearchBusy ? " disabled" : ""}
+            ${state.queueSearchBusy || searchDisabled ? " disabled" : ""}
           >
-          <button type="submit" class="btn btn-primary"${state.queueSearchBusy ? " disabled" : ""}>${escapeHtml(buttonLabel)}</button>
+          <button type="submit" class="btn btn-primary"${state.queueSearchBusy || searchDisabled ? " disabled" : ""}>${escapeHtml(buttonLabel)}</button>
         </div>
       </form>
+      ${disabledHint}
       ${getQueueSearchChooserMarkup()}
     </div>
   `;
@@ -1439,10 +1603,12 @@ function getPlaybackProgressMarkup(options = {}) {
 
 function getPlaybackReadyStateMarkup(options = {}) {
   const feedMarkup = String(options.feedMarkup || "");
+  const title = String(options.title || "Ready");
+  const subtitle = String(options.subtitle || "Queue tracks to start playback.");
   return `
     <div class="playback-ready-state">
-      <p class="playback-ready-title">Ready</p>
-      <p class="playback-ready-subtitle">Queue tracks to start playback.</p>
+      <p class="playback-ready-title">${escapeHtml(title)}</p>
+      <p class="playback-ready-subtitle">${escapeHtml(subtitle)}</p>
       ${feedMarkup}
       <div class="action-row playback-ready-action-row">
         ${getQueueSearchToggleButtonMarkup()}
@@ -1665,6 +1831,11 @@ function renderDashboard() {
   const queueUpdatedAtText = getQueueUpdatedAtText(queue);
   const activeNowPlaying = queueList?.nowPlaying || queue?.nowPlaying;
   const hasNowPlaying = Boolean(activeNowPlaying);
+  const voiceAccess = getQueueVoiceAccessState();
+  if (!voiceAccess.canStartSearch && !state.queueSearchBusy) {
+    state.queueSearchVisible = false;
+    clearQueueSearchChooser();
+  }
   const queueSearchPanelVisible = isQueueSearchPanelVisible();
   const queueActionFeedMarkup = getQueueActionFeedMarkup();
   const inlineQueueActionFeedMarkup = !queueSearchPanelVisible ? queueActionFeedMarkup : "";
@@ -1691,6 +1862,7 @@ function renderDashboard() {
   const queueLength = Number.isFinite(queueList?.total)
     ? queueList.total
     : (queue?.queueLength || 0);
+  const queueEventFeedMarkup = getQueueEventFeedMarkup();
   const loopMode = getQueueLoopMode();
   const connectedAtText = state.connectedAt ? formatTime(state.connectedAt) : "unknown";
   const guildCount = Array.isArray(state.authSummary?.guilds) ? state.authSummary.guilds.length : 0;
@@ -1722,7 +1894,13 @@ function renderDashboard() {
           progressMarkup: playbackProgressMarkup,
           controlsMarkup: playbackControlsMarkup,
         })
-  : getPlaybackReadyStateMarkup({ feedMarkup: inlineQueueActionFeedMarkup })}
+  : getPlaybackReadyStateMarkup({
+    feedMarkup: inlineQueueActionFeedMarkup,
+    title: voiceAccess.canStartSearch ? "Ready" : "Voice Channel Required",
+    subtitle: voiceAccess.canStartSearch
+      ? "Queue tracks to start playback."
+      : (voiceAccess.searchBlockedHint || "Join a voice channel before searching."),
+  })}
     </article>
   `;
 
@@ -1750,6 +1928,7 @@ function renderDashboard() {
       <nav class="menu-tabs">
         <button type="button" class="tab-btn${state.activeTab === TAB_UP_NEXT ? " active" : ""}" data-tab="${TAB_UP_NEXT}">Queue</button>
         <button type="button" class="tab-btn${state.activeTab === TAB_QUEUE ? " active" : ""}" data-tab="${TAB_QUEUE}">Queue Edit</button>
+        <button type="button" class="tab-btn${state.activeTab === TAB_FEED ? " active" : ""}" data-tab="${TAB_FEED}">Feed</button>
         ${adminState.isAdmin
           ? `<button type="button" class="tab-btn${state.activeTab === TAB_ADMIN ? " active" : ""}" data-tab="${TAB_ADMIN}">Admin</button>`
           : ""}
@@ -1782,6 +1961,15 @@ function renderDashboard() {
             </select>
           </div>
           ${getQueueTrackListMarkup()}
+        </article>
+      </section>
+      <section class="menu-panel${state.activeTab === TAB_FEED ? " active" : ""}" data-panel="${TAB_FEED}">
+        <article class="panel-card">
+          <div class="queue-header-row">
+            <h2>Feed</h2>
+            <p class="queue-remaining">Playback + Queue Updates</p>
+          </div>
+          ${queueEventFeedMarkup}
         </article>
       </section>
       ${getAdminPanelMarkup(adminState)}
@@ -1817,6 +2005,7 @@ function renderDashboard() {
       <div class="top-row-main">
         <p class="kicker">queueDexBot</p>
         ${getGuildSelectionMarkup()}
+        ${getQueueChannelIndicatorMarkup()}
       </div>
       <button
         type="button"
@@ -1886,6 +2075,12 @@ function wireDashboardEvents() {
   root.querySelectorAll("[data-search-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       if (state.queueSearchBusy) {
+        return;
+      }
+      const voiceAccess = getQueueVoiceAccessState();
+      if (!voiceAccess.canStartSearch) {
+        setQueueSearchFeedback(voiceAccess.searchBlockedHint || "Join a voice channel before searching.", { error: true });
+        renderDashboard();
         return;
       }
       state.queueSearchAutoDefaultPending = false;
@@ -2733,6 +2928,40 @@ async function refreshQueueListForSelectedGuild() {
   });
 }
 
+function setQueueSummaryFromPayload(payload, fallbackGuildId = state.selectedGuildId) {
+  const previousAccess = state.queueSummary?.data?.access || null;
+  const nextData = payload?.data || null;
+  const nextAccess = nextData?.access || previousAccess || null;
+  state.queueSummary = {
+    guildId: payload?.guildId || fallbackGuildId || null,
+    data: nextData
+      ? {
+        ...nextData,
+        access: nextAccess,
+      }
+      : null,
+  };
+}
+
+function getActivityRequestTextChannelId() {
+  if (state.mode !== "embedded") {
+    return null;
+  }
+  const channelId = String(state.sdkContext.channelId || "").trim();
+  return channelId || null;
+}
+
+function withActivityRequestContext(payload = {}) {
+  const textChannelId = getActivityRequestTextChannelId();
+  if (!textChannelId) {
+    return payload;
+  }
+  return {
+    ...payload,
+    text_channel_id: textChannelId,
+  };
+}
+
 async function sendControlAction(action) {
   if (!state.selectedGuildId) {
     state.notice = "Select a guild first.";
@@ -2748,15 +2977,12 @@ async function sendControlAction(action) {
         "Content-Type": "application/json",
       },
       credentials: "include",
-      body: JSON.stringify({
+      body: JSON.stringify(withActivityRequestContext({
         action,
         guild_id: state.selectedGuildId,
-      }),
+      })),
     });
-    state.queueSummary = {
-      guildId: payload.guildId,
-      data: payload.data || null,
-    };
+    setQueueSummaryFromPayload(payload, state.selectedGuildId);
     await refreshQueueListForSelectedGuild();
     state.notice = `Action applied: ${action}`;
     state.noticeError = false;
@@ -2800,6 +3026,12 @@ async function sendQueueSearch(queryInput) {
     renderDashboard();
     return;
   }
+  const voiceAccess = getQueueVoiceAccessState();
+  if (!voiceAccess.canStartSearch) {
+    setQueueSearchFeedback(voiceAccess.searchBlockedHint || "Join a voice channel before searching.", { error: true });
+    renderDashboard();
+    return;
+  }
 
   const query = String(queryInput || "").trim();
   if (!query) {
@@ -2822,16 +3054,13 @@ async function sendQueueSearch(queryInput) {
         "Content-Type": "application/json",
       },
       credentials: "include",
-      body: JSON.stringify({
+      body: JSON.stringify(withActivityRequestContext({
         guild_id: state.selectedGuildId,
         query,
-      }),
+      })),
     });
 
-    state.queueSummary = {
-      guildId: payload.guildId || state.selectedGuildId,
-      data: payload.data || null,
-    };
+    setQueueSummaryFromPayload(payload, state.selectedGuildId);
 
     if (payload.mode === "chooser" && payload.search) {
       state.queueSearchChooser = payload.search;
@@ -2873,6 +3102,12 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
     renderDashboard();
     return;
   }
+  const voiceAccess = getQueueVoiceAccessState();
+  if (!voiceAccess.canStartSearch) {
+    setQueueSearchFeedback(voiceAccess.searchBlockedHint || "Join a voice channel before searching.", { error: true });
+    renderDashboard();
+    return;
+  }
 
   const chooser = getActiveQueueSearchChooser();
   if (!chooser) {
@@ -2902,18 +3137,15 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
         "Content-Type": "application/json",
       },
       credentials: "include",
-      body: JSON.stringify({
+      body: JSON.stringify(withActivityRequestContext({
         guild_id: state.selectedGuildId,
         search_id: chooser.id,
         option_index: parsedIndex,
         queue_first: queueFirst,
-      }),
+      })),
     });
 
-    state.queueSummary = {
-      guildId: payload.guildId || state.selectedGuildId,
-      data: payload.data || null,
-    };
+    setQueueSummaryFromPayload(payload, state.selectedGuildId);
     clearQueueSearchState({
       keepFeedback: true,
       keepQueuedResult: true,
@@ -2993,16 +3225,13 @@ async function applyQueueSearchQueuedResultAction(action) {
         "Content-Type": "application/json",
       },
       credentials: "include",
-      body: JSON.stringify({
+      body: JSON.stringify(withActivityRequestContext({
         action: apiAction,
         guild_id: state.selectedGuildId,
         ...actionPayload,
-      }),
+      })),
     });
-    state.queueSummary = {
-      guildId: payload.guildId || state.selectedGuildId,
-      data: payload.data || null,
-    };
+    setQueueSummaryFromPayload(payload, state.selectedGuildId);
     await refreshQueueListForSelectedGuild();
     clearQueueSearchQueuedResult();
     setQueueSearchFeedback(successMessage, {
@@ -3033,16 +3262,13 @@ async function sendQueueAction(action, actionOptions = {}) {
         "Content-Type": "application/json",
       },
       credentials: "include",
-      body: JSON.stringify({
+      body: JSON.stringify(withActivityRequestContext({
         action,
         guild_id: state.selectedGuildId,
         ...actionOptions,
-      }),
+      })),
     });
-    state.queueSummary = {
-      guildId: payload.guildId,
-      data: payload.data || null,
-    };
+    setQueueSummaryFromPayload(payload, state.selectedGuildId);
     await refreshQueueListForSelectedGuild();
     setQueueSearchFeedback(`Queue action applied: ${action}.`, {
       append: true,
@@ -3122,10 +3348,7 @@ async function sendAdminGuildCommand(path) {
   }
 
   if (path === "/api/activity/admin/queue/force-cleanup" && payload?.data) {
-    state.queueSummary = {
-      guildId: payload.guildId || state.selectedGuildId,
-      data: payload.data,
-    };
+    setQueueSummaryFromPayload(payload, state.selectedGuildId);
     await refreshQueueListForSelectedGuild();
     renderDashboard();
     return;

@@ -310,6 +310,146 @@ test("api control posts text-channel feedback for playback actions", async () =>
   }
 });
 
+test("activity control can attach queue text channel from request context", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let pauseCalled = false;
+  const sentMessages = [];
+  const queue = {
+    current: { id: "track-1", title: "Song" },
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    textChannel: null,
+    textChannelId: null,
+    player: {
+      state: { status: "playing" },
+      pause() {
+        pauseCalled = true;
+      },
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const resolvedTextChannel = {
+    id: "text-123",
+    name: "web-controls",
+    async send(content) {
+      sentMessages.push(String(content));
+      return { id: "msg-1" };
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    resolveTextChannelById: async (_guildId, channelId) => (channelId === "text-123" ? resolvedTextChannel : null),
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/control",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "pause",
+        text_channel_id: "text-123",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(pauseCalled, true);
+    assert.equal(queue.textChannelId, "text-123");
+    assert.equal(queue.textChannel?.id, "text-123");
+    assert.equal(sentMessages.length, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity state includes queue channel attachments and user event feed", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const activityFeed = Array.from({ length: 35 }, (_, index) => ({
+    id: `evt-${index + 1}`,
+    time: `2026-02-19T00:${String(index).padStart(2, "0")}:00.000Z`,
+    level: "info",
+    message: `Event ${index + 1}`,
+    source: "api_queue_search:resolve",
+  }));
+
+  const queue = {
+    current: null,
+    tracks: [],
+    voiceChannel: { id: "voice-1", name: "Lounge" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    textChannel: {
+      id: "text-1",
+      name: "music-feed",
+      async send() {
+        return null;
+      },
+    },
+    activityFeed,
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/state?guild_id=guild-1",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.data?.attachments?.voice?.id, "voice-1");
+    assert.equal(response.json?.data?.attachments?.voice?.name, "Lounge");
+    assert.equal(response.json?.data?.attachments?.text?.id, "text-1");
+    assert.equal(response.json?.data?.attachments?.text?.name, "music-feed");
+    assert.equal(response.json?.data?.access?.queueVoiceChannelId, "voice-1");
+    assert.equal(response.json?.data?.access?.userVoiceChannelId, "voice-1");
+    assert.equal(response.json?.data?.access?.sameVoiceChannel, true);
+    assert.equal(response.json?.data?.access?.canStartSearch, true);
+    assert.equal(Array.isArray(response.json?.data?.activityFeed), true);
+    assert.equal(response.json?.data?.activityFeed?.length, 20);
+    assert.equal(response.json?.data?.activityFeed?.[0]?.message, "Event 16");
+    assert.equal(response.json?.data?.activityFeed?.[19]?.message, "Event 35");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("api control resume forwards ensure-voice options to queue service", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();

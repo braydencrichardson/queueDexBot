@@ -4,6 +4,7 @@ const {
   formatQueueClearedNotice,
   formatQueueRemovedNotice,
 } = require("../ui/messages");
+const { appendQueueEvent } = require("./event-feed");
 
 function isMissingDiscordTokenError(error) {
   const message = String(error?.message || "").toLowerCase();
@@ -166,6 +167,7 @@ async function sendQueueFeedback({
   queue,
   channel,
   content,
+  level = "info",
   logInfo = () => {},
   logError = () => {},
   context = "queue_feedback",
@@ -174,6 +176,10 @@ async function sendQueueFeedback({
   if (!trimmed) {
     return false;
   }
+  appendQueueEvent(queue, trimmed, {
+    level,
+    source: context,
+  });
   const targetChannel = channel || queue?.textChannel;
   if (!targetChannel?.send) {
     return false;

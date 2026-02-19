@@ -157,7 +157,7 @@ function getActivityApplicationId() {
   return String(client.application?.id || env.oauthClientId || "").trim();
 }
 
-async function resolveVoiceChannelById(guildId, channelId) {
+async function resolveGuildChannelById(guildId, channelId) {
   const normalizedGuildId = String(guildId || "").trim();
   const normalizedChannelId = String(channelId || "").trim();
   if (!normalizedGuildId || !normalizedChannelId) {
@@ -192,6 +192,18 @@ async function resolveVoiceChannelById(guildId, channelId) {
   }
 
   return null;
+}
+
+async function resolveVoiceChannelById(guildId, channelId) {
+  return resolveGuildChannelById(guildId, channelId);
+}
+
+async function resolveTextChannelById(guildId, channelId) {
+  const resolvedChannel = await resolveGuildChannelById(guildId, channelId);
+  if (!resolvedChannel?.send) {
+    return null;
+  }
+  return resolvedChannel;
 }
 
 async function prewarmActivityInviteOnPlaybackStart({ guildId, queue, track }) {
@@ -620,6 +632,7 @@ const apiServer = env.authServerEnabled
       }
       return member?.voice?.channelId || member?.voice?.channel?.id || null;
     },
+    resolveTextChannelById,
     getAdminEvents: ({ minLevel, limit }) => adminEventFeed.list({ minLevel, limit }),
     getProviderStatus,
     verifyProviderAuthStatus,
@@ -837,6 +850,10 @@ client.on("shardDisconnect", (event, shardId) => {
     reason: event?.reason ?? null,
     wasClean: typeof event?.wasClean === "boolean" ? event.wasClean : null,
   });
+});
+
+process.on("unhandledRejection", (reason) => {
+  logError("Unhandled promise rejection", reason);
 });
 
 registerInteractionHandler(client, {

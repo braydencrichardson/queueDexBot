@@ -246,7 +246,15 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(queue.voiceChannel, voiceChannel);
   assert.equal(queue.connection, connection);
   assert.equal(subscribeCalledWith, queue.player);
-  assert.equal(replyPayload, "Joined **General**.");
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("Joined **General** and bound updates to <#text-1>."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    true
+  );
 });
 
 test("join command clears stale queue voice state when bot is disconnected", async () => {
@@ -316,7 +324,15 @@ test("join command clears stale queue voice state when bot is disconnected", asy
   assert.equal(joinCalled, true);
   assert.equal(queue.connection, newConnection);
   assert.equal(queue.voiceChannel, voiceChannel);
-  assert.equal(replyPayload, "Joined **General**.");
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("Joined **General** and bound updates to <#text-1>."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    true
+  );
 });
 
 test("join command reports already connected based on live bot voice state", async () => {
@@ -378,10 +394,15 @@ test("join command reports already connected based on live bot voice state", asy
   await handler(interaction);
 
   assert.equal(joinCalled, false);
-  assert.deepEqual(replyPayload, {
-    content: "I am already in your voice channel.",
-    flags: MessageFlags.Ephemeral,
-  });
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("Already in your voice channel. Bound updates to <#text-1>."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    true
+  );
 });
 
 test("launch requires caller in voice channel", async () => {
@@ -456,6 +477,85 @@ test("launch reports missing EMBEDDED app flag without creating voice activity i
   assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
 });
 
+test("launch prefers the bot's current voice channel when caller is in a different channel", async () => {
+  let invitedChannelName = null;
+  let replyPayload = null;
+  const botVoiceChannel = {
+    id: "vc-bot",
+    name: "Music",
+    guild: { id: "guild-1" },
+    createInvite: async () => ({
+      code: "voice-activity-bot",
+      url: "https://discord.gg/voice-activity-bot",
+    }),
+  };
+  const callerVoiceChannel = {
+    id: "vc-user",
+    name: "General",
+    guild: { id: "guild-1" },
+    createInvite: async () => {
+      invitedChannelName = "General";
+      return {
+        code: "voice-activity-user",
+        url: "https://discord.gg/voice-activity-user",
+      };
+    },
+  };
+
+  const { deps } = createDeps({
+    queue: {
+      tracks: [],
+      current: null,
+      voiceChannel: null,
+      connection: null,
+      player: { id: "player-1" },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-bot", botVoiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-bot",
+            channel: botVoiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    applicationId: "app-1",
+    user: { id: "user-1", tag: "User#0001" },
+    member: {
+      voice: {
+        channel: callerVoiceChannel,
+      },
+    },
+    commandName: "launch",
+    options: {},
+    client: {
+      application: {
+        flags: { has: () => true },
+      },
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(invitedChannelName, null);
+  assert.equal(String(replyPayload?.content || "").includes("Activity: <https://discord.gg/voice-activity-bot>"), true);
+  assert.equal(String(replyPayload?.content || "").includes("https://discord.gg/voice-activity-bot"), true);
+});
+
 test("launch creates a voice activity invite in caller voice channel", async () => {
   let inviteOptions = null;
   let replyPayload = null;
@@ -502,7 +602,7 @@ test("launch creates a voice activity invite in caller voice channel", async () 
   assert.equal(inviteOptions?.unique, false);
   assert.equal(inviteOptions?.maxAge, 7200);
   assert.equal(
-    String(replyPayload?.content || "").includes("Created an Activity invite for **General**."),
+    String(replyPayload?.content || "").includes("Activity: <https://discord.gg/voice-activity>"),
     true
   );
   assert.equal(
@@ -510,7 +610,7 @@ test("launch creates a voice activity invite in caller voice channel", async () 
     true
   );
   assert.deepEqual(replyPayload, {
-    content: "Created an Activity invite for **General**.\nhttps://discord.gg/voice-activity",
+    content: "Activity: <https://discord.gg/voice-activity>",
     flags: MessageFlags.Ephemeral,
   });
 });
@@ -562,8 +662,8 @@ test("launch reuses cached voice activity invite while it is still valid", async
 
   assert.equal(createInviteCallCount, 1);
   assert.equal(replies.length, 2);
-  assert.equal(String(replies[0]?.content || "").includes("Created an Activity invite"), true);
-  assert.equal(String(replies[1]?.content || "").includes("Reused an Activity invite"), true);
+  assert.equal(String(replies[0]?.content || "").includes("Activity: <https://discord.gg/voice-activity>"), true);
+  assert.equal(String(replies[1]?.content || "").includes("Activity: <https://discord.gg/voice-activity>"), true);
 });
 
 test("launch includes configured activity web URL in invite response", async () => {

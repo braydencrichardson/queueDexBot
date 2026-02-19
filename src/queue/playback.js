@@ -3,6 +3,7 @@ const { PLAYBACK_LOADING_MESSAGE_DELAY_MS } = require("../config/constants");
 const { getTrackKey } = require("./track-key");
 const { ensureTrackId } = require("./utils");
 const { prepareQueueForNextTrack, syncLoopState } = require("./loop");
+const { appendQueueEvent } = require("./event-feed");
 
 function createQueuePlayback(deps) {
   const {
@@ -36,8 +37,14 @@ function createQueuePlayback(deps) {
 
   async function sendPlaybackNotice(queue, content) {
     if (!queue?.textChannel || !content) {
+      appendQueueEvent(queue, content, {
+        source: "playback.notice",
+      });
       return;
     }
+    appendQueueEvent(queue, content, {
+      source: "playback.notice",
+    });
     try {
       await queue.textChannel.send(content);
     } catch (error) {
@@ -582,6 +589,9 @@ function createQueuePlayback(deps) {
         queue.connection.subscribe(queue.player);
       }
 
+      appendQueueEvent(queue, `Now playing: ${sanitizeInlineDiscordText(nextTrack.title || "unknown track")}`, {
+        source: "playback.now_playing",
+      });
       await sendNowPlaying(queue, true);
       if (typeof onPlaybackStarted === "function") {
         onPlaybackStarted({ guildId, queue, track: nextTrack }).catch((error) => {

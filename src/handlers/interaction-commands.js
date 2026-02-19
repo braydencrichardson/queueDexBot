@@ -54,6 +54,7 @@ function createCommandInteractionHandler(deps) {
     queueService = null,
     activityInviteService = null,
     getActivityApplicationId = () => "",
+    resolveVoiceChannelById = async () => null,
     activityWebUrl = "",
   } = deps;
   const inviteService = activityInviteService || createActivityInviteService();
@@ -276,6 +277,47 @@ function createCommandInteractionHandler(deps) {
     return botVoiceChannelId;
   }
 
+  async function resolveLaunchVoiceChannel(interaction, queue) {
+    const botVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
+    if (botVoiceChannelId) {
+      const liveFromGuildCache = interaction?.guild?.channels?.cache?.get(botVoiceChannelId);
+      if (liveFromGuildCache) {
+        return liveFromGuildCache;
+      }
+      const liveFromMemberVoice = interaction?.guild?.members?.me?.voice?.channel || null;
+      if (liveFromMemberVoice) {
+        return liveFromMemberVoice;
+      }
+      try {
+        const resolved = await resolveVoiceChannelById(interaction?.guildId, botVoiceChannelId);
+        if (resolved) {
+          return resolved;
+        }
+      } catch (error) {
+        logError("Failed to resolve live bot voice channel for launch", {
+          guild: interaction?.guildId || null,
+          channelId: botVoiceChannelId,
+          error,
+        });
+      }
+      if (queue?.voiceChannel?.id === botVoiceChannelId) {
+        return queue.voiceChannel;
+      }
+    }
+    return interaction?.member?.voice?.channel || null;
+  }
+
+  function normalizeHttpUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return null;
+    }
+    if (!/^https?:\/\//i.test(raw)) {
+      return null;
+    }
+    return raw;
+  }
+
   return async function handleCommandInteraction(interaction) {
     const isChatInputCommand = typeof interaction.isChatInputCommand === "function"
       ? interaction.isChatInputCommand()
@@ -290,7 +332,10 @@ function createCommandInteractionHandler(deps) {
     }
 
     const queue = getGuildQueue(interaction.guildId);
+    const previousQueueTextChannelId = String(queue?.textChannel?.id || queue?.textChannelId || "").trim() || null;
+    const previousQueueVoiceChannelId = getQueueVoiceChannelId(queue);
     queue.textChannel = interaction.channel;
+    queue.textChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
 
     logInfo("Slash command received", {
       guild: interaction.guildId,
@@ -507,44 +552,106 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
+      const currentTextChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
       const botVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
-      if (botVoiceChannelId === voiceChannel.id) {
-        await interaction.reply({ content: "I am already in your voice channel.", flags: MessageFlags.Ephemeral });
-        return;
-      }
+      const alreadyInCallerVoice = botVoiceChannelId === voiceChannel.id;
+      let joinedVoice = false;
 
-      await ensureSodiumReady();
-      if (queue.connection) {
-        try {
-          queue.connection.destroy();
-        } catch (error) {
-          logError("Failed to destroy existing voice connection while joining", error);
+      if (!alreadyInCallerVoice) {
+        await ensureSodiumReady();
+        if (queue.connection) {
+          try {
+            queue.connection.destroy();
+          } catch (error) {
+            logError("Failed to destroy existing voice connection while joining", error);
+          }
         }
+
+        queue.voiceChannel = voiceChannel;
+        queue.connection = joinVoiceChannel({
+          channelId: voiceChannel.id,
+          guildId: voiceChannel.guild.id,
+          adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+        });
+        queue.connection.on("error", (error) => {
+          logError("Voice connection error", error);
+        });
+        ensurePlayerListeners(queue, interaction.guildId);
+        queue.connection.subscribe(queue.player);
+        joinedVoice = true;
+
+        logInfo("Joined voice channel via command", {
+          guild: interaction.guildId,
+          channel: voiceChannel.id,
+          user: interaction.user.tag,
+        });
       }
 
-      queue.voiceChannel = voiceChannel;
-      queue.connection = joinVoiceChannel({
-        channelId: voiceChannel.id,
-        guildId: voiceChannel.guild.id,
-        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-      });
-      queue.connection.on("error", (error) => {
-        logError("Voice connection error", error);
-      });
-      ensurePlayerListeners(queue, interaction.guildId);
-      queue.connection.subscribe(queue.player);
+      queue.textChannel = interaction.channel;
+      queue.textChannelId = currentTextChannelId;
 
-      logInfo("Joined voice channel via command", {
-        guild: interaction.guildId,
-        channel: voiceChannel.id,
-        user: interaction.user.tag,
+      const textChannelChanged = currentTextChannelId && previousQueueTextChannelId !== currentTextChannelId;
+      const shouldShowJoinOnboarding = !previousQueueVoiceChannelId || !previousQueueTextChannelId;
+      const responseLines = [];
+      if (joinedVoice) {
+        const voiceName = String(voiceChannel?.name || "voice").trim() || "voice";
+        if (currentTextChannelId) {
+          responseLines.push(`Joined **${voiceName}** and bound updates to <#${currentTextChannelId}>.`);
+        } else {
+          responseLines.push(`Joined **${voiceName}**.`);
+        }
+      } else if (textChannelChanged && currentTextChannelId) {
+        responseLines.push(`Already in your voice channel. Bound updates to <#${currentTextChannelId}>.`);
+      } else {
+        responseLines.push("I am already in your voice channel and this text channel is already attached.");
+      }
+
+      if (shouldShowJoinOnboarding) {
+        if (typeof voiceChannel?.createInvite === "function") {
+          const applicationId = resolveActivityApplicationId(interaction);
+          if (applicationId) {
+            try {
+              const inviteResult = await inviteService.getOrCreateInvite({
+                voiceChannel,
+                applicationId,
+                reason: `Activity link shared after /join by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
+              });
+              responseLines.push(formatActivityInviteResponse({
+                inviteUrl: inviteResult.url,
+                reused: inviteResult.reused,
+                voiceChannelName: voiceChannel?.name || "voice",
+                activityWebUrl,
+              }));
+            } catch (error) {
+              logError("Failed to create activity invite during join onboarding", {
+                guild: interaction.guildId,
+                channel: voiceChannel.id,
+                user: interaction.user?.tag,
+                error,
+              });
+            }
+          }
+        }
+
+        const normalizedWebUrl = normalizeHttpUrl(activityWebUrl);
+        if (normalizedWebUrl) {
+          const alreadyIncluded = responseLines.some((line) => line.includes(normalizedWebUrl));
+          if (!alreadyIncluded) {
+            responseLines.push(`Web: <${normalizedWebUrl}>`);
+          }
+        }
+        responseLines.push("Use `/play` here or open the Activity/Web UI to queue tracks.");
+      }
+
+      await interaction.reply({
+        content: responseLines.join("\n"),
+        flags: MessageFlags.Ephemeral,
       });
-      await interaction.reply(`Joined **${voiceChannel.name}**.`);
       return;
     }
 
     if (interaction.commandName === "launch") {
-      const voiceChannel = interaction.member?.voice?.channel;
+      const voiceChannel = await resolveLaunchVoiceChannel(interaction, queue);
       if (!voiceChannel) {
         await safeReplyOrFollowUp(interaction, buildEphemeralPayload("Join a voice channel first."), "launch validation");
         return;
@@ -552,7 +659,7 @@ function createCommandInteractionHandler(deps) {
       if (typeof voiceChannel.createInvite !== "function") {
         await safeReplyOrFollowUp(
           interaction,
-          buildEphemeralPayload("I couldn't create an Activity invite for your voice channel in this runtime."),
+          buildEphemeralPayload("I couldn't create an Activity invite for the current bot voice channel in this runtime."),
           "launch runtime validation"
         );
         return;
@@ -606,7 +713,7 @@ function createCommandInteractionHandler(deps) {
         const message = error?.code === 50234
           ? "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again."
           : (error?.code === 50013 || error?.code === 50001)
-            ? "I couldn't create an Activity invite in your voice channel. Check that I can create invites there."
+            ? "I couldn't create an Activity invite in the current bot voice channel. Check that I can create invites there."
           : "Couldn't launch this activity. Ensure Activities is enabled for this app and try again.";
         try {
           await safeReplyOrFollowUp(interaction, buildEphemeralPayload(message), "launch error response");

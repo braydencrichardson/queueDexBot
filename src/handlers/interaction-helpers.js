@@ -99,6 +99,7 @@ async function queueSearchSelection(options) {
   clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
 
   queue.textChannel = interaction.channel;
+  queue.textChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
   ensureTrackId(selected);
   queue.tracks.push(selected);
   await maybeRefreshNowPlayingUpNext(queue);
