@@ -195,6 +195,7 @@ Set:
 
 ```env
 VITE_DISCORD_CLIENT_ID=YOUR_DISCORD_APPLICATION_ID
+VITE_DISCORD_SDK_READY_TIMEOUT_MS=1000
 VITE_DISCORD_AUTHORIZE_MODE=auto
 VITE_DISCORD_OAUTH_SCOPES=identify
 # set this to a redirect URI registered in Discord Developer Portal (avoid *.discordsays.com)

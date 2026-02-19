@@ -2,7 +2,10 @@ import { DiscordSDK } from "@discord/embedded-app-sdk";
 import "./style.css";
 
 const root = document.getElementById("app");
-const SDK_READY_TIMEOUT_MS = 10000;
+const SDK_READY_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(String(import.meta.env.VITE_DISCORD_SDK_READY_TIMEOUT_MS || "1000"), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
+})();
 const UPTIME_INTERVAL_MS = 1000;
 const API_POLL_INTERVAL_MS = 5000;
 const API_PENDING_TIMEOUT_MS = 9000;
@@ -28,6 +31,7 @@ const CONNECTION_STATUS_DISCONNECTED = "disconnected";
 const CONNECTION_STATUS_AUTHORIZING = "authorizing";
 const CONNECTION_STATUS_PENDING = "pending";
 const CONNECTION_STATUS_CONNECTED = "connected";
+const CONNECTION_STATUS_API_ONLY = "api_only";
 
 function loadBooleanPreference(key, fallback) {
   try {
@@ -81,12 +85,19 @@ const state = {
   themeMode: THEME_DARK,
   debugTabVisible: false,
   connectionStatus: CONNECTION_STATUS_DISCONNECTED,
+  discordSdkConnected: false,
   lastApiAttemptAt: null,
   lastApiSuccessAt: null,
   consecutiveApiFailures: 0,
   notice: "",
   noticeError: false,
   hasMountedDashboard: false,
+  queueDrag: {
+    active: false,
+    pending: false,
+    fromPosition: null,
+    targetInsertBefore: null,
+  },
 };
 
 let liveTicker = null;
@@ -562,6 +573,8 @@ function updateConnectionStatusFromTelemetry() {
 
 function getConnectionStatusPresentation() {
   updateConnectionStatusFromTelemetry();
+  const sdkUnavailableInEmbedded = state.mode === "embedded" && !state.discordSdkConnected;
+  const sdkUnavailableHint = "Discord SDK is not connected for this Activity session.";
   if (state.connectionStatus === CONNECTION_STATUS_AUTHORIZING) {
     return {
       statusKey: CONNECTION_STATUS_AUTHORIZING,
@@ -575,7 +588,9 @@ function getConnectionStatusPresentation() {
       statusKey: CONNECTION_STATUS_PENDING,
       label: "Pending",
       chipClass: "chip-pending",
-      hint: "API heartbeat is delayed.",
+      hint: sdkUnavailableInEmbedded
+        ? `API heartbeat is delayed. ${sdkUnavailableHint}`
+        : "API heartbeat is delayed.",
     };
   }
   if (state.connectionStatus === CONNECTION_STATUS_DISCONNECTED) {
@@ -583,7 +598,17 @@ function getConnectionStatusPresentation() {
       statusKey: CONNECTION_STATUS_DISCONNECTED,
       label: "Disconnected",
       chipClass: "chip-disconnected",
-      hint: "API heartbeat timed out.",
+      hint: sdkUnavailableInEmbedded
+        ? `API heartbeat timed out. ${sdkUnavailableHint}`
+        : "API heartbeat timed out.",
+    };
+  }
+  if (sdkUnavailableInEmbedded) {
+    return {
+      statusKey: CONNECTION_STATUS_API_ONLY,
+      label: "API Only",
+      chipClass: "chip-api-only",
+      hint: "Connected to API, but not connected to Discord SDK in this Activity session.",
     };
   }
   return {
@@ -700,6 +725,7 @@ function renderWebLogin() {
   setThemeBodyMode(state.themeMode);
   setPipBodyMode(false);
   state.mode = "web";
+  state.discordSdkConnected = false;
   state.notice = "";
   state.noticeError = false;
 
@@ -796,6 +822,124 @@ function getGuildSelectionMarkup() {
 
 function getQueueListData() {
   return state.queueList;
+}
+
+function parseQueuePosition(value) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function getQueueTotalCount() {
+  const queueList = getQueueListData();
+  const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
+  return Number.isFinite(queueList?.total) ? queueList.total : tracks.length;
+}
+
+function getQueueDropSlotMarkup(insertBeforePosition, options = {}) {
+  const position = parseQueuePosition(insertBeforePosition) || 1;
+  const disabled = Boolean(options.disabled);
+  return `
+    <li class="queue-drop-slot${disabled ? " queue-drop-slot-disabled" : ""}" data-queue-drop-slot="1" data-insert-before="${escapeHtml(String(position))}"${disabled ? ' data-disabled="1"' : ""}>
+      <span class="queue-drop-slot-line" aria-hidden="true"></span>
+    </li>
+  `;
+}
+
+function clearQueueDragDomState() {
+  root.querySelector(".queue-track-list")?.classList.remove("queue-track-list-dragging");
+  root.querySelectorAll(".queue-drop-slot.active").forEach((slot) => slot.classList.remove("active"));
+  root.querySelectorAll(".queue-track-row-dragging").forEach((row) => row.classList.remove("queue-track-row-dragging"));
+}
+
+function clearQueueDragState() {
+  state.queueDrag.active = false;
+  state.queueDrag.pending = false;
+  state.queueDrag.fromPosition = null;
+  state.queueDrag.targetInsertBefore = null;
+  clearQueueDragDomState();
+}
+
+function setQueueDragTarget(insertBeforePosition) {
+  const normalized = parseQueuePosition(insertBeforePosition);
+  state.queueDrag.targetInsertBefore = normalized;
+  root.querySelectorAll("[data-queue-drop-slot]").forEach((slot) => {
+    const slotTarget = parseQueuePosition(slot.getAttribute("data-insert-before"));
+    slot.classList.toggle("active", Boolean(normalized) && slotTarget === normalized);
+  });
+}
+
+function getRowDropInsertBeforePosition(row, clientY) {
+  const position = parseQueuePosition(row?.getAttribute?.("data-position"));
+  if (!position) {
+    return null;
+  }
+  const rect = row.getBoundingClientRect();
+  const midpoint = rect.top + (rect.height / 2);
+  const y = Number.isFinite(clientY) ? clientY : midpoint;
+  return y < midpoint ? position : position + 1;
+}
+
+function beginQueueDrag(position, sourceRow, dataTransfer) {
+  const normalizedPosition = parseQueuePosition(position);
+  const total = getQueueTotalCount();
+  if (!normalizedPosition || total < 2 || normalizedPosition > total || state.queueDrag.pending) {
+    return false;
+  }
+
+  state.queueDrag.active = true;
+  state.queueDrag.pending = false;
+  state.queueDrag.fromPosition = normalizedPosition;
+  state.queueDrag.targetInsertBefore = null;
+  clearQueueDragDomState();
+
+  root.querySelector(".queue-track-list")?.classList.add("queue-track-list-dragging");
+  sourceRow?.classList.add("queue-track-row-dragging");
+
+  if (dataTransfer) {
+    dataTransfer.effectAllowed = "move";
+    dataTransfer.setData("text/plain", String(normalizedPosition));
+  }
+  return true;
+}
+
+async function submitQueueDragMove(insertBeforePosition) {
+  const total = getQueueTotalCount();
+  const fromPosition = parseQueuePosition(state.queueDrag.fromPosition);
+  if (!fromPosition || total < 2 || fromPosition > total) {
+    clearQueueDragState();
+    return;
+  }
+
+  const normalizedInsertBefore = parseQueuePosition(insertBeforePosition);
+  const boundedInsertBefore = normalizedInsertBefore
+    ? Math.max(1, Math.min(normalizedInsertBefore, total + 1))
+    : fromPosition;
+
+  let toPosition = boundedInsertBefore;
+  if (boundedInsertBefore > fromPosition) {
+    toPosition -= 1;
+  }
+  toPosition = Math.max(1, Math.min(total, toPosition));
+
+  state.queueDrag.active = false;
+  clearQueueDragDomState();
+  if (toPosition === fromPosition) {
+    clearQueueDragState();
+    return;
+  }
+
+  state.queueDrag.pending = true;
+  try {
+    await sendQueueAction("move", {
+      from_position: fromPosition,
+      to_position: toPosition,
+    });
+  } finally {
+    clearQueueDragState();
+  }
 }
 
 function getQueueLoopMode() {
@@ -896,6 +1040,7 @@ function getQueueTrackListMarkup() {
   const truncatedNotice = total > tracks.length
     ? `<p class="muted">Showing ${tracks.length} of ${total} queued tracks.</p>`
     : "";
+  const canReorder = total > 1;
 
   return `
     ${truncatedNotice}
@@ -905,7 +1050,19 @@ function getQueueTrackListMarkup() {
         const isFirst = position <= 1;
         const isLast = position >= total;
         return `
-          <li class="queue-track-row">
+          ${getQueueDropSlotMarkup(position, { disabled: !canReorder })}
+          <li class="queue-track-row" data-queue-track-row="1" data-position="${escapeHtml(String(position))}">
+            <button
+              type="button"
+              class="queue-drag-handle"
+              data-track-drag-handle="1"
+              data-position="${escapeHtml(String(position))}"
+              draggable="${canReorder ? "true" : "false"}"
+              aria-label="Drag to move track at position ${escapeHtml(String(position))}"
+              title="Drag to move track"${canReorder ? "" : " disabled"}
+            >
+              <span class="queue-drag-grip" aria-hidden="true"></span>
+            </button>
             <div class="queue-track-main">
               <span class="queue-track-pos">#${escapeHtml(String(position))}</span>
               ${getTrackSummaryMarkup(track, { compact: true, includeDuration: true })}
@@ -916,7 +1073,7 @@ function getQueueTrackListMarkup() {
               <button type="button" class="btn btn-mini" data-track-action="down" data-position="${escapeHtml(String(position))}"${isLast ? " disabled" : ""}>↓</button>
               <button type="button" class="btn btn-mini btn-danger" data-track-action="remove" data-position="${escapeHtml(String(position))}">Remove</button>
             </div>
-          </li>
+          </li>${index === tracks.length - 1 ? getQueueDropSlotMarkup(position + 1, { disabled: !canReorder }) : ""}
         `;
       }).join("")}
     </ul>
@@ -1239,6 +1396,7 @@ function wireDashboardEvents() {
       if (!nextGuildId || nextGuildId === state.selectedGuildId) {
         return;
       }
+      clearQueueDragState();
       state.selectedGuildId = nextGuildId;
       setGuildQueryParam(nextGuildId);
       void refreshDashboardData();
@@ -1280,12 +1438,111 @@ function wireDashboardEvents() {
     });
   }
 
+  root.querySelectorAll("[data-track-drag-handle]").forEach((handle) => {
+    handle.addEventListener("dragstart", (event) => {
+      const position = parseQueuePosition(handle.getAttribute("data-position"));
+      const sourceRow = handle.closest("[data-queue-track-row]");
+      const started = beginQueueDrag(position, sourceRow, event.dataTransfer);
+      if (!started) {
+        event.preventDefault();
+      }
+    });
+
+    handle.addEventListener("dragend", () => {
+      if (state.queueDrag.pending) {
+        clearQueueDragDomState();
+        return;
+      }
+      clearQueueDragState();
+    });
+  });
+
+  root.querySelectorAll("[data-queue-drop-slot]").forEach((slot) => {
+    slot.addEventListener("dragenter", (event) => {
+      if (!state.queueDrag.active || slot.getAttribute("data-disabled") === "1") {
+        return;
+      }
+      event.preventDefault();
+      const insertBefore = parseQueuePosition(slot.getAttribute("data-insert-before"));
+      if (insertBefore) {
+        setQueueDragTarget(insertBefore);
+      }
+    });
+
+    slot.addEventListener("dragover", (event) => {
+      if (!state.queueDrag.active || slot.getAttribute("data-disabled") === "1") {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      const insertBefore = parseQueuePosition(slot.getAttribute("data-insert-before"));
+      if (insertBefore) {
+        setQueueDragTarget(insertBefore);
+      }
+    });
+
+    slot.addEventListener("drop", (event) => {
+      if (!state.queueDrag.active || slot.getAttribute("data-disabled") === "1") {
+        return;
+      }
+      event.preventDefault();
+      const insertBefore = parseQueuePosition(slot.getAttribute("data-insert-before"));
+      if (!insertBefore) {
+        clearQueueDragState();
+        return;
+      }
+      void submitQueueDragMove(insertBefore);
+    });
+  });
+
+  root.querySelectorAll("[data-queue-track-row]").forEach((row) => {
+    row.addEventListener("dragenter", (event) => {
+      if (!state.queueDrag.active) {
+        return;
+      }
+      event.preventDefault();
+      const insertBefore = getRowDropInsertBeforePosition(row, event.clientY);
+      if (insertBefore) {
+        setQueueDragTarget(insertBefore);
+      }
+    });
+
+    row.addEventListener("dragover", (event) => {
+      if (!state.queueDrag.active) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      const insertBefore = getRowDropInsertBeforePosition(row, event.clientY);
+      if (insertBefore) {
+        setQueueDragTarget(insertBefore);
+      }
+    });
+
+    row.addEventListener("drop", (event) => {
+      if (!state.queueDrag.active) {
+        return;
+      }
+      event.preventDefault();
+      const insertBefore = getRowDropInsertBeforePosition(row, event.clientY)
+        || parseQueuePosition(state.queueDrag.targetInsertBefore);
+      if (!insertBefore) {
+        clearQueueDragState();
+        return;
+      }
+      void submitQueueDragMove(insertBefore);
+    });
+  });
+
   root.querySelectorAll("[data-track-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.getAttribute("data-track-action");
-      const positionRaw = button.getAttribute("data-position");
-      const position = Number.parseInt(String(positionRaw || ""), 10);
-      if (!action || !Number.isFinite(position) || position <= 0) {
+      const position = parseQueuePosition(button.getAttribute("data-position"));
+      if (!action || !position) {
         return;
       }
       if (action === "top") {
@@ -2052,6 +2309,7 @@ async function logoutWebSession() {
   state.lastApiAttemptAt = null;
   state.lastApiSuccessAt = null;
   state.consecutiveApiFailures = 0;
+  clearQueueDragState();
   setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
   stopDebugTabHideTimer();
   renderWebLogin();
@@ -2060,6 +2318,9 @@ async function logoutWebSession() {
 function startStatePolling() {
   stopStatePoller();
   statePoller = setInterval(() => {
+    if (state.queueDrag.active || state.queueDrag.pending) {
+      return;
+    }
     refreshDashboardData().catch((error) => {
       pushDebugEvent("data.refresh.poll.failed", error?.message || String(error));
       if (state.mode !== "web") {
@@ -2084,6 +2345,7 @@ async function bootstrapEmbeddedMode() {
   }
 
   setConnectionStatus(CONNECTION_STATUS_AUTHORIZING);
+  state.discordSdkConnected = false;
   const discordSdk = new DiscordSDK(clientId);
   pushDebugEvent("sdk.create.success");
   renderStatus({
@@ -2099,6 +2361,7 @@ async function bootstrapEmbeddedMode() {
     "Connection timed out. Please close and relaunch this Activity from Discord."
   );
   pushDebugEvent("sdk.ready.success");
+  state.discordSdkConnected = true;
 
   renderStatus({
     title: "Authorizing session",
@@ -2123,6 +2386,7 @@ async function bootstrapEmbeddedMode() {
 async function bootstrapWebMode() {
   state.mode = "web";
   setConnectionStatus(CONNECTION_STATUS_AUTHORIZING);
+  state.discordSdkConnected = false;
   state.connectedAt = new Date();
   state.sdkContext.guildId = null;
   state.sdkContext.channelId = null;
@@ -2149,6 +2413,33 @@ async function bootstrapWebMode() {
   startStatePolling();
 }
 
+async function bootstrapEmbeddedFallback(failureMessage) {
+  const reason = String(failureMessage || "unknown");
+  pushDebugEvent("bootstrap.embedded.fallback.start", reason);
+
+  state.mode = "embedded";
+  state.discordSdkConnected = false;
+  state.connectedAt = new Date();
+  state.sdkContext.guildId = null;
+  state.sdkContext.channelId = null;
+  state.sdkContext.instanceId = null;
+  state.selectedGuildId = resolveInitialGuildId();
+
+  try {
+    await refreshDashboardData();
+    state.notice = "Discord SDK handshake failed. Using existing session fallback; relaunch Activity if controls stop responding.";
+    state.noticeError = false;
+    pushDebugEvent("bootstrap.embedded.fallback.success", state.selectedGuildId || "no-guild");
+    renderDashboard();
+    startLiveTicker();
+    startStatePolling();
+    return true;
+  } catch (error) {
+    pushDebugEvent("bootstrap.embedded.fallback.failed", error?.message || String(error));
+    return false;
+  }
+}
+
 async function bootstrap() {
   debugEvents.length = 0;
   applyThemeMode(state.themeMode);
@@ -2158,15 +2449,16 @@ async function bootstrap() {
   ensureViewportWatcher();
   state.hasMountedDashboard = false;
   state.debugTabVisible = false;
+  state.discordSdkConnected = false;
   state.lastApiAttemptAt = null;
   state.lastApiSuccessAt = null;
   state.consecutiveApiFailures = 0;
   setConnectionStatus(CONNECTION_STATUS_DISCONNECTED);
   pushDebugEvent("bootstrap.start", `build=${BUILD_ID}`);
+  const query = new URLSearchParams(window.location.search);
+  const hasFrameId = query.has("frame_id");
 
   try {
-    const query = new URLSearchParams(window.location.search);
-    const hasFrameId = query.has("frame_id");
     if (hasFrameId) {
       await bootstrapEmbeddedMode();
       return;
@@ -2177,6 +2469,12 @@ async function bootstrap() {
     const message = String(error?.message || "");
     const isTimeout = message.toLowerCase().includes("timed out");
     pushDebugEvent("bootstrap.failed", message);
+    if (hasFrameId) {
+      const fallbackSucceeded = await bootstrapEmbeddedFallback(message);
+      if (fallbackSucceeded) {
+        return;
+      }
+    }
     renderStatus({
       title: "Failed to initialize",
       subtitle: isTimeout

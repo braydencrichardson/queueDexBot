@@ -303,6 +303,12 @@ dd {
   border: 1px solid color-mix(in srgb, var(--info) 42%, transparent);
 }
 
+.chip-api-only {
+  color: color-mix(in srgb, var(--primary) 84%, white 16%);
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 54%, transparent);
+}
+
 .chip-disconnected {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 20%, transparent);
@@ -467,6 +473,10 @@ dd {
 
 .connection-dot-authorizing {
   background: var(--info);
+}
+
+.connection-dot-api_only {
+  background: color-mix(in srgb, var(--primary) 90%, white 10%);
 }
 
 .connection-dot-disconnected {
@@ -742,7 +752,40 @@ dd {
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 0.45rem;
+  gap: 0.22rem;
+}
+
+.queue-drop-slot {
+  list-style: none;
+  height: 0.62rem;
+  display: flex;
+  align-items: center;
+  border-radius: 0.35rem;
+}
+
+.queue-drop-slot-line {
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 38%, transparent);
+  opacity: 0;
+  transition: opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+  pointer-events: none;
+}
+
+.queue-track-list.queue-track-list-dragging .queue-drop-slot:not(.queue-drop-slot-disabled) .queue-drop-slot-line {
+  opacity: 0.32;
+}
+
+.queue-drop-slot.active .queue-drop-slot-line {
+  opacity: 1;
+  transform: scaleY(1.9);
+  background: var(--waveform-gradient);
+  box-shadow: 0 0 0.7rem color-mix(in srgb, var(--glow-cyan) 52%, transparent);
+}
+
+.queue-drop-slot-disabled {
+  pointer-events: none;
 }
 
 .queue-track-row {
@@ -750,14 +793,61 @@ dd {
   border-radius: 0.7rem;
   background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
   padding: 0.55rem;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start;
   gap: 0.5rem;
 }
 
+.queue-track-row-dragging {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  opacity: 0.62;
+}
+
+.queue-drag-handle {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  width: 1.65rem;
+  min-width: 1.65rem;
+  height: 2.3rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.queue-drag-handle:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+  box-shadow: 0 0 0.65rem color-mix(in srgb, var(--glow-cyan) 35%, transparent);
+}
+
+.queue-drag-handle:active:not(:disabled),
+.queue-track-row-dragging .queue-drag-handle {
+  cursor: grabbing;
+}
+
+.queue-drag-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.queue-drag-grip {
+  width: 0.56rem;
+  height: 1.2rem;
+  display: inline-block;
+  border-radius: 0.2rem;
+  background-image:
+    radial-gradient(circle, color-mix(in srgb, var(--text-muted) 78%, transparent) 36%, transparent 38%),
+    radial-gradient(circle, color-mix(in srgb, var(--text-muted) 78%, transparent) 36%, transparent 38%);
+  background-size: 0.56rem 0.56rem;
+  background-position: 0 0, 0 0.28rem;
+}
+
 .queue-track-main {
-  min-width: 14rem;
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: 0.55rem;
@@ -780,6 +870,7 @@ dd {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
+  justify-content: flex-end;
 }
 
 .toggle-row {
@@ -928,11 +1019,15 @@ dd {
   }
 
   .queue-track-row {
-    flex-direction: column;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .queue-track-main {
     min-width: 0;
+  }
+
+  .queue-track-actions {
+    grid-column: 1 / -1;
   }
 
   .panel-grid {
