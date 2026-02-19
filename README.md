@@ -356,6 +356,7 @@ If you hit stale UI while testing tunnels:
 
 - `/play query:<url or search>`: Resolve and queue one or more tracks.
 - `/join`: Join your current voice channel and bind queue updates to the current text channel.
+- `/leave voice|text`: Leave voice (and clear queue) or unbind queue text updates.
 - `/playing`: Post now-playing controls in channel.
 - `/pause`, `/resume`, `/skip`, `/stop`: Playback controls.
 - `/queue view|clear|shuffle|remove|move`: Queue management.

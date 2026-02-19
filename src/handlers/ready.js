@@ -1,5 +1,6 @@
 function registerReadyHandler(client, deps) {
   const { logInfo, logError, onReady, presence } = deps;
+  let readyHookExecuted = false;
 
   function normalizeActivityType(value) {
     const allowed = new Set(["PLAYING", "STREAMING", "LISTENING", "WATCHING", "COMPETING"]);
@@ -19,7 +20,7 @@ function registerReadyHandler(client, deps) {
     return "online";
   }
 
-  client.once("clientReady", () => {
+  client.on("clientReady", () => {
     logInfo(`Logged in as ${client.user.tag}`);
     if (client.user?.setPresence && presence) {
       try {
@@ -49,7 +50,8 @@ function registerReadyHandler(client, deps) {
         }
       }
     }
-    if (typeof onReady === "function") {
+    if (!readyHookExecuted && typeof onReady === "function") {
+      readyHookExecuted = true;
       Promise.resolve(onReady()).catch((error) => {
         if (typeof logError === "function") {
           logError("Ready hook failed", error);

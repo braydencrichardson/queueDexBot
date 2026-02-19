@@ -123,6 +123,220 @@ test("stop requires caller in voice channel when there is active playback", asyn
   assert.deepEqual(replyPayload, { content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
 });
 
+test("leave text unbinds the existing queue text channel", async () => {
+  let replyPayload = null;
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: { id: "vc-bot" },
+    connection: null,
+    textChannel: { id: "text-1", name: "music" },
+    textChannelId: "text-1",
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({ queue });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-2",
+    channel: { id: "text-2" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: null } },
+    commandName: "leave",
+    options: {
+      getSubcommand: () => "text",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(queue.textChannel, null);
+  assert.equal(queue.textChannelId, null);
+  assert.deepEqual(replyPayload, {
+    content: "Unbound queue updates from <#text-1>.",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
+test("leave text reports when no queue text channel is bound", async () => {
+  let replyPayload = null;
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: { id: "vc-bot" },
+    connection: null,
+    textChannel: null,
+    textChannelId: null,
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({ queue });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: null } },
+    commandName: "leave",
+    options: {
+      getSubcommand: () => "text",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.deepEqual(replyPayload, {
+    content: "No text channel is currently bound.",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
+test("leave voice reports when bot is not in a voice channel", async () => {
+  let replyPayload = null;
+  let stopCalled = false;
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: null,
+    connection: null,
+    textChannel: { id: "text-1" },
+    textChannelId: "text-1",
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      stopAndLeaveQueue: () => {
+        stopCalled = true;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-1" } } },
+    commandName: "leave",
+    options: {
+      getSubcommand: () => "voice",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(stopCalled, false);
+  assert.deepEqual(replyPayload, {
+    content: "I am not connected to a voice channel.",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
+test("leave voice requires caller in bot voice channel", async () => {
+  let replyPayload = null;
+  let stopCalled = false;
+  const queue = {
+    tracks: [],
+    current: { title: "Now Playing" },
+    voiceChannel: { id: "vc-bot" },
+    connection: null,
+    textChannel: { id: "text-1" },
+    textChannelId: "text-1",
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      stopAndLeaveQueue: () => {
+        stopCalled = true;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: null } },
+    commandName: "leave",
+    options: {
+      getSubcommand: () => "voice",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(stopCalled, false);
+  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
+});
+
+test("leave voice disconnects and preserves existing text binding", async () => {
+  let replyPayload = null;
+  let stopReason = null;
+  const originalTextChannel = { id: "text-1", name: "general" };
+  const queue = {
+    tracks: [{ id: "t1", title: "Track 1" }],
+    current: { title: "Now Playing" },
+    voiceChannel: { id: "vc-bot" },
+    connection: { joinConfig: { channelId: "vc-bot" } },
+    textChannel: originalTextChannel,
+    textChannelId: "text-1",
+    player: { id: "player-1" },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      stopAndLeaveQueue: (_queue, reason) => {
+        stopReason = reason;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    channelId: "text-2",
+    channel: { id: "text-2" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: { id: "vc-bot" } } },
+    commandName: "leave",
+    options: {
+      getSubcommand: () => "voice",
+    },
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(stopReason, "Leaving voice channel via /leave voice");
+  assert.equal(queue.textChannel, originalTextChannel);
+  assert.equal(queue.textChannelId, "text-1");
+  assert.deepEqual(replyPayload, {
+    content: "Left the voice channel and cleared the queue.",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
 test("queue clear reports already empty before voice-channel checks", async () => {
   let replyPayload = null;
   const queue = {
@@ -252,7 +466,11 @@ test("join command connects bot to caller voice channel", async () => {
     true
   );
   assert.equal(
-    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    String(replyPayload?.content || "").includes("**Activity:** <https://discord.gg/2KxydpY> | Web: <https://qdexbot.app/>"),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play <song name or URL>` here to start music, or open the Activity/Web UI to queue tracks."),
     true
   );
 });
@@ -330,7 +548,11 @@ test("join command clears stale queue voice state when bot is disconnected", asy
     true
   );
   assert.equal(
-    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    String(replyPayload?.content || "").includes("**Activity:** <https://discord.gg/2KxydpY> | Web: <https://qdexbot.app/>"),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play <song name or URL>` here to start music, or open the Activity/Web UI to queue tracks."),
     true
   );
 });
@@ -400,7 +622,11 @@ test("join command reports already connected based on live bot voice state", asy
     true
   );
   assert.equal(
-    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    String(replyPayload?.content || "").includes("**Activity:** <https://discord.gg/2KxydpY> | Web: <https://qdexbot.app/>"),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play <song name or URL>` here to start music, or open the Activity/Web UI to queue tracks."),
     true
   );
 });
@@ -474,6 +700,7 @@ test("join posts now-playing controls when first text-channel bind happens durin
 
 test("join does not post now-playing controls when text channel was already attached", async () => {
   let sendNowPlayingCalls = 0;
+  let replyPayload = null;
   const voiceChannel = {
     id: "vc-1",
     name: "General",
@@ -524,12 +751,26 @@ test("join does not post now-playing controls when text channel was already atta
     member: { voice: { channel: voiceChannel } },
     commandName: "join",
     options: {},
-    reply: async () => {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
   };
 
   await handler(interaction);
 
   assert.equal(sendNowPlayingCalls, 0);
+  assert.equal(
+    String(replyPayload?.content || "").includes("I am already in your voice channel and this text channel is already attached."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("**Activity:** <https://discord.gg/2KxydpY> | Web: <https://qdexbot.app/>"),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play <song name or URL>` here to start music, or open the Activity/Web UI to queue tracks."),
+    true
+  );
 });
 
 test("play resolves tracks before joining voice", async () => {

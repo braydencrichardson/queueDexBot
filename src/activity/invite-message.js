@@ -15,6 +15,22 @@ function normalizeActivityUrl(value) {
   }
 }
 
+function formatActivityLinksInline({ inviteUrl = "", activityWebUrl = "" } = {}) {
+  const normalizedInviteUrl = normalizeActivityUrl(inviteUrl);
+  const normalizedWebUrl = normalizeActivityUrl(activityWebUrl);
+  if (!normalizedInviteUrl && !normalizedWebUrl) {
+    return null;
+  }
+  const parts = [];
+  if (normalizedInviteUrl) {
+    parts.push(`<${normalizedInviteUrl}>`);
+  }
+  if (normalizedWebUrl) {
+    parts.push(`Web: <${normalizedWebUrl}>`);
+  }
+  return `**Activity:** ${parts.join(" | ")}`;
+}
+
 function appendActivityWebLine(lines, activityWebUrl = "") {
   if (!Array.isArray(lines)) {
     return false;
@@ -27,7 +43,7 @@ function appendActivityWebLine(lines, activityWebUrl = "") {
   if (alreadyIncluded) {
     return false;
   }
-  lines.push(`Web: <${normalizedWebUrl}>`);
+  lines.push(`**Activity:** Web: <${normalizedWebUrl}>`);
   return true;
 }
 
@@ -37,16 +53,14 @@ function formatActivityInviteResponse({
   voiceChannelName = "voice",
   activityWebUrl = "",
 }) {
-  const normalizedInviteUrl = String(inviteUrl || "").trim();
+  const normalizedInviteUrl = normalizeActivityUrl(inviteUrl);
   if (!normalizedInviteUrl) {
     throw new Error("inviteUrl is required");
   }
-  const lines = [
-    `Activity: <${normalizedInviteUrl}>`,
-  ];
-
-  appendActivityWebLine(lines, activityWebUrl);
-  return lines.join("\n");
+  return formatActivityLinksInline({
+    inviteUrl: normalizedInviteUrl,
+    activityWebUrl,
+  });
 }
 
 function getActivityInviteFailureMessage(error) {

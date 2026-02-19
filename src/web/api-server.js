@@ -1499,7 +1499,25 @@ function createApiServer(options) {
     }
 
     const currentTextChannelId = String(queue?.textChannel?.id || queue?.textChannelId || "").trim() || null;
-    if (currentTextChannelId === requestedTextChannelId && queue?.textChannel?.send) {
+    if (!currentTextChannelId) {
+      logInfo("Skipped queue text channel attach from activity/web request", {
+        guildId,
+        requestedTextChannelId,
+        source: source || "unknown",
+        reason: "no_existing_binding",
+      });
+      return false;
+    }
+    if (currentTextChannelId !== requestedTextChannelId) {
+      logInfo("Skipped queue text channel rebind from activity/web request", {
+        guildId,
+        currentTextChannelId,
+        requestedTextChannelId,
+        source: source || "unknown",
+      });
+      return false;
+    }
+    if (queue?.textChannel?.send) {
       queue.textChannelId = currentTextChannelId;
       return true;
     }
@@ -1509,13 +1527,13 @@ function createApiServer(options) {
     }
 
     try {
-      const resolvedChannel = await resolveTextChannelById(guildId, requestedTextChannelId);
+      const resolvedChannel = await resolveTextChannelById(guildId, currentTextChannelId);
       if (!resolvedChannel?.send) {
         return false;
       }
       queue.textChannel = resolvedChannel;
-      queue.textChannelId = String(resolvedChannel.id || requestedTextChannelId).trim();
-      logInfo("Attached queue text channel from activity/web request", {
+      queue.textChannelId = String(resolvedChannel.id || currentTextChannelId).trim();
+      logInfo("Reattached queue text channel from activity/web request", {
         guildId,
         textChannelId: queue.textChannelId,
         source: source || "unknown",

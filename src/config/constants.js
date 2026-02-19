@@ -79,7 +79,7 @@ const QUEUE_MOVE_MENU_PAGE_SIZE = 25;
 const QUEUE_INACTIVITY_TIMEOUT_MS = 300000;
 const INTERACTION_TIMEOUT_MS = 45000;
 const BOT_STATUS = "online";
-const BOT_ACTIVITY_NAME = "music with /play";
+const BOT_ACTIVITY_NAME = "start with /join";
 const BOT_ACTIVITY_TYPE = "LISTENING";
 const SPOTIFY_MARKET = "US";
 

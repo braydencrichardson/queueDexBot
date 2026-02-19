@@ -15,7 +15,7 @@ test("formatActivityInviteResponse includes optional web URL when valid", () => 
     activityWebUrl: "https://activity.example.com",
   });
 
-  assert.equal(content.includes("Activity: <https://discord.gg/test123>"), true);
+  assert.equal(content.includes("**Activity:** <https://discord.gg/test123>"), true);
   assert.equal(content.includes("Web: <https://activity.example.com/>"), true);
 });
 
@@ -27,20 +27,20 @@ test("formatActivityInviteResponse ignores invalid web URL", () => {
     activityWebUrl: "javascript:alert(1)",
   });
 
-  assert.equal(content.includes("Activity: <https://discord.gg/test123>"), true);
+  assert.equal(content.includes("**Activity:** <https://discord.gg/test123>"), true);
   assert.equal(content.includes("Web:"), false);
 });
 
 test("appendActivityWebLine adds one normalized web line and avoids duplicates", () => {
-  const lines = ["Activity: <https://discord.gg/test123>"];
+  const lines = ["**Activity:** <https://discord.gg/test123>"];
   const first = appendActivityWebLine(lines, "https://activity.example.com");
   const second = appendActivityWebLine(lines, "https://activity.example.com/");
 
   assert.equal(first, true);
   assert.equal(second, false);
   assert.deepEqual(lines, [
-    "Activity: <https://discord.gg/test123>",
-    "Web: <https://activity.example.com/>",
+    "**Activity:** <https://discord.gg/test123>",
+    "**Activity:** Web: <https://activity.example.com/>",
   ]);
 });
 

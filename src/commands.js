@@ -20,6 +20,22 @@ const commands = [
     description: "Join your voice channel and bind updates to this text channel",
   },
   {
+    name: "leave",
+    description: "Leave voice or unbind queue text updates",
+    options: [
+      {
+        type: 1,
+        name: "voice",
+        description: "Leave voice channel and clear playback",
+      },
+      {
+        type: 1,
+        name: "text",
+        description: "Unbind queue updates from the bound text channel",
+      },
+    ],
+  },
+  {
     name: "pause",
     description: "Pause playback",
   },

@@ -69,6 +69,11 @@ function createCommandInteractionHandler(deps) {
     queueViewTimeoutMs: QUEUE_VIEW_TIMEOUT_MS,
     logError,
   });
+  const joinDefaultActivityLine = formatActivityInviteResponse({
+    inviteUrl: "https://discord.gg/2KxydpY",
+    activityWebUrl: "https://qdexbot.app/",
+  });
+  const joinUsageLine = "Use `/play <song name or URL>` here to start music, or open the Activity/Web UI to queue tracks.";
   async function handleResolveErrorReply(interaction, error) {
     const errorMessageText = String(error?.message || "");
     const isHttp302Error = errorMessageText.toLowerCase().includes("http status: 302");
@@ -215,10 +220,14 @@ function createCommandInteractionHandler(deps) {
     }
 
     const queue = getGuildQueue(interaction.guildId);
-    const previousQueueTextChannelId = String(queue?.textChannel?.id || queue?.textChannelId || "").trim() || null;
+    const previousQueueTextChannel = queue?.textChannel || null;
+    const previousQueueTextChannelId = String(previousQueueTextChannel?.id || queue?.textChannelId || "").trim() || null;
     const previousQueueVoiceChannelId = getQueueVoiceChannelId(queue);
-    queue.textChannel = interaction.channel;
-    queue.textChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
+    const interactionTextChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
+    if (interaction.commandName !== "leave") {
+      queue.textChannel = interaction.channel;
+      queue.textChannelId = interactionTextChannelId;
+    }
 
     logInfo("Slash command received", {
       guild: interaction.guildId,
@@ -529,15 +538,56 @@ function createCommandInteractionHandler(deps) {
             }
           }
         }
-
-        appendActivityWebLine(responseLines, activityWebUrl);
-        responseLines.push("Use `/play` here or open the Activity/Web UI to queue tracks.");
       }
+      if (!responseLines.some((line) => String(line || "").includes("**Activity:**"))) {
+        responseLines.push(joinDefaultActivityLine);
+      }
+      responseLines.push(joinUsageLine);
 
       await interaction.reply({
         content: responseLines.join("\n"),
         flags: MessageFlags.Ephemeral,
       });
+      return;
+    }
+
+    if (interaction.commandName === "leave") {
+      const leaveSubcommand = typeof interaction.options?.getSubcommand === "function"
+        ? interaction.options.getSubcommand()
+        : "";
+      if (leaveSubcommand === "text") {
+        if (!previousQueueTextChannelId) {
+          await interaction.reply({ content: "No text channel is currently bound.", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        queue.textChannel = null;
+        queue.textChannelId = null;
+        await interaction.reply({
+          content: `Unbound queue updates from <#${previousQueueTextChannelId}>.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (leaveSubcommand === "voice") {
+        const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+        if (!queueVoiceChannelId && !queue?.connection) {
+          await interaction.reply({ content: "I am not connected to a voice channel.", flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const voiceChannelCheck = getVoiceChannelCheck(interaction.member, queue, "make me leave voice");
+        if (voiceChannelCheck) {
+          await interaction.reply({ content: voiceChannelCheck, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        stopAndLeaveQueue(queue, "Leaving voice channel via /leave voice");
+        queue.textChannel = previousQueueTextChannel;
+        queue.textChannelId = previousQueueTextChannelId;
+        await interaction.reply({ content: "Left the voice channel and cleared the queue.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      await interaction.reply({ content: "Use `/leave voice` or `/leave text`.", flags: MessageFlags.Ephemeral });
       return;
     }
 

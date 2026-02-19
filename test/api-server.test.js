@@ -310,12 +310,13 @@ test("api control posts text-channel feedback for playback actions", async () =>
   }
 });
 
-test("activity control can attach queue text channel from request context", async () => {
+test("activity control does not attach queue text channel from request context when no existing binding", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();
 
   let pauseCalled = false;
   const sentMessages = [];
+  let resolveTextChannelByIdCalled = false;
   const queue = {
     current: { id: "track-1", title: "Song" },
     tracks: [],
@@ -345,7 +346,10 @@ test("activity control can attach queue text channel from request context", asyn
   const serverApi = createApiServer({
     queues: new Map([["guild-1", queue]]),
     getUserVoiceChannelId: async () => "voice-1",
-    resolveTextChannelById: async (_guildId, channelId) => (channelId === "text-123" ? resolvedTextChannel : null),
+    resolveTextChannelById: async (_guildId, channelId) => {
+      resolveTextChannelByIdCalled = true;
+      return channelId === "text-123" ? resolvedTextChannel : null;
+    },
     sendNowPlaying: async () => {},
     maybeRefreshNowPlayingUpNext: async () => {},
     config: {
@@ -372,9 +376,90 @@ test("activity control can attach queue text channel from request context", asyn
 
     assert.equal(response.statusCode, 200);
     assert.equal(pauseCalled, true);
-    assert.equal(queue.textChannelId, "text-123");
-    assert.equal(queue.textChannel?.id, "text-123");
+    assert.equal(queue.textChannelId, null);
+    assert.equal(queue.textChannel, null);
+    assert.equal(resolveTextChannelByIdCalled, false);
+    assert.equal(sentMessages.length, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity control does not override an existing queue text channel binding", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let pauseCalled = false;
+  const sentMessages = [];
+  let resolveTextChannelByIdCalled = false;
+  const queue = {
+    current: { id: "track-1", title: "Song" },
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    textChannel: {
+      id: "text-bound",
+      name: "general",
+      async send(content) {
+        sentMessages.push(String(content));
+        return { id: "msg-1" };
+      },
+    },
+    textChannelId: "text-bound",
+    player: {
+      state: { status: "playing" },
+      pause() {
+        pauseCalled = true;
+      },
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    resolveTextChannelById: async () => {
+      resolveTextChannelByIdCalled = true;
+      return {
+        id: "text-other",
+        name: "voice-chat",
+        async send() {
+          return { id: "msg-2" };
+        },
+      };
+    },
+    sendNowPlaying: async () => {},
+    maybeRefreshNowPlayingUpNext: async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/control",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "pause",
+        text_channel_id: "text-other",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(pauseCalled, true);
+    assert.equal(queue.textChannelId, "text-bound");
+    assert.equal(queue.textChannel?.id, "text-bound");
+    assert.equal(resolveTextChannelByIdCalled, false);
     assert.equal(sentMessages.length, 1);
+    assert.equal(sentMessages[0], "**User One** paused playback.");
   } finally {
     global.fetch = originalFetch;
   }
