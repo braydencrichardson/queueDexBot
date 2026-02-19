@@ -405,6 +405,133 @@ test("join command reports already connected based on live bot voice state", asy
   );
 });
 
+test("join posts now-playing controls when first text-channel bind happens during active playback", async () => {
+  let replyPayload = null;
+  let sendNowPlayingCalls = 0;
+  let sendNowPlayingArgs = null;
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const queue = {
+    tracks: [],
+    current: { id: "track-now", title: "Now Playing" },
+    voiceChannel: null,
+    connection: null,
+    textChannel: null,
+    textChannelId: null,
+    player: {
+      id: "player-1",
+      state: { status: "playing" },
+    },
+  };
+
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      sendNowPlaying: async (...args) => {
+        sendNowPlayingCalls += 1;
+        sendNowPlayingArgs = args;
+        return { id: "now-playing-message-1" };
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-1", voiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-1",
+            channel: voiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(sendNowPlayingCalls, 1);
+  assert.deepEqual(sendNowPlayingArgs, [queue, true]);
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+});
+
+test("join does not post now-playing controls when text channel was already attached", async () => {
+  let sendNowPlayingCalls = 0;
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const queue = {
+    tracks: [],
+    current: { id: "track-now", title: "Now Playing" },
+    voiceChannel: voiceChannel,
+    connection: null,
+    textChannel: { id: "text-1" },
+    textChannelId: "text-1",
+    player: {
+      id: "player-1",
+      state: { status: "playing" },
+    },
+  };
+
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      sendNowPlaying: async () => {
+        sendNowPlayingCalls += 1;
+        return { id: "now-playing-message-1" };
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-1", voiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-1",
+            channel: voiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.equal(sendNowPlayingCalls, 0);
+});
+
 test("launch requires caller in voice channel", async () => {
   let replyPayload = null;
   const { deps } = createDeps();

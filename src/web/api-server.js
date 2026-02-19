@@ -4,9 +4,18 @@ const http = require("node:http");
 const path = require("node:path");
 const { createQueueService } = require("../queue/service");
 const { getQueueVoiceChannelId } = require("../queue/voice-channel");
-const { enqueueTracks, formatDuration, getQueuedTrackIndex } = require("../queue/utils");
+const {
+  enqueueTracks,
+  formatDuration,
+  getQueuedTrackIndex,
+  getTrackIndexById,
+} = require("../queue/utils");
 const { listQueueEvents } = require("../queue/event-feed");
-const { formatQueuedMessage, formatQueuedPlaylistMessage } = require("../ui/messages");
+const {
+  formatQueuedMessage,
+  formatQueuedPlaylistMessage,
+  formatTrackPrimary,
+} = require("../ui/messages");
 const {
   buildControlActionFeedback,
   buildQueueActionFeedback,
@@ -1266,6 +1275,52 @@ function createApiServer(options) {
     };
   }
 
+  function normalizeTrackId(value) {
+    const normalized = String(value || "").trim();
+    return normalized || null;
+  }
+
+  function getQueueReplacementTarget(queue, replaceTrackId) {
+    const normalizedTrackId = normalizeTrackId(replaceTrackId);
+    if (!normalizedTrackId) {
+      return null;
+    }
+    const targetIndex = getTrackIndexById(queue, normalizedTrackId);
+    if (!Number.isFinite(targetIndex) || targetIndex < 0) {
+      return {
+        trackId: normalizedTrackId,
+        missing: true,
+      };
+    }
+    const targetTrack = Array.isArray(queue?.tracks) ? queue.tracks[targetIndex] : null;
+    return {
+      trackId: normalizedTrackId,
+      targetIndex,
+      targetTrack,
+      position: targetIndex + 1,
+      missing: false,
+    };
+  }
+
+  function summarizeReplacementDescriptor({ replaceTrackId, replaceTrack, replacePosition }) {
+    const normalizedTrackId = normalizeTrackId(replaceTrackId);
+    if (!normalizedTrackId) {
+      return null;
+    }
+    const normalizedPosition = Number.isFinite(replacePosition) && replacePosition > 0
+      ? Math.floor(replacePosition)
+      : null;
+    const targetSummary = summarizeTrack(replaceTrack) || {
+      id: normalizedTrackId,
+      title: "Unknown",
+    };
+    return {
+      targetTrackId: normalizedTrackId,
+      position: normalizedPosition,
+      target: targetSummary,
+    };
+  }
+
   function pruneExpiredActivitySearchChoosers(now = Date.now()) {
     activitySearchChoosers.forEach((entry, chooserId) => {
       if (!entry || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= now) {
@@ -1274,7 +1329,15 @@ function createApiServer(options) {
     });
   }
 
-  function createActivitySearchChooser({ guildId, requesterId, query, options }) {
+  function createActivitySearchChooser({
+    guildId,
+    requesterId,
+    query,
+    options,
+    replaceTrackId = null,
+    replaceTrack = null,
+    replacePosition = null,
+  }) {
     const normalizedOptions = Array.isArray(options) ? options.slice(0, 10) : [];
     if (!normalizedOptions.length) {
       return null;
@@ -1282,12 +1345,19 @@ function createApiServer(options) {
     pruneExpiredActivitySearchChoosers();
     const chooserId = crypto.randomUUID();
     const expiresAt = Date.now() + ACTIVITY_SEARCH_CHOOSER_TTL_MS;
+    const replacement = summarizeReplacementDescriptor({
+      replaceTrackId,
+      replaceTrack,
+      replacePosition,
+    });
     activitySearchChoosers.set(chooserId, {
       id: chooserId,
       guildId: String(guildId || "").trim(),
       requesterId: String(requesterId || "").trim(),
       query: String(query || "").trim(),
       options: normalizedOptions,
+      replaceTrackId: replacement?.targetTrackId || null,
+      replacement,
       createdAt: Date.now(),
       expiresAt,
     });
@@ -1462,7 +1532,12 @@ function createApiServer(options) {
     }
   }
 
-  async function queueTracksFromActivityRequest({ context, tracks, source }) {
+  async function queueTracksFromActivityRequest({
+    context,
+    tracks,
+    source,
+    replaceTrackId = null,
+  }) {
     const queue = context?.queue;
     if (!queue || !Array.isArray(tracks) || !tracks.length) {
       return {
@@ -1487,10 +1562,24 @@ function createApiServer(options) {
     }
 
     const requesterName = getSessionRequesterName(context.session);
-    const hadAnythingQueuedBefore = Boolean(queue.current) || queue.tracks.length > 0;
     const queuedTracks = tracks
       .filter((track) => track && typeof track === "object")
       .map((track) => ({ ...track }));
+    const replacementTarget = getQueueReplacementTarget(queue, replaceTrackId);
+    if (replacementTarget?.missing) {
+      return {
+        ok: false,
+        statusCode: 409,
+        error: "That queue item is no longer available for replacement.",
+      };
+    }
+    if (replacementTarget && queuedTracks.length !== 1) {
+      return {
+        ok: false,
+        statusCode: 400,
+        error: "Replacement requires a single track.",
+      };
+    }
 
     queuedTracks.forEach((track) => {
       if (!String(track.requester || "").trim()) {
@@ -1501,13 +1590,35 @@ function createApiServer(options) {
       }
     });
 
-    enqueueTracks(queue, queuedTracks);
-    await maybeRefreshNowPlayingUpNext(queue);
+    let replacement = null;
+    let queuedTrackPositions = [];
+    if (replacementTarget) {
+      const latestTarget = getQueueReplacementTarget(queue, replacementTarget.trackId);
+      if (!latestTarget || latestTarget.missing) {
+        return {
+          ok: false,
+          statusCode: 409,
+          error: "That queue item is no longer available for replacement.",
+        };
+      }
+      const replacementPosition = latestTarget.position;
+      const previousTrack = latestTarget.targetTrack;
+      queue.tracks.splice(latestTarget.targetIndex, 1, queuedTracks[0]);
+      queuedTrackPositions = [replacementPosition];
+      replacement = {
+        targetTrackId: latestTarget.trackId,
+        position: replacementPosition,
+        previous: summarizeTrack(previousTrack),
+      };
+    } else {
+      enqueueTracks(queue, queuedTracks);
+      queuedTrackPositions = queuedTracks.map((track) => {
+        const queuedIndex = getQueuedTrackIndex(queue, track);
+        return queuedIndex >= 0 ? queuedIndex + 1 : null;
+      });
+    }
 
-    const queuedTrackPositions = queuedTracks.map((track) => {
-      const queuedIndex = getQueuedTrackIndex(queue, track);
-      return queuedIndex >= 0 ? queuedIndex + 1 : null;
-    });
+    await maybeRefreshNowPlayingUpNext(queue);
 
     logInfo("Queued tracks from activity/web queue search", {
       source: source || "unknown",
@@ -1515,11 +1626,21 @@ function createApiServer(options) {
       userId: context?.session?.user?.id || null,
       count: queuedTracks.length,
       first: queuedTracks[0]?.title || null,
+      replacement: replacement?.targetTrackId || null,
+      replacementPosition: replacement?.position || null,
     });
 
     let feedbackContent = "";
-    if (queuedTracks.length === 1) {
-      const position = Number.isFinite(queuedTrackPositions[0]) ? queuedTrackPositions[0] : (hadAnythingQueuedBefore ? queue.tracks.length : null);
+    if (replacement && queuedTracks.length === 1) {
+      const positionPart = Number.isFinite(replacement.position)
+        ? ` | position ${replacement.position}`
+        : "";
+      feedbackContent = `**Replaced:** ${formatTrackPrimary(queuedTracks[0], {
+        formatDuration,
+        includeRequester: true,
+      })}${positionPart}.`;
+    } else if (queuedTracks.length === 1) {
+      const position = Number.isFinite(queuedTrackPositions[0]) ? queuedTrackPositions[0] : null;
       feedbackContent = formatQueuedMessage(queuedTracks[0], position, formatDuration);
     } else {
       feedbackContent = formatQueuedPlaylistMessage(queuedTracks.length, requesterName);
@@ -1548,6 +1669,7 @@ function createApiServer(options) {
       queuedTracks,
       queuedTrackPositions,
       requesterName,
+      replacement,
       data: summarizeQueue(queue),
     };
   }
@@ -1567,6 +1689,7 @@ function createApiServer(options) {
 
     const guildId = String(body.guild_id || body.guildId || "").trim();
     const rawQuery = String(body.query || "").trim();
+    const replaceTrackId = normalizeTrackId(body.replace_track_id ?? body.replaceTrackId);
     if (!rawQuery) {
       sendJson(response, 400, { error: "Missing query" });
       return;
@@ -1595,6 +1718,11 @@ function createApiServer(options) {
       sendJson(response, 400, { error: "Missing query" });
       return;
     }
+    const replacementTarget = getQueueReplacementTarget(context.queue, replaceTrackId);
+    if (replacementTarget?.missing) {
+      sendJson(response, 409, { error: "That queue item is no longer available for replacement." });
+      return;
+    }
 
     const requesterName = getSessionRequesterName(context.session);
     const queryIsUrl = isLikelyUrlQuery(normalizedQuery);
@@ -1617,6 +1745,9 @@ function createApiServer(options) {
           requesterId: context.session?.user?.id || "",
           query: normalizedQuery,
           options: searchOptions,
+          replaceTrackId: replacementTarget?.trackId || null,
+          replaceTrack: replacementTarget?.targetTrack || null,
+          replacePosition: replacementTarget?.position || null,
         });
         sendJson(response, 200, {
           ok: true,
@@ -1628,6 +1759,7 @@ function createApiServer(options) {
             expiresAt: chooser.expiresAt,
             timeoutMs: ACTIVITY_SEARCH_CHOOSER_TTL_MS,
             options: chooser.options.map((track, index) => summarizeSearchOption(track, index)),
+            replacement: chooser.replacement || null,
           },
           data: summarizeQueue(context.queue),
         });
@@ -1673,6 +1805,9 @@ function createApiServer(options) {
           requesterId: context.session?.user?.id || "",
           query: normalizedQuery,
           options: searchOptions,
+          replaceTrackId: replacementTarget?.trackId || null,
+          replaceTrack: replacementTarget?.targetTrack || null,
+          replacePosition: replacementTarget?.position || null,
         });
         sendJson(response, 200, {
           ok: true,
@@ -1684,6 +1819,7 @@ function createApiServer(options) {
             expiresAt: chooser.expiresAt,
             timeoutMs: ACTIVITY_SEARCH_CHOOSER_TTL_MS,
             options: chooser.options.map((track, index) => summarizeSearchOption(track, index)),
+            replacement: chooser.replacement || null,
           },
           data: summarizeQueue(context.queue),
         });
@@ -1698,6 +1834,7 @@ function createApiServer(options) {
       context,
       tracks,
       source: "direct",
+      replaceTrackId: replacementTarget?.trackId || null,
     });
     if (!queueResult.ok) {
       sendJson(response, queueResult.statusCode || 400, {
@@ -1717,6 +1854,7 @@ function createApiServer(options) {
       queuedPosition: queueResult.queuedTracks.length === 1
         ? (Number.isFinite(queueResult.queuedTrackPositions?.[0]) ? queueResult.queuedTrackPositions[0] : null)
         : null,
+      replacement: queueResult.replacement || null,
       data: queueResult.data,
     });
   }
@@ -1773,6 +1911,13 @@ function createApiServer(options) {
       sendJson(response, 403, { error: "Only the requester can choose a result." });
       return;
     }
+    const bodyReplaceTrackId = normalizeTrackId(body.replace_track_id ?? body.replaceTrackId);
+    const chooserReplaceTrackId = normalizeTrackId(chooser.replaceTrackId);
+    if (bodyReplaceTrackId && chooserReplaceTrackId && bodyReplaceTrackId !== chooserReplaceTrackId) {
+      sendJson(response, 400, { error: "Replacement target does not match the active search." });
+      return;
+    }
+    const effectiveReplaceTrackId = bodyReplaceTrackId || chooserReplaceTrackId || null;
 
     const queueFirst = toBoolean(body.queue_first ?? body.queueFirst, false);
     const optionIndex = queueFirst
@@ -1795,6 +1940,7 @@ function createApiServer(options) {
       context,
       tracks: [selectedTrack],
       source: "chooser",
+      replaceTrackId: effectiveReplaceTrackId,
     });
     if (!queueResult.ok) {
       sendJson(response, queueResult.statusCode || 400, {
@@ -1810,6 +1956,7 @@ function createApiServer(options) {
       queuedCount: 1,
       queued: summarizeTrack(queueResult.queuedTracks[0]),
       queuedPosition: Number.isFinite(queueResult.queuedTrackPositions?.[0]) ? queueResult.queuedTrackPositions[0] : null,
+      replacement: queueResult.replacement || null,
       data: queueResult.data,
     });
   }

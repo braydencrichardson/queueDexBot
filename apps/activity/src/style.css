@@ -1081,6 +1081,37 @@ dd {
   margin-top: 0;
 }
 
+.queue-search-replace-card {
+  margin: 0 0 0.62rem;
+  border: 1px solid color-mix(in srgb, var(--secondary) 46%, var(--border));
+  border-radius: 0.62rem;
+  background: color-mix(in srgb, var(--secondary) 11%, transparent);
+  padding: 0.52rem 0.58rem;
+}
+
+.queue-search-replace-heading {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.queue-search-replace-track {
+  margin-top: 0.42rem;
+}
+
+.queue-search-replace-track .track-summary {
+  margin-top: 0;
+}
+
+.queue-search-replace-actions {
+  margin-top: 0.42rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .queue-search-form {
   margin: 0;
 }
@@ -1200,6 +1231,12 @@ dd {
 .queue-search-chooser-expiry {
   font-size: 0.72rem;
   color: var(--text-muted);
+}
+
+.queue-search-chooser-replacing {
+  font-size: 0.72rem;
+  color: var(--secondary);
+  font-weight: 700;
 }
 
 .queue-search-option-list {

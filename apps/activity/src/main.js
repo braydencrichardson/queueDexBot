@@ -100,6 +100,8 @@ const state = {
   queueSearchBusy: false,
   queueSearchVisible: false,
   queueSearchAutoDefaultPending: true,
+  queueSearchReplaceTrackId: null,
+  queueSearchReplaceTrack: null,
   queueSearchFeedback: "",
   queueSearchFeedbackError: false,
   queueSearchQueuedResult: null,
@@ -339,6 +341,72 @@ function getTrackArtistText(track) {
   return null;
 }
 
+function getTrackProviderLabel(track) {
+  const source = String(track?.source || "").trim().toLowerCase();
+  if (!source) {
+    return null;
+  }
+  if (source.includes("youtube")) {
+    return "YT";
+  }
+  if (source.includes("soundcloud")) {
+    return "SC";
+  }
+  if (source.includes("spotify")) {
+    return "SP";
+  }
+  return null;
+}
+
+function getTrackArtistProviderMarkup(track, className) {
+  const artist = getTrackArtistText(track);
+  const providerLabel = getTrackProviderLabel(track);
+  if (!artist && !providerLabel) {
+    return "";
+  }
+
+  const textParts = [];
+  if (artist) {
+    textParts.push(escapeHtml(artist));
+  }
+  if (providerLabel) {
+    textParts.push(`<strong>${escapeHtml(providerLabel)}</strong>`);
+  }
+
+  return `<p class="${escapeHtml(className)}">${textParts.join(" - ")}</p>`;
+}
+
+function getTrackDurationRequesterMarkup(track, className, options = {}) {
+  const includeDuration = options.includeDuration !== false;
+  const hideUnknownDuration = Boolean(options.hideUnknownDuration);
+  const includePendingResolve = options.includePendingResolve !== false;
+  const durationText = includeDuration ? formatTrackDuration(track?.duration) : "";
+  const requester = String(track?.requester || "").trim();
+
+  const parts = [];
+  if (durationText && (!hideUnknownDuration || durationText !== "unknown")) {
+    parts.push(escapeHtml(durationText));
+  }
+  if (requester) {
+    const requesterMarkup = `<strong>${escapeHtml(requester)}</strong>`;
+    if (parts.length) {
+      parts.push(`- ${requesterMarkup}`);
+    } else {
+      parts.push(requesterMarkup);
+    }
+  }
+
+  let text = parts.join(" ");
+  if (includePendingResolve && track?.pendingResolve) {
+    text = text ? `${text} • resolving` : "resolving";
+  }
+
+  if (!text) {
+    return "";
+  }
+  return `<p class="${escapeHtml(className)}">${text}</p>`;
+}
+
 function getTrackThumbnailUrl(track) {
   if (!track || typeof track !== "object") {
     return null;
@@ -369,16 +437,12 @@ function getTrackSummaryMarkup(track, options = {}) {
   const linkUrl = getTrackLinkUrl(track);
   const thumbnailUrl = getTrackThumbnailUrl(track);
   const title = String(track?.title || "Unknown");
-  const artist = getTrackArtistText(track);
-
-  const metaBits = [];
-  if (includeDuration) {
-    metaBits.push(formatTrackDuration(track?.duration));
-  }
-  if (track?.pendingResolve) {
-    metaBits.push("resolving");
-  }
-  const metaText = metaBits.filter(Boolean).join(" • ");
+  const artistMarkup = getTrackArtistProviderMarkup(track, "track-summary-artist");
+  const metaMarkup = getTrackDurationRequesterMarkup(track, "track-summary-meta", {
+    includeDuration,
+    hideUnknownDuration: false,
+    includePendingResolve: true,
+  });
 
   const titleMarkup = linkUrl
     ? `<a class="track-summary-title-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
@@ -403,8 +467,8 @@ function getTrackSummaryMarkup(track, options = {}) {
       ${thumbMarkup}
       <div class="track-summary-body">
         <div class="track-summary-title">${titleMarkup}</div>
-        ${artist ? `<p class="track-summary-artist">${escapeHtml(artist)}</p>` : ""}
-        ${metaText ? `<p class="track-summary-meta">${escapeHtml(metaText)}</p>` : ""}
+        ${artistMarkup}
+        ${metaMarkup}
       </div>
     </div>
   `;
@@ -421,16 +485,12 @@ function getPlaybackNowPlayingLayoutMarkup(track, options = {}) {
   const linkUrl = getTrackLinkUrl(track);
   const thumbnailUrl = getTrackThumbnailUrl(track);
   const title = String(track?.title || "Unknown");
-  const artist = getTrackArtistText(track);
-  const durationText = formatTrackDuration(track?.duration);
-  const metaBits = [];
-  if (includeDuration && durationText && durationText !== "unknown") {
-    metaBits.push(durationText);
-  }
-  if (track?.pendingResolve) {
-    metaBits.push("resolving");
-  }
-  const metaText = metaBits.join(" • ");
+  const artistMarkup = getTrackArtistProviderMarkup(track, "playback-artist");
+  const metaMarkup = getTrackDurationRequesterMarkup(track, "playback-meta", {
+    includeDuration,
+    hideUnknownDuration: true,
+    includePendingResolve: true,
+  });
 
   const titleMarkup = linkUrl
     ? `<a class="playback-title-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
@@ -450,8 +510,8 @@ function getPlaybackNowPlayingLayoutMarkup(track, options = {}) {
       <div class="playback-now-playing-main">
         <div class="playback-now-playing-meta">
           <div class="playback-title">${titleMarkup}</div>
-          ${artist ? `<p class="playback-artist">${escapeHtml(artist)}</p>` : ""}
-          ${metaText ? `<p class="playback-meta">${escapeHtml(metaText)}</p>` : ""}
+          ${artistMarkup}
+          ${metaMarkup}
         </div>
         ${progressMarkup}
         ${controlsMarkup}
@@ -488,16 +548,12 @@ function getPipNowPlayingCardMarkup(track, connection) {
   const linkUrl = getTrackLinkUrl(track);
   const thumbnailUrl = getTrackThumbnailUrl(track);
   const title = String(track?.title || "Unknown");
-  const artist = getTrackArtistText(track);
-  const durationText = formatTrackDuration(track?.duration);
-  const metaBits = [];
-  if (durationText && durationText !== "unknown") {
-    metaBits.push(durationText);
-  }
-  if (track?.pendingResolve) {
-    metaBits.push("resolving");
-  }
-  const pipMetaText = metaBits.join(" • ");
+  const artistMarkup = getTrackArtistProviderMarkup(track, "pip-track-artist");
+  const metaMarkup = getTrackDurationRequesterMarkup(track, "pip-track-duration", {
+    includeDuration: true,
+    hideUnknownDuration: true,
+    includePendingResolve: true,
+  });
 
   const titleMarkup = linkUrl
     ? `<a class="pip-track-title-link" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
@@ -523,8 +579,8 @@ function getPipNowPlayingCardMarkup(track, connection) {
         ${artMarkup}
         <div class="pip-track-meta">
           <div class="pip-track-title">${titleMarkup}</div>
-          ${artist ? `<p class="pip-track-artist">${escapeHtml(artist)}</p>` : ""}
-          ${pipMetaText ? `<p class="pip-track-duration">${escapeHtml(pipMetaText)}</p>` : ""}
+          ${artistMarkup}
+          ${metaMarkup}
         </div>
       </div>
       <div class="pip-footer-row">
@@ -1122,6 +1178,161 @@ function parseQueuePosition(value) {
   return parsed;
 }
 
+function normalizeQueueTrackId(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function getQueueTrackById(trackId) {
+  const normalizedTrackId = normalizeQueueTrackId(trackId);
+  if (!normalizedTrackId) {
+    return null;
+  }
+  const queueList = getQueueListData();
+  const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
+  return tracks.find((track) => normalizeQueueTrackId(track?.id) === normalizedTrackId) || null;
+}
+
+function captureQueueTrackSnapshot(track, fallback = {}) {
+  if (!track || typeof track !== "object") {
+    return null;
+  }
+  const trackId = normalizeQueueTrackId(track.id || fallback.id);
+  if (!trackId) {
+    return null;
+  }
+  const position = parseQueuePosition(track.position ?? fallback.position);
+  return {
+    id: trackId,
+    title: track.title || fallback.title || "Unknown",
+    url: track.url || fallback.url || null,
+    displayUrl: track.displayUrl || fallback.displayUrl || null,
+    duration: Number.isFinite(track.duration) ? track.duration : (Number.isFinite(fallback.duration) ? fallback.duration : null),
+    source: track.source || fallback.source || "unknown",
+    artist: track.artist || fallback.artist || null,
+    channel: track.channel || fallback.channel || null,
+    thumbnailUrl: track.thumbnailUrl || fallback.thumbnailUrl || null,
+    requester: track.requester || fallback.requester || null,
+    pendingResolve: Boolean(track.pendingResolve ?? fallback.pendingResolve),
+    position: position || null,
+  };
+}
+
+function clearQueueSearchReplaceTarget(options = {}) {
+  const clearQuery = options.clearQuery !== false;
+  const hadReplaceTarget = Boolean(normalizeQueueTrackId(state.queueSearchReplaceTrackId));
+  state.queueSearchReplaceTrackId = null;
+  state.queueSearchReplaceTrack = null;
+  if (clearQuery && hadReplaceTarget) {
+    state.queueSearchQuery = "";
+  }
+}
+
+function setQueueSearchReplaceTarget(track, fallback = {}) {
+  const snapshot = captureQueueTrackSnapshot(track, fallback);
+  if (!snapshot) {
+    clearQueueSearchReplaceTarget();
+    return null;
+  }
+  state.queueSearchReplaceTrackId = snapshot.id;
+  state.queueSearchReplaceTrack = snapshot;
+  return snapshot;
+}
+
+function applyQueueSearchReplacementFromPayload(replacement) {
+  if (!replacement || typeof replacement !== "object") {
+    clearQueueSearchReplaceTarget();
+    return null;
+  }
+  const replacementTrackId = normalizeQueueTrackId(
+    replacement.targetTrackId
+    ?? replacement.trackId
+    ?? replacement?.target?.id
+  );
+  if (!replacementTrackId) {
+    clearQueueSearchReplaceTarget();
+    return null;
+  }
+
+  const liveTrack = getQueueTrackById(replacementTrackId);
+  if (liveTrack) {
+    return setQueueSearchReplaceTarget(liveTrack, {
+      position: replacement.position,
+    });
+  }
+
+  return setQueueSearchReplaceTarget(
+    {
+      id: replacementTrackId,
+      ...(replacement.target || {}),
+      position: replacement.position ?? replacement?.target?.position,
+    },
+    {
+      id: replacementTrackId,
+      title: "Unknown",
+      position: replacement.position,
+    }
+  );
+}
+
+function getQueueSearchReplaceTarget() {
+  const replacementTrackId = normalizeQueueTrackId(state.queueSearchReplaceTrackId);
+  if (!replacementTrackId) {
+    return null;
+  }
+
+  const liveTrack = getQueueTrackById(replacementTrackId);
+  if (liveTrack) {
+    return setQueueSearchReplaceTarget(liveTrack, state.queueSearchReplaceTrack || {});
+  }
+
+  clearQueueSearchReplaceTarget();
+  return null;
+}
+
+function buildQueueSearchSeedQuery(track) {
+  const title = String(track?.title || "").trim();
+  const artist = getTrackArtistText(track);
+  if (title && title.toLowerCase() !== "unknown") {
+    return artist ? `${artist} - ${title}` : title;
+  }
+  const displayUrl = String(track?.displayUrl || track?.url || "").trim();
+  return displayUrl || "";
+}
+
+function beginQueueSearchReplaceFlow(trackId) {
+  const normalizedTrackId = normalizeQueueTrackId(trackId);
+  if (!normalizedTrackId) {
+    setQueueSearchFeedback("That queue item cannot be replaced right now.", { error: true });
+    renderDashboard();
+    return;
+  }
+  const targetTrack = getQueueTrackById(normalizedTrackId);
+  if (!targetTrack) {
+    clearQueueSearchReplaceTarget();
+    setQueueSearchFeedback("That queue item is no longer available.", { error: true });
+    renderDashboard();
+    return;
+  }
+
+  setQueueSearchReplaceTarget(targetTrack);
+  const seedQuery = buildQueueSearchSeedQuery(targetTrack);
+  if (seedQuery) {
+    state.queueSearchQuery = seedQuery;
+  }
+  state.queueSearchAutoDefaultPending = false;
+  state.queueSearchVisible = true;
+  clearQueueSearchChooser();
+  clearQueueSearchQueuedResult();
+  setQueueSearchFeedback("Replace mode enabled. Search and choose a replacement.");
+  renderDashboard();
+  const queueSearchInput = root.querySelector("#queue-search-query");
+  if (queueSearchInput) {
+    queueSearchInput.focus();
+    queueSearchInput.select();
+  }
+}
+
 function getQueueTotalCount() {
   const queueList = getQueueListData();
   const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
@@ -1206,6 +1417,7 @@ function clearQueueSearchState(options = {}) {
   const keepQuery = Boolean(options.keepQuery);
   const keepFeedback = Boolean(options.keepFeedback);
   const keepQueuedResult = Boolean(options.keepQueuedResult);
+  const keepReplaceTarget = Boolean(options.keepReplaceTarget);
   state.queueSearchBusy = false;
   state.queueSearchChooser = null;
   if (!keepQuery) {
@@ -1216,6 +1428,9 @@ function clearQueueSearchState(options = {}) {
   }
   if (!keepQueuedResult) {
     clearQueueSearchQueuedResult();
+  }
+  if (!keepReplaceTarget) {
+    clearQueueSearchReplaceTarget();
   }
 }
 
@@ -1258,10 +1473,19 @@ function getQueueSearchChooserMarkup() {
 
   const options = Array.isArray(chooser.options) ? chooser.options : [];
   const expiresAtText = Number.isFinite(chooser.expiresAt) ? formatTime(chooser.expiresAt) : "soon";
+  const replacement = chooser?.replacement && typeof chooser.replacement === "object"
+    ? chooser.replacement
+    : null;
+  const replacingLabel = replacement?.targetTrackId
+    ? `Replacing #${escapeHtml(String(Number.isFinite(replacement.position) && replacement.position > 0 ? replacement.position : "?"))}`
+    : "";
+  const queueButtonLabel = replacement ? "Replace" : "Queue";
+  const queueFirstLabel = replacement ? "Replace First" : "Queue First";
   return `
     <div class="queue-search-chooser">
       <p class="queue-search-chooser-heading">
         Search results for <strong>${escapeHtml(chooser.query || "")}</strong>
+        ${replacingLabel ? `<span class="queue-search-chooser-replacing">${replacingLabel}</span>` : ""}
         <span class="queue-search-chooser-expiry">expires ${escapeHtml(expiresAtText)}</span>
       </p>
       <ul class="queue-search-option-list">
@@ -1272,7 +1496,7 @@ function getQueueSearchChooserMarkup() {
               class="btn btn-mini btn-primary"
               data-queue-search-option="${escapeHtml(String(index))}"
               ${state.queueSearchBusy ? " disabled" : ""}
-            >Queue</button>
+            >${queueButtonLabel}</button>
             <div class="queue-search-option-track">
               ${getTrackSummaryMarkup(track, { compact: true, includeDuration: true })}
             </div>
@@ -1280,7 +1504,7 @@ function getQueueSearchChooserMarkup() {
         `).join("")}
       </ul>
       <div class="queue-search-chooser-actions">
-        <button type="button" class="btn" data-queue-search-action="queue-first"${state.queueSearchBusy ? " disabled" : ""}>Queue First</button>
+        <button type="button" class="btn" data-queue-search-action="queue-first"${state.queueSearchBusy ? " disabled" : ""}>${queueFirstLabel}</button>
         <button type="button" class="btn btn-secondary" data-queue-search-action="dismiss"${state.queueSearchBusy ? " disabled" : ""}>Dismiss</button>
       </div>
     </div>
@@ -1319,9 +1543,10 @@ function getQueueSearchQueuedResultMarkup() {
 
   const currentPosition = getQueuedTrackPosition(queuedResult.track.id, queuedResult.position);
   const hasTrackPosition = Number.isFinite(currentPosition) && currentPosition > 0;
+  const canReplace = Boolean(normalizeQueueTrackId(queuedResult.track?.id));
   const canMoveToFront = hasTrackPosition && currentPosition > 1;
   const canRemove = hasTrackPosition;
-  const actionsDisabled = state.queueSearchBusy || !hasTrackPosition;
+  const actionsDisabled = state.queueSearchBusy;
   const positionText = hasTrackPosition ? `#${currentPosition}` : "No longer queued";
 
   return `
@@ -1332,6 +1557,12 @@ function getQueueSearchQueuedResultMarkup() {
       </div>
       <p class="queue-search-result-meta">Position: <strong>${escapeHtml(positionText)}</strong></p>
       <div class="queue-search-result-actions">
+        <button
+          type="button"
+          class="btn btn-mini"
+          data-queue-search-result-action="replace"
+          ${actionsDisabled || !canReplace ? " disabled" : ""}
+        >Re-search / Replace</button>
         <button
           type="button"
           class="btn btn-mini"
@@ -1363,17 +1594,45 @@ function getQueueActionFeedMarkup() {
   `;
 }
 
+function getQueueSearchReplaceTargetMarkup() {
+  const replacement = getQueueSearchReplaceTarget();
+  if (!replacement) {
+    return "";
+  }
+  const position = getQueuedTrackPosition(replacement.id, replacement.position);
+  const positionLabel = Number.isFinite(position) && position > 0 ? `#${position}` : "#?";
+  return `
+    <div class="queue-search-replace-card">
+      <p class="queue-search-replace-heading">
+        Replacing <strong>${escapeHtml(positionLabel)}</strong>
+      </p>
+      <div class="queue-search-replace-track">
+        ${getTrackSummaryMarkup(replacement, { compact: true, includeDuration: true })}
+      </div>
+      <div class="queue-search-replace-actions">
+        <button type="button" class="btn btn-mini btn-secondary" data-queue-search-action="replace-cancel"${state.queueSearchBusy ? " disabled" : ""}>Cancel Replace</button>
+      </div>
+    </div>
+  `;
+}
+
 function getQueueSearchComposerMarkup() {
   const voiceAccess = getQueueVoiceAccessState();
   const searchDisabled = !voiceAccess.canStartSearch;
+  const replacement = getQueueSearchReplaceTarget();
+  const replacingMode = Boolean(replacement);
   const disabledHint = searchDisabled
     ? `<p class="muted queue-search-blocked-hint">${escapeHtml(voiceAccess.searchBlockedHint || "Join a voice channel before searching.")}</p>`
     : "";
-  const buttonLabel = state.queueSearchBusy ? "Searching..." : "Queue";
+  const buttonLabel = state.queueSearchBusy
+    ? (replacingMode ? "Replacing..." : "Searching...")
+    : (replacingMode ? "Replace" : "Queue");
+  const labelText = replacingMode ? "Replace Queue Item" : "Add to Queue";
   return `
     <div class="queue-search-composer">
+      ${getQueueSearchReplaceTargetMarkup()}
       <form id="queue-search-form" class="queue-search-form">
-        <label for="queue-search-query" class="queue-search-label">Add to Queue</label>
+        <label for="queue-search-query" class="queue-search-label">${escapeHtml(labelText)}</label>
         <div class="queue-search-row">
           <input
             id="queue-search-query"
@@ -1637,6 +1896,8 @@ function getQueueTrackListMarkup() {
         const position = Number.isFinite(track?.position) ? track.position : index + 1;
         const isFirst = position <= 1;
         const isLast = position >= total;
+        const trackId = normalizeQueueTrackId(track?.id);
+        const replaceActive = Boolean(trackId) && trackId === normalizeQueueTrackId(state.queueSearchReplaceTrackId);
         return `
           ${getQueueDropSlotMarkup(position, { disabled: !canReorder })}
           <li class="queue-track-row" data-queue-track-row="1" data-position="${escapeHtml(String(position))}">
@@ -1656,6 +1917,13 @@ function getQueueTrackListMarkup() {
               ${getTrackSummaryMarkup(track, { compact: true, includeDuration: true })}
             </div>
             <div class="queue-track-actions">
+              <button
+                type="button"
+                class="btn btn-mini${replaceActive ? " btn-secondary" : ""}"
+                data-track-action="replace"
+                data-track-id="${escapeHtml(String(trackId || ""))}"
+                ${trackId ? "" : " disabled"}
+              >${replaceActive ? "Replacing" : "Re-search"}</button>
               <button type="button" class="btn btn-mini" data-track-action="top" data-position="${escapeHtml(String(position))}"${isFirst ? " disabled" : ""}>Top</button>
               <button type="button" class="btn btn-mini" data-track-action="up" data-position="${escapeHtml(String(position))}"${isFirst ? " disabled" : ""}>↑</button>
               <button type="button" class="btn btn-mini" data-track-action="down" data-position="${escapeHtml(String(position))}"${isLast ? " disabled" : ""}>↓</button>
@@ -1835,6 +2103,7 @@ function renderDashboard() {
   if (!voiceAccess.canStartSearch && !state.queueSearchBusy) {
     state.queueSearchVisible = false;
     clearQueueSearchChooser();
+    clearQueueSearchReplaceTarget();
   }
   const queueSearchPanelVisible = isQueueSearchPanelVisible();
   const queueActionFeedMarkup = getQueueActionFeedMarkup();
@@ -2087,6 +2356,7 @@ function wireDashboardEvents() {
       if (isQueueSearchPanelVisible()) {
         state.queueSearchVisible = false;
         clearQueueSearchChooser();
+        clearQueueSearchReplaceTarget();
       } else {
         state.queueSearchVisible = true;
       }
@@ -2195,6 +2465,13 @@ function wireDashboardEvents() {
       }
       if (action === "dismiss") {
         clearQueueSearchChooser();
+        renderDashboard();
+        return;
+      }
+      if (action === "replace-cancel") {
+        clearQueueSearchReplaceTarget();
+        clearQueueSearchChooser();
+        setQueueSearchFeedback("Replace mode cancelled.");
         renderDashboard();
         return;
       }
@@ -2320,8 +2597,21 @@ function wireDashboardEvents() {
   root.querySelectorAll("[data-track-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.getAttribute("data-track-action");
+      if (!action) {
+        return;
+      }
+      if (action === "replace") {
+        const trackId = normalizeQueueTrackId(button.getAttribute("data-track-id"));
+        if (!trackId) {
+          setQueueSearchFeedback("That queue item cannot be replaced right now.", { error: true });
+          renderDashboard();
+          return;
+        }
+        beginQueueSearchReplaceFlow(trackId);
+        return;
+      }
       const position = parseQueuePosition(button.getAttribute("data-position"));
-      if (!action || !position) {
+      if (!position) {
         return;
       }
       if (action === "top") {
@@ -3039,6 +3329,14 @@ async function sendQueueSearch(queryInput) {
     renderDashboard();
     return;
   }
+  const replacement = getQueueSearchReplaceTarget();
+  const replaceTrackId = normalizeQueueTrackId(replacement?.id);
+  if (state.queueSearchReplaceTrackId && !replaceTrackId) {
+    setQueueSearchFeedback("That queue item is no longer available for replacement.", { error: true });
+    clearQueueSearchReplaceTarget();
+    renderDashboard();
+    return;
+  }
 
   state.queueSearchQuery = query;
   state.queueSearchBusy = true;
@@ -3057,6 +3355,7 @@ async function sendQueueSearch(queryInput) {
       body: JSON.stringify(withActivityRequestContext({
         guild_id: state.selectedGuildId,
         query,
+        ...(replaceTrackId ? { replace_track_id: replaceTrackId } : {}),
       })),
     });
 
@@ -3064,7 +3363,12 @@ async function sendQueueSearch(queryInput) {
 
     if (payload.mode === "chooser" && payload.search) {
       state.queueSearchChooser = payload.search;
-      setQueueSearchFeedback("Choose a result to queue.");
+      if (payload.search.replacement) {
+        applyQueueSearchReplacementFromPayload(payload.search.replacement);
+        setQueueSearchFeedback("Choose a result to replace this queue item.");
+      } else {
+        setQueueSearchFeedback("Choose a result to queue.");
+      }
       pushDebugEvent("queue.search.chooser", `options=${Array.isArray(payload.search.options) ? payload.search.options.length : 0}`);
       return;
     }
@@ -3075,7 +3379,15 @@ async function sendQueueSearch(queryInput) {
     });
     await refreshQueueListForSelectedGuild();
     const queuedCount = applyQueueSearchQueuedResultFromPayload(payload);
-    if (queuedCount > 0) {
+    const replacedPosition = Number.parseInt(String(payload?.replacement?.position || ""), 10);
+    if (payload?.replacement) {
+      const replacementMessage = Number.isFinite(replacedPosition) && replacedPosition > 0
+        ? `Replaced queue item #${replacedPosition}.`
+        : "Replaced queue item.";
+      setQueueSearchFeedback(replacementMessage, {
+        append: true,
+      });
+    } else if (queuedCount > 0) {
       setQueueSearchFeedback(`Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`, {
         append: true,
       });
@@ -3115,6 +3427,21 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
     renderDashboard();
     return;
   }
+  const replacementFromChooser = chooser?.replacement && typeof chooser.replacement === "object"
+    ? chooser.replacement
+    : null;
+  const replacement = replacementFromChooser || getQueueSearchReplaceTarget();
+  const replaceTrackId = normalizeQueueTrackId(
+    replacement?.targetTrackId
+    ?? replacement?.id
+    ?? state.queueSearchReplaceTrackId
+  );
+  if (state.queueSearchReplaceTrackId && replacement && !replaceTrackId) {
+    setQueueSearchFeedback("That queue item is no longer available for replacement.", { error: true });
+    clearQueueSearchReplaceTarget();
+    renderDashboard();
+    return;
+  }
 
   const parsedIndex = Number.parseInt(String(optionIndex), 10);
   if (!Number.isFinite(parsedIndex) || parsedIndex < 0 || parsedIndex >= chooser.options.length) {
@@ -3142,6 +3469,7 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
         search_id: chooser.id,
         option_index: parsedIndex,
         queue_first: queueFirst,
+        ...(replaceTrackId ? { replace_track_id: replaceTrackId } : {}),
       })),
     });
 
@@ -3152,7 +3480,15 @@ async function selectQueueSearchOption(optionIndex, options = {}) {
     });
     await refreshQueueListForSelectedGuild();
     const queuedCount = applyQueueSearchQueuedResultFromPayload(payload);
-    if (queuedCount > 0) {
+    const replacedPosition = Number.parseInt(String(payload?.replacement?.position || ""), 10);
+    if (payload?.replacement) {
+      const replacementMessage = Number.isFinite(replacedPosition) && replacedPosition > 0
+        ? `Replaced queue item #${replacedPosition}.`
+        : "Replaced queue item.";
+      setQueueSearchFeedback(replacementMessage, {
+        append: true,
+      });
+    } else if (queuedCount > 0) {
       setQueueSearchFeedback(`Queued ${queuedCount} track${queuedCount === 1 ? "" : "s"}.`, {
         append: true,
       });
@@ -3181,6 +3517,25 @@ async function applyQueueSearchQueuedResultAction(action) {
   if (!state.selectedGuildId) {
     setQueueSearchFeedback("Select a guild first.", { error: true });
     renderDashboard();
+    return;
+  }
+
+  if (action === "replace") {
+    const queuedTrackId = normalizeQueueTrackId(queuedResult.track?.id);
+    if (!queuedTrackId) {
+      setQueueSearchFeedback("That queued track cannot be replaced right now.", { error: true });
+      renderDashboard();
+      return;
+    }
+    const liveTrack = getQueueTrackById(queuedTrackId);
+    if (!liveTrack) {
+      clearQueueSearchQueuedResult();
+      setQueueSearchFeedback("That queued track is no longer in queue.", { error: true });
+      renderDashboard();
+      return;
+    }
+    clearQueueSearchQueuedResult();
+    beginQueueSearchReplaceFlow(queuedTrackId);
     return;
   }
 

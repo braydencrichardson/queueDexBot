@@ -591,6 +591,20 @@ function createCommandInteractionHandler(deps) {
       queue.textChannelId = currentTextChannelId;
 
       const textChannelChanged = currentTextChannelId && previousQueueTextChannelId !== currentTextChannelId;
+      const firstTextChannelBind = Boolean(currentTextChannelId && !previousQueueTextChannelId);
+      const isQueuePlaying = String(queue?.player?.state?.status || "").toLowerCase() === "playing";
+      if (firstTextChannelBind && isQueuePlaying && queue?.current) {
+        try {
+          await sendNowPlaying(queue, true);
+        } catch (error) {
+          logError("Failed to post now playing after /join text-channel bind", {
+            guild: interaction.guildId,
+            channel: interaction.channelId,
+            user: interaction.user?.tag,
+            error,
+          });
+        }
+      }
       const shouldShowJoinOnboarding = !previousQueueVoiceChannelId || !previousQueueTextChannelId;
       const responseLines = [];
       if (joinedVoice) {

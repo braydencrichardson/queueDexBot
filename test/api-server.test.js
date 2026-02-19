@@ -1553,6 +1553,283 @@ test("activity queue search queues resolved tracks directly without chooser", as
   }
 });
 
+test("activity queue search can replace an existing queued track by track id", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const sentMessages = [];
+  const queue = {
+    current: null,
+    tracks: [
+      {
+        id: "track-old",
+        title: "Old Track",
+        url: "https://youtu.be/oldoldold01",
+        displayUrl: "https://youtu.be/oldoldold01",
+        duration: 101,
+        source: "youtube",
+        channel: "Old Artist",
+        requester: "User One",
+      },
+      {
+        id: "track-keep",
+        title: "Keep Track",
+        url: "https://youtu.be/keepkeep001",
+        displayUrl: "https://youtu.be/keepkeep001",
+        duration: 202,
+        source: "youtube",
+        channel: "Keep Artist",
+        requester: "User One",
+      },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    textChannel: {
+      async send(content) {
+        sentMessages.push(String(content));
+      },
+    },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async (_query, requester) => ([{
+      title: "Replacement Result",
+      url: "https://www.youtube.com/watch?v=rrrrrrrrrrr",
+      displayUrl: "https://youtu.be/rrrrrrrrrrr",
+      duration: 187,
+      source: "youtube",
+      channel: "New Artist",
+      requester,
+    }]),
+    getPlayNext: () => async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "https://youtu.be/rrrrrrrrrrr",
+        replace_track_id: "track-old",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.ok, true);
+    assert.equal(response.json?.mode, "queued");
+    assert.equal(response.json?.queuedCount, 1);
+    assert.equal(response.json?.queuedPosition, 1);
+    assert.equal(response.json?.replacement?.targetTrackId, "track-old");
+    assert.equal(response.json?.replacement?.position, 1);
+    assert.equal(response.json?.replacement?.previous?.title, "Old Track");
+    assert.equal(queue.tracks.length, 2);
+    assert.equal(queue.tracks[0]?.title, "Replacement Result");
+    assert.equal(queue.tracks[1]?.title, "Keep Track");
+    assert.equal(sentMessages.length, 1);
+    assert.equal(String(sentMessages[0] || "").includes("**Replaced:**"), true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search chooser select can replace queued track by id", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [
+      {
+        id: "track-old",
+        title: "Old Track",
+        url: "https://youtu.be/oldoldold01",
+        displayUrl: "https://youtu.be/oldoldold01",
+        duration: 101,
+        source: "youtube",
+        channel: "Old Artist",
+        requester: "User One",
+      },
+      {
+        id: "track-keep",
+        title: "Keep Track",
+        url: "https://youtu.be/keepkeep001",
+        displayUrl: "https://youtu.be/keepkeep001",
+        duration: 202,
+        source: "youtube",
+        channel: "Keep Artist",
+        requester: "User One",
+      },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async () => [],
+    getSearchOptionsForQuery: async () => ([
+      {
+        title: "Chooser Replacement",
+        url: "https://www.youtube.com/watch?v=sssssssssss",
+        displayUrl: "https://youtu.be/sssssssssss",
+        duration: 233,
+        source: "youtube",
+        channel: "Chooser Artist",
+      },
+      {
+        title: "Second Option",
+        url: "https://www.youtube.com/watch?v=ttttttttttt",
+        displayUrl: "https://youtu.be/ttttttttttt",
+        duration: 222,
+        source: "youtube",
+        channel: "Other Artist",
+      },
+    ]),
+    getPlayNext: () => async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const searchResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "replace me",
+        replace_track_id: "track-old",
+      }),
+    });
+
+    assert.equal(searchResponse.statusCode, 200);
+    assert.equal(searchResponse.json?.mode, "chooser");
+    assert.equal(searchResponse.json?.search?.replacement?.targetTrackId, "track-old");
+    assert.equal(searchResponse.json?.search?.replacement?.position, 1);
+    const searchId = String(searchResponse.json?.search?.id || "");
+    assert.notEqual(searchId, "");
+
+    const selectResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search/select",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        search_id: searchId,
+        option_index: 0,
+      }),
+    });
+
+    assert.equal(selectResponse.statusCode, 200);
+    assert.equal(selectResponse.json?.ok, true);
+    assert.equal(selectResponse.json?.mode, "queued");
+    assert.equal(selectResponse.json?.queued?.title, "Chooser Replacement");
+    assert.equal(selectResponse.json?.replacement?.targetTrackId, "track-old");
+    assert.equal(selectResponse.json?.replacement?.position, 1);
+    assert.equal(queue.tracks.length, 2);
+    assert.equal(queue.tracks[0]?.title, "Chooser Replacement");
+    assert.equal(queue.tracks[1]?.title, "Keep Track");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity queue search replacement returns conflict when target track is missing", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [
+      { id: "track-keep", title: "Keep Track" },
+    ],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "idle" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    normalizeQueryInput: (value) => String(value || "").trim(),
+    resolveTracks: async () => ([{
+      title: "Replacement Result",
+      url: "https://www.youtube.com/watch?v=vvvvvvvvvvv",
+      displayUrl: "https://youtu.be/vvvvvvvvvvv",
+      duration: 199,
+      source: "youtube",
+      channel: "New Artist",
+    }]),
+    getPlayNext: () => async () => {},
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/queue/search",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        query: "https://youtu.be/vvvvvvvvvvv",
+        replace_track_id: "track-missing",
+      }),
+    });
+
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.json?.error, "That queue item is no longer available for replacement.");
+    assert.equal(queue.tracks.length, 1);
+    assert.equal(queue.tracks[0]?.id, "track-keep");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("activity queue search returns link-resolution error for unresolved URL query", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();
