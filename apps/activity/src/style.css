@@ -209,6 +209,16 @@ dd {
   text-decoration: none;
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-mini {
+  padding: 0.25rem 0.45rem;
+  font-size: 0.76rem;
+}
+
 .btn-primary {
   border-color: rgba(26, 138, 118, 0.4);
   background: rgba(26, 138, 118, 0.14);
@@ -232,6 +242,73 @@ dd {
   margin: 0;
   padding-left: 1rem;
   display: grid;
+  gap: 0.3rem;
+}
+
+.queue-toolbar {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+#queue-loop-mode {
+  border: 1px solid rgba(32, 52, 83, 0.2);
+  border-radius: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  color: #1f2e4b;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.queue-track-list {
+  margin: 0.8rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.queue-track-row {
+  border: 1px solid rgba(32, 52, 83, 0.12);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 0.55rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.queue-track-main {
+  min-width: 14rem;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: #223356;
+}
+
+.queue-track-pos {
+  font-family: "IBM Plex Mono", "Fira Code", monospace;
+  font-size: 0.76rem;
+  color: #687a9f;
+}
+
+.queue-track-title {
+  font-weight: 700;
+  color: #1f2e4b;
+}
+
+.queue-track-meta {
+  font-size: 0.82rem;
+  color: #57698d;
+}
+
+.queue-track-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.3rem;
 }
 
@@ -298,6 +375,22 @@ dd {
 
   .toolbar-actions .btn {
     flex: 1;
+  }
+
+  .queue-toolbar .btn {
+    flex: 1;
+  }
+
+  #queue-loop-mode {
+    width: 100%;
+  }
+
+  .queue-track-row {
+    flex-direction: column;
+  }
+
+  .queue-track-main {
+    min-width: 0;
   }
 
   .panel-grid {

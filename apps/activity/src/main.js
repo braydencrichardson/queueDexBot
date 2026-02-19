@@ -5,6 +5,7 @@ const root = document.getElementById("app");
 const SDK_READY_TIMEOUT_MS = 10000;
 const UPTIME_INTERVAL_MS = 1000;
 const API_POLL_INTERVAL_MS = 5000;
+const QUEUE_LIST_LIMIT = 200;
 const DEFAULT_EMBEDDED_OAUTH_SCOPES = "identify";
 const DEFAULT_WEB_OAUTH_SCOPES = "identify guilds";
 const BUILD_ID = typeof __QDEX_ACTIVITY_BUILD__ !== "undefined" ? __QDEX_ACTIVITY_BUILD__ : "dev-unknown";
@@ -25,6 +26,7 @@ const state = {
   selectedGuildId: null,
   authSummary: null,
   queueSummary: null,
+  queueList: null,
   notice: "",
   noticeError: false,
   hasMountedDashboard: false,
@@ -248,28 +250,70 @@ function getGuildSelectionMarkup() {
   `;
 }
 
-function getQueueListMarkup() {
+function getQueueListData() {
+  return state.queueList;
+}
+
+function getQueueLoopMode() {
   const queue = getCurrentQueueData();
-  const items = Array.isArray(queue?.upNext) ? queue.upNext.filter(Boolean) : [];
-  if (!items.length) {
+  const queueList = getQueueListData();
+  return queueList?.loopMode || queue?.loopMode || "off";
+}
+
+function getQueueTrackListMarkup() {
+  const queueList = getQueueListData();
+  const tracks = Array.isArray(queueList?.tracks) ? queueList.tracks : [];
+  const total = Number.isFinite(queueList?.total) ? queueList.total : tracks.length;
+  if (!tracks.length) {
     return `<p class="muted">No queued tracks.</p>`;
   }
+
+  const truncatedNotice = total > tracks.length
+    ? `<p class="muted">Showing ${tracks.length} of ${total} queued tracks.</p>`
+    : "";
+
   return `
-    <ol class="queue-list">
-      ${items.map((track) => `<li>${escapeHtml(track.title || "Unknown")} <span class="muted">(${escapeHtml(formatTrackDuration(track.duration))})</span></li>`).join("")}
-    </ol>
+    ${truncatedNotice}
+    <ul class="queue-track-list">
+      ${tracks.map((track, index) => {
+        const position = Number.isFinite(track?.position) ? track.position : index + 1;
+        const isFirst = position <= 1;
+        const isLast = position >= total;
+        return `
+          <li class="queue-track-row">
+            <div class="queue-track-main">
+              <span class="queue-track-pos">#${escapeHtml(String(position))}</span>
+              <span class="queue-track-title">${escapeHtml(track?.title || "Unknown")}</span>
+              <span class="queue-track-meta">${escapeHtml(formatTrackDuration(track?.duration))}</span>
+            </div>
+            <div class="queue-track-actions">
+              <button type="button" class="btn btn-mini" data-track-action="top" data-position="${escapeHtml(String(position))}"${isFirst ? " disabled" : ""}>Top</button>
+              <button type="button" class="btn btn-mini" data-track-action="up" data-position="${escapeHtml(String(position))}"${isFirst ? " disabled" : ""}>↑</button>
+              <button type="button" class="btn btn-mini" data-track-action="down" data-position="${escapeHtml(String(position))}"${isLast ? " disabled" : ""}>↓</button>
+              <button type="button" class="btn btn-mini btn-danger" data-track-action="remove" data-position="${escapeHtml(String(position))}">Remove</button>
+            </div>
+          </li>
+        `;
+      }).join("")}
+    </ul>
   `;
 }
 
 function renderDashboard() {
   const queue = getCurrentQueueData();
+  const queueList = getQueueListData();
   const mode = state.mode || "unknown";
   const queueStatusText = queue
     ? `${queue.playerStatus || "idle"} | ${queue.connected ? "connected" : "not connected"} | ${queue.queueLength || 0} queued`
     : "unavailable";
-  const nowPlayingText = queue?.nowPlaying
-    ? `${queue.nowPlaying.title || "Unknown"} (${formatTrackDuration(queue.nowPlaying.duration)})`
+  const activeNowPlaying = queueList?.nowPlaying || queue?.nowPlaying;
+  const nowPlayingText = activeNowPlaying
+    ? `${activeNowPlaying.title || "Unknown"} (${formatTrackDuration(activeNowPlaying.duration)})`
     : "Nothing currently playing";
+  const queueLength = Number.isFinite(queueList?.total)
+    ? queueList.total
+    : (queue?.queueLength || 0);
+  const loopMode = getQueueLoopMode();
   const connectedAtText = state.connectedAt ? formatTime(state.connectedAt) : "unknown";
   const guildCount = Array.isArray(state.authSummary?.guilds) ? state.authSummary.guilds.length : 0;
   const noticeMarkup = state.notice
@@ -318,11 +362,23 @@ function renderDashboard() {
       <section class="menu-panel${state.activeTab === TAB_QUEUE ? " active" : ""}" data-panel="${TAB_QUEUE}">
         <article class="panel-card">
           <h2>Queue Overview</h2>
+          <p class="muted">Now playing: ${escapeHtml(nowPlayingText)}</p>
           <dl>
-            <dt>Loop</dt><dd id="queue-loop">${escapeHtml(queue?.loopMode || "off")}</dd>
-            <dt>Queue Length</dt><dd>${escapeHtml(String(queue?.queueLength || 0))}</dd>
-            <dt>Up Next</dt><dd>${getQueueListMarkup()}</dd>
+            <dt>Loop</dt><dd id="queue-loop">${escapeHtml(loopMode)}</dd>
+            <dt>Queue Length</dt><dd>${escapeHtml(String(queueLength))}</dd>
           </dl>
+          <div class="queue-toolbar">
+            <button type="button" class="btn" data-queue-action="refresh">Refresh Queue</button>
+            <button type="button" class="btn" data-queue-action="shuffle">Shuffle</button>
+            <button type="button" class="btn btn-danger" data-queue-action="clear">Clear</button>
+            <select id="queue-loop-mode">
+              <option value="off"${loopMode === "off" ? " selected" : ""}>Loop Off</option>
+              <option value="queue"${loopMode === "queue" ? " selected" : ""}>Loop Queue</option>
+              <option value="single"${loopMode === "single" ? " selected" : ""}>Loop Single</option>
+            </select>
+            <button type="button" class="btn" data-queue-action="loop">Set Loop</button>
+          </div>
+          ${getQueueTrackListMarkup()}
         </article>
       </section>
       <section class="menu-panel${state.activeTab === TAB_DEBUG ? " active" : ""}" data-panel="${TAB_DEBUG}">
@@ -382,6 +438,62 @@ function wireDashboardEvents() {
         return;
       }
       void sendControlAction(action);
+    });
+  });
+
+  root.querySelectorAll("[data-queue-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.getAttribute("data-queue-action");
+      if (!action) {
+        return;
+      }
+      if (action === "refresh") {
+        void refreshDashboardData();
+        return;
+      }
+      if (action === "loop") {
+        const loopSelect = root.querySelector("#queue-loop-mode");
+        const mode = String(loopSelect?.value || "").trim().toLowerCase();
+        if (!mode) {
+          return;
+        }
+        void sendQueueAction(action, { mode });
+        return;
+      }
+      void sendQueueAction(action);
+    });
+  });
+
+  root.querySelectorAll("[data-track-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.getAttribute("data-track-action");
+      const positionRaw = button.getAttribute("data-position");
+      const position = Number.parseInt(String(positionRaw || ""), 10);
+      if (!action || !Number.isFinite(position) || position <= 0) {
+        return;
+      }
+      if (action === "top") {
+        void sendQueueAction("move_to_front", { position });
+        return;
+      }
+      if (action === "up") {
+        if (position <= 1) {
+          return;
+        }
+        void sendQueueAction("move", { from_position: position, to_position: position - 1 });
+        return;
+      }
+      if (action === "down") {
+        const total = Number.isFinite(state.queueList?.total) ? state.queueList.total : 0;
+        if (total && position >= total) {
+          return;
+        }
+        void sendQueueAction("move", { from_position: position, to_position: position + 1 });
+        return;
+      }
+      if (action === "remove") {
+        void sendQueueAction("remove", { position });
+      }
     });
   });
 
@@ -633,15 +745,40 @@ async function refreshDashboardData() {
   state.authSummary = authSummary;
   updateSelectedGuildFromAuth();
 
-  if (state.selectedGuildId) {
-    state.queueSummary = await fetchJson(`/api/activity/state?guild_id=${encodeURIComponent(state.selectedGuildId)}`, {
-      credentials: "include",
-    });
-  } else {
-    state.queueSummary = null;
-  }
+  await refreshQueueDataForSelectedGuild();
 
   renderDashboard();
+}
+
+async function refreshQueueDataForSelectedGuild() {
+  if (!state.selectedGuildId) {
+    state.queueSummary = null;
+    state.queueList = null;
+    return;
+  }
+
+  const encodedGuildId = encodeURIComponent(state.selectedGuildId);
+  const [queueSummary, queueList] = await Promise.all([
+    fetchJson(`/api/activity/state?guild_id=${encodedGuildId}`, {
+      credentials: "include",
+    }),
+    fetchJson(`/api/activity/queue?guild_id=${encodedGuildId}&offset=0&limit=${QUEUE_LIST_LIMIT}`, {
+      credentials: "include",
+    }),
+  ]);
+  state.queueSummary = queueSummary;
+  state.queueList = queueList;
+}
+
+async function refreshQueueListForSelectedGuild() {
+  if (!state.selectedGuildId) {
+    state.queueList = null;
+    return;
+  }
+  const encodedGuildId = encodeURIComponent(state.selectedGuildId);
+  state.queueList = await fetchJson(`/api/activity/queue?guild_id=${encodedGuildId}&offset=0&limit=${QUEUE_LIST_LIMIT}`, {
+    credentials: "include",
+  });
 }
 
 async function sendControlAction(action) {
@@ -668,6 +805,7 @@ async function sendControlAction(action) {
       guildId: payload.guildId,
       data: payload.data || null,
     };
+    await refreshQueueListForSelectedGuild();
     state.notice = `Action applied: ${action}`;
     state.noticeError = false;
     pushDebugEvent("control.success", action);
@@ -676,6 +814,44 @@ async function sendControlAction(action) {
     state.notice = `Action failed (${action}): ${error?.message || String(error)}`;
     state.noticeError = true;
     pushDebugEvent("control.failed", state.notice);
+    renderDashboard();
+  }
+}
+
+async function sendQueueAction(action, actionOptions = {}) {
+  if (!state.selectedGuildId) {
+    state.notice = "Select a guild first.";
+    state.noticeError = true;
+    renderDashboard();
+    return;
+  }
+  pushDebugEvent("queue.action.start", `${action} guild=${state.selectedGuildId}`);
+  try {
+    const payload = await fetchJson("/api/activity/queue/action", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        action,
+        guild_id: state.selectedGuildId,
+        ...actionOptions,
+      }),
+    });
+    state.queueSummary = {
+      guildId: payload.guildId,
+      data: payload.data || null,
+    };
+    await refreshQueueListForSelectedGuild();
+    state.notice = `Queue action applied: ${action}`;
+    state.noticeError = false;
+    pushDebugEvent("queue.action.success", action);
+    renderDashboard();
+  } catch (error) {
+    state.notice = `Queue action failed (${action}): ${error?.message || String(error)}`;
+    state.noticeError = true;
+    pushDebugEvent("queue.action.failed", state.notice);
     renderDashboard();
   }
 }
@@ -692,6 +868,7 @@ async function logoutWebSession() {
   }
   state.authSummary = null;
   state.queueSummary = null;
+  state.queueList = null;
   state.selectedGuildId = null;
   renderWebLogin();
 }
