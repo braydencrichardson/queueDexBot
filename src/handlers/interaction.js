@@ -1,3 +1,4 @@
+const { MessageFlags } = require("discord.js");
 const { createButtonInteractionHandler } = require("./interaction-buttons");
 const { createSelectMenuInteractionHandler } = require("./interaction-select-menus");
 const { createCommandInteractionHandler } = require("./interaction-commands");
@@ -6,7 +7,7 @@ const { sanitizeDiscordText } = require("../utils/discord-content");
 async function replyWithInteractionError(interaction) {
   const payload = {
     content: sanitizeDiscordText("Something went wrong while processing that interaction."),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   };
 
   try {
@@ -37,7 +38,10 @@ function registerInteractionHandler(client, deps) {
         return;
       }
 
-      if (interaction.isSelectMenu()) {
+      const isStringSelectMenu = typeof interaction.isStringSelectMenu === "function"
+        ? interaction.isStringSelectMenu()
+        : (typeof interaction.isSelectMenu === "function" && interaction.isSelectMenu());
+      if (isStringSelectMenu) {
         await handleSelectMenuInteraction(interaction);
         return;
       }

@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { formatQueueViewContent } = require("../src/ui/queueView");
+const { buildQueueViewComponents, formatQueueViewContent } = require("../src/ui/queueView");
 
 test("formatQueueViewContent marks preloaded up-next track with a dot", () => {
   const queue = {
@@ -66,4 +66,26 @@ test("formatQueueViewContent marks loop-generated tracks with loop indicators", 
   const result = formatQueueViewContent(queue, 1, 10, null, { stale: false, ownerName: "tester" });
   assert.equal(String(result.content).includes("**1.** ↺"), true);
   assert.equal(String(result.content).includes("**2.** ↺"), true);
+});
+
+test("buildQueueViewComponents includes open activity shortcut in footer controls", () => {
+  const queue = {
+    tracks: [
+      {
+        id: "track-1",
+        title: "Song One",
+        duration: 120,
+      },
+    ],
+  };
+  const view = {
+    page: 1,
+    pageSize: 10,
+    selectedTrackId: null,
+  };
+
+  const components = buildQueueViewComponents(view, queue);
+  const footerIds = components[4]?.components?.map((button) => button?.data?.custom_id) || [];
+
+  assert.deepEqual(footerIds, ["queue_nowplaying", "queue_activity", "queue_close"]);
 });

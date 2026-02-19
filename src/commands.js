@@ -17,7 +17,7 @@ const commands = [
   },
   {
     name: "join",
-    description: "Join your current voice channel",
+    description: "Join your voice channel and bind updates to this text channel",
   },
   {
     name: "pause",

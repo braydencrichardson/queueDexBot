@@ -138,6 +138,46 @@ test("playNext plays next track, subscribes connection, marks queue view stale, 
   assert.equal(nowPlayingCalled, true);
 });
 
+test("playNext triggers onPlaybackStarted hook after playback begins", async () => {
+  const track = { source: "youtube", url: "https://youtu.be/abc", title: "Song" };
+  const queue = {
+    tracks: [track],
+    playing: false,
+    current: null,
+    connection: {
+      subscribe() {},
+      destroy() {},
+    },
+    player: {
+      play() {},
+    },
+    textChannel: null,
+  };
+
+  let callbackPayload = null;
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => "yt-resource",
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    onPlaybackStarted: async (payload) => {
+      callbackPayload = payload;
+    },
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(callbackPayload?.guildId, "guild-1");
+  assert.equal(callbackPayload?.queue, queue);
+  assert.equal(callbackPayload?.track, track);
+});
+
 test("playNext skips malformed tracks, notifies channel once, and continues playback", async () => {
   const validTrack = { source: "youtube", url: "https://youtu.be/ok", title: "Playable" };
   const sentMessages = [];

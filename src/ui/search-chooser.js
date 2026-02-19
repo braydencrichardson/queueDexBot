@@ -1,4 +1,9 @@
-const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+} = require("discord.js");
 const { sanitizeDiscordText, sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackSummary } = require("./messages");
 const { setExpiringMapEntry } = require("../handlers/interaction-helpers");
@@ -60,25 +65,25 @@ function createSearchChooser(deps) {
         description: channel || undefined,
       };
     });
-    const selectRow = new MessageActionRow().addComponents(
-      new MessageSelectMenu()
+    const selectRow = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
         .setCustomId("search_select")
         .setPlaceholder("Choose a result")
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(menuOptions)
     );
-    const controlRow = new MessageActionRow().addComponents(
-      new MessageButton()
+    const controlRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
         .setCustomId("search_queue_first")
         .setLabel("Queue First")
         .setEmoji("⏩")
-        .setStyle("PRIMARY"),
-      new MessageButton()
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId("search_close")
         .setLabel("Close")
         .setEmoji("❌")
-        .setStyle("SECONDARY")
+        .setStyle(ButtonStyle.Secondary)
     );
     const message = await interaction.editReply({ content, components: [selectRow, controlRow], fetchReply: true });
 

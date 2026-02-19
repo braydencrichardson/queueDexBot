@@ -1,6 +1,7 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackPrimary, formatTrackSecondary } = require("../ui/messages");
 const { getTrackKey } = require("./track-key");
+const { getQueueVoiceChannelId } = require("./voice-channel");
 const { ensureTrackId } = require("./utils");
 const { LOOP_MODES, clearLoopState, getQueueLoopMode, syncLoopState } = require("./loop");
 const {
@@ -11,6 +12,12 @@ const {
 const NOW_PLAYING_PROGRESS_INTERVAL_MS = DEFAULT_NOW_PLAYING_PROGRESS_INTERVAL_MS;
 const NOW_PLAYING_PROGRESS_INITIAL_DELAY_MS = DEFAULT_NOW_PLAYING_PROGRESS_INITIAL_DELAY_MS;
 const NOW_PLAYING_PROGRESS_BAR_WIDTH = 20;
+const DISCORD_SEND_SUPPRESSION_LOG_INTERVAL_MS = 30 * 1000;
+
+function isMissingDiscordTokenError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("expected token to be set for this request, but none was present");
+}
 
 function createQueueSession(deps) {
   const {
@@ -25,12 +32,34 @@ function createQueueSession(deps) {
     getPlayNext,
     ensureNextTrackPreload = async () => null,
     resolveNowPlayingChannelById = async () => null,
+    getNowPlayingActivityLinks = async () => null,
+    showNowPlayingProgress = false,
+    canSendDiscordMessages = () => true,
   } = deps;
+  let lastDiscordSendSuppressionLogAt = 0;
+
+  function maybeLogDiscordSendSuppressed(context, error = null) {
+    const now = Date.now();
+    if (now - lastDiscordSendSuppressionLogAt < DISCORD_SEND_SUPPRESSION_LOG_INTERVAL_MS) {
+      return;
+    }
+    lastDiscordSendSuppressionLogAt = now;
+    const payload = { context };
+    if (error?.message) {
+      payload.error = {
+        name: error.name || "Error",
+        message: error.message,
+      };
+    }
+    logInfo("Skipping Discord message send while messaging is unavailable", payload);
+  }
+
   function getGuildQueue(guildId) {
     if (!queues.has(guildId)) {
       queues.set(guildId, {
         guildId,
         textChannel: null,
+        textChannelId: null,
         voiceChannel: null,
         connection: null,
         player: createAudioPlayer({
@@ -55,6 +84,7 @@ function createQueueSession(deps) {
         suppressNextIdle: false,
         deferredResolveInFlight: false,
         loopMode: LOOP_MODES.OFF,
+        activityFeed: [],
       });
     }
     return queues.get(guildId);
@@ -131,6 +161,9 @@ function createQueueSession(deps) {
   }
 
   function getPlaybackProgressMarker(queue) {
+    if (!showNowPlayingProgress) {
+      return null;
+    }
     const elapsedFromPlayer = getPlaybackElapsedSeconds(queue);
     const durationSec = getTrackDurationSeconds(queue?.current);
     if (!durationSec && elapsedFromPlayer === null) {
@@ -168,6 +201,10 @@ function createQueueSession(deps) {
   }
 
   async function refreshNowPlayingProgress(queue, expectedTrackKey) {
+    if (!showNowPlayingProgress) {
+      clearNowPlayingProgressUpdates(queue);
+      return;
+    }
     if (!queue?.current || !queue?.textChannel || !queue?.nowPlayingMessageId) {
       clearNowPlayingProgressUpdates(queue);
       return;
@@ -185,6 +222,10 @@ function createQueueSession(deps) {
   }
 
   function ensureNowPlayingProgressUpdates(queue) {
+    if (!showNowPlayingProgress) {
+      clearNowPlayingProgressUpdates(queue);
+      return;
+    }
     if (!queue?.current || !queue?.textChannel || !queue?.nowPlayingMessageId) {
       clearNowPlayingProgressUpdates(queue);
       return;
@@ -217,7 +258,37 @@ function createQueueSession(deps) {
     }
   }
 
-  function formatNowPlaying(queue) {
+  function normalizeActivityLinkUrl(urlValue) {
+    const raw = String(urlValue || "").trim();
+    if (!raw) {
+      return null;
+    }
+    if (!/^https?:\/\//i.test(raw)) {
+      return null;
+    }
+    return raw;
+  }
+
+  function formatActivityLinksLine(linkPayload) {
+    if (!linkPayload || typeof linkPayload !== "object") {
+      return null;
+    }
+    const inviteUrl = normalizeActivityLinkUrl(linkPayload.inviteUrl);
+    const webUrl = normalizeActivityLinkUrl(linkPayload.webUrl);
+    if (!inviteUrl && !webUrl) {
+      return null;
+    }
+    const parts = [];
+    if (inviteUrl) {
+      parts.push(`<${inviteUrl}>`);
+    }
+    if (webUrl) {
+      parts.push(`Web: <${webUrl}>`);
+    }
+    return `**Activity:** ${parts.join(" | ")}`;
+  }
+
+  async function formatNowPlaying(queue) {
     if (!queue.current) {
       return "Nothing is playing.";
     }
@@ -237,9 +308,11 @@ function createQueueSession(deps) {
     if (nowSecondary) {
       lines.push(`↳ ${nowSecondary}`);
     }
-    const progress = formatPlaybackProgress(queue);
-    if (progress) {
-      lines.push(progress);
+    if (showNowPlayingProgress) {
+      const progress = formatPlaybackProgress(queue);
+      if (progress) {
+        lines.push(progress);
+      }
     }
     if (nextTrack) {
       const nextPrimary = formatTrackPrimary(nextTrack, {
@@ -262,6 +335,14 @@ function createQueueSession(deps) {
       lines.push("**Up next:** (empty)");
     }
     lines.push(`**Remaining:** ${remaining}`);
+    try {
+      const activityLinksLine = formatActivityLinksLine(await getNowPlayingActivityLinks(queue));
+      if (activityLinksLine) {
+        lines.push(activityLinksLine);
+      }
+    } catch (error) {
+      logError("Failed to resolve now playing activity links", error);
+    }
     return lines.join("\n");
   }
 
@@ -336,8 +417,12 @@ function createQueueSession(deps) {
     if (!queue.textChannel || !queue.current) {
       return null;
     }
+    if (!canSendDiscordMessages()) {
+      maybeLogDiscordSendSuppressed("send_now_playing_precheck");
+      return null;
+    }
 
-    const content = formatNowPlaying(queue);
+    const content = await formatNowPlaying(queue);
     const controls = buildNowPlayingControls({ loopMode: getQueueLoopMode(queue) });
     const payload = { content, components: [controls] };
     queue.nowPlayingUpNextKey = getUpNextKey(queue);
@@ -360,6 +445,10 @@ function createQueueSession(deps) {
       try {
         message = await queue.textChannel.send(payload);
       } catch (error) {
+        if (isMissingDiscordTokenError(error)) {
+          maybeLogDiscordSendSuppressed("send_now_playing_missing_token", error);
+          return null;
+        }
         logError("Failed to send now playing message", error);
         return null;
       }
@@ -457,9 +546,17 @@ function createQueueSession(deps) {
     if (!channel?.send) {
       return;
     }
+    if (!canSendDiscordMessages()) {
+      maybeLogDiscordSendSuppressed("announce_now_playing_action_precheck");
+      return;
+    }
     try {
       await channel.send(`**${displayName}** ${action}.`);
     } catch (error) {
+      if (isMissingDiscordTokenError(error)) {
+        maybeLogDiscordSendSuppressed("announce_now_playing_action_missing_token", error);
+        return;
+      }
       logError("Failed to announce now playing action", error);
     }
   }
@@ -565,10 +662,6 @@ function createQueueSession(deps) {
       queue.connection = null;
     }
     queue.voiceChannel = null;
-  }
-
-  function getQueueVoiceChannelId(queue) {
-    return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
   }
 
   function isSameVoiceChannel(member, queue) {

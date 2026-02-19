@@ -6,17 +6,18 @@
     "deploy-commands": "node deploy-commands.js",
     "verify-commands": "node verify-commands.js",
     "start": "node index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "activity:dev": "npm --prefix apps/activity run dev",
+    "activity:build": "npm --prefix apps/activity run build",
+    "activity:preview": "npm --prefix apps/activity run preview"
   },
   "keywords": [],
   "author": "",
   "license": "GPL-3.0-or-later",
   "description": "",
   "dependencies": {
-    "@discordjs/rest": "^1.7.1",
     "@discordjs/voice": "^0.18.0",
-    "discord-api-types": "^0.37.86",
-    "discord.js": "^13.17.1",
+    "discord.js": "^14.20.0",
     "dotenv": "^16.6.1",
     "libsodium-wrappers": "^0.7.13",
     "opusscript": "^0.0.8",

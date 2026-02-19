@@ -1,4 +1,9 @@
-const { MessageActionRow, MessageButton, MessageSelectMenu } = require("discord.js");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+} = require("discord.js");
 const {
   ensureTrackId,
   getTrackIndexById,
@@ -198,8 +203,8 @@ function buildQueueViewComponents(queueView, queue) {
       };
     });
 
-  const selectRow = new MessageActionRow().addComponents(
-    new MessageSelectMenu()
+  const selectRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
       .setCustomId("queue_select")
       .setPlaceholder(options.length ? "Select a track" : "Queue is empty")
       .setMinValues(1)
@@ -208,103 +213,108 @@ function buildQueueViewComponents(queueView, queue) {
       .addOptions(options.length ? options : [{ label: "Empty", value: "0" }])
   );
 
-  const actionRow = new MessageActionRow().addComponents(
-    new MessageButton()
+  const actionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("queue_backward")
       .setLabel("Move Up")
       .setEmoji("⬆️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!options.length || !queueView.selectedTrackId),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_forward")
       .setLabel("Move Down")
       .setEmoji("⬇️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!options.length || !queueView.selectedTrackId),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_move")
       .setLabel("Move To")
       .setEmoji("↔️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!options.length || !queueView.selectedTrackId),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_front")
       .setLabel("Move to First")
       .setEmoji("⏫")
-      .setStyle("PRIMARY")
+      .setStyle(ButtonStyle.Primary)
       .setDisabled(!options.length || !queueView.selectedTrackId),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_remove")
       .setLabel("Remove")
       .setEmoji("🗑️")
-      .setStyle("DANGER")
+      .setStyle(ButtonStyle.Danger)
       .setDisabled(!options.length || !queueView.selectedTrackId)
   );
 
-  const selectNavRow = new MessageActionRow().addComponents(
-    new MessageButton()
+  const selectNavRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("queue_select_prev")
       .setLabel("Select Previous")
       .setEmoji("⬅️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!options.length),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_select_next")
       .setLabel("Select Next")
       .setEmoji("➡️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!options.length),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_select_last")
       .setLabel("Select Last")
       .setEmoji("⏭️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(!options.length)
   );
 
-  const navRow = new MessageActionRow().addComponents(
-    new MessageButton()
+  const navRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("queue_prev")
       .setLabel("Previous Page")
       .setEmoji("⬅️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage <= 1),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_next")
       .setLabel("Next Page")
       .setEmoji("➡️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_refresh")
       .setLabel("Refresh")
       .setEmoji("🔃")
-      .setStyle("SECONDARY"),
-    new MessageButton()
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("queue_shuffle")
       .setLabel("Shuffle")
       .setEmoji("🔀")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(queue.tracks.length < 2),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("queue_clear")
       .setLabel("Clear")
       .setEmoji("⚠️")
-      .setStyle("DANGER")
+      .setStyle(ButtonStyle.Danger)
       .setDisabled(queue.tracks.length === 0)
   );
 
-  const navRow2 = new MessageActionRow().addComponents(
-    new MessageButton()
+  const navRow2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("queue_nowplaying")
       .setLabel("Now Playing")
       .setEmoji("🎶")
-      .setStyle("SECONDARY"),
-    new MessageButton()
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("queue_activity")
+      .setLabel("Open Activity")
+      .setEmoji("🎮")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("queue_close")
       .setLabel("Close")
       .setEmoji("❌")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return [selectRow, navRow, actionRow, selectNavRow, navRow2];
@@ -347,8 +357,8 @@ function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = QUEUE_MOVE_MEN
     return { label, value: String(position), description };
   });
 
-  const selectRow = new MessageActionRow().addComponents(
-    new MessageSelectMenu()
+  const selectRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
       .setCustomId("queue_move_select")
       .setPlaceholder("Move selected track to position…")
       .setMinValues(1)
@@ -357,29 +367,29 @@ function buildMoveMenu(queue, selectedIndex, page = 1, pageSize = QUEUE_MOVE_MEN
       .setDisabled(options.length === 0)
   );
 
-  const controlRow = new MessageActionRow().addComponents(
-    new MessageButton()
+  const controlRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("move_prev")
       .setLabel("Previous Page")
       .setEmoji("⬅️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage <= 1),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("move_next")
       .setLabel("Next Page")
       .setEmoji("➡️")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages),
-    new MessageButton()
+    new ButtonBuilder()
       .setCustomId("move_first")
       .setLabel("Move to First")
       .setEmoji("⏫")
-      .setStyle("PRIMARY"),
-    new MessageButton()
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
       .setCustomId("move_close")
       .setLabel("Close")
       .setEmoji("❌")
-      .setStyle("SECONDARY")
+      .setStyle(ButtonStyle.Secondary)
   );
   return { components: [selectRow, controlRow], page: safePage, totalPages };
 }

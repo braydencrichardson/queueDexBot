@@ -47,6 +47,46 @@ function toShortYoutubeUrl(value) {
   return `https://youtu.be/${id}`;
 }
 
+function normalizeImageUrl(value) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.startsWith("//") ? `https:${raw}` : raw;
+  if (/^https?:\/\//i.test(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
+function getYoutubeThumbnailUrl(video, fallbackId = null) {
+  const directCandidates = [
+    video?.thumbnail,
+    video?.image,
+    video?.thumbnailUrl,
+    video?.bestThumbnail?.url,
+  ];
+  for (const candidate of directCandidates) {
+    const normalized = normalizeImageUrl(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  const thumbs = Array.isArray(video?.thumbnails) ? video.thumbnails : [];
+  for (let index = thumbs.length - 1; index >= 0; index -= 1) {
+    const normalized = normalizeImageUrl(thumbs[index]?.url || thumbs[index]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  if (/^[a-zA-Z0-9_-]{11}$/.test(String(fallbackId || ""))) {
+    return `https://i.ytimg.com/vi/${fallbackId}/hqdefault.jpg`;
+  }
+  return null;
+}
+
 function tokenizeQuery(value) {
   return String(value || "")
     .toLowerCase()
@@ -212,6 +252,7 @@ async function searchYouTubeOptions(query, requester, matchOptions, limit = YOUT
         artist: video.author?.name || video.channel?.name || null,
         source: "youtube",
         duration: typeof video.seconds === "number" ? video.seconds : null,
+        thumbnailUrl: getYoutubeThumbnailUrl(video, video.videoId || getYoutubeId(video.url)),
         requester,
       }));
     }
@@ -234,6 +275,7 @@ async function searchYouTubePreferred(query, requester, matchOptions) {
         artist: top.author?.name || top.channel?.name || null,
         source: "youtube",
         duration: typeof top.seconds === "number" ? top.seconds : null,
+        thumbnailUrl: getYoutubeThumbnailUrl(top, id),
         requester,
       };
     }

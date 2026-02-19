@@ -1,3 +1,5 @@
+const { getQueueVoiceChannelId } = require("../queue/voice-channel");
+
 function clearMapEntryWithTimeout(store, key) {
   const existingEntry = store.get(key);
   if (!existingEntry) {
@@ -48,10 +50,6 @@ function setExpiringMapEntry(options) {
   return storedEntry;
 }
 
-function getQueueVoiceChannelId(queue) {
-  return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
-}
-
 function getVoiceChannelCheck(member, queue, action = "control playback") {
   if (!member?.voice?.channel) {
     return "Join a voice channel first.";
@@ -86,6 +84,7 @@ async function queueSearchSelection(options) {
   clearMapEntryWithTimeout(pendingSearches, interaction.message.id);
 
   queue.textChannel = interaction.channel;
+  queue.textChannelId = String(interaction.channelId || interaction.channel?.id || "").trim() || null;
   ensureTrackId(selected);
   queue.tracks.push(selected);
   await maybeRefreshNowPlayingUpNext(queue);

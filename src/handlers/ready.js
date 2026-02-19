@@ -19,7 +19,7 @@ function registerReadyHandler(client, deps) {
     return "online";
   }
 
-  client.on("ready", () => {
+  client.once("clientReady", () => {
     logInfo(`Logged in as ${client.user.tag}`);
     if (client.user?.setPresence && presence) {
       try {

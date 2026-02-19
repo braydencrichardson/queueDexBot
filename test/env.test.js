@@ -6,6 +6,7 @@ const { loadEnvVars } = require("../src/config/env");
 test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   const env = loadEnvVars({});
 
+  assert.equal(env.applicationId, undefined);
   assert.equal(env.ytdlpPath, "yt-dlp");
   assert.equal(env.ytdlpPlayerClient, "web");
   assert.equal(env.ytdlpFallbackPlayerClient, "android");
@@ -13,11 +14,42 @@ test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   assert.equal(env.ytdlpRemoteComponents, "ejs:github");
   assert.equal(env.ytdlpStream, false);
   assert.equal(Number.isNaN(env.ytdlpConcurrentFragments), true);
+  assert.equal(env.oauthClientId, undefined);
+  assert.equal(env.oauthClientSecret, undefined);
+  assert.equal(env.oauthWebRedirectUri, undefined);
+  assert.equal(env.oauthActivityRedirectUri, undefined);
+  assert.equal(env.oauthScopes, "identify guilds");
+  assert.equal(env.activityWebUrl, undefined);
+  assert.equal(env.activityInvitePrewarmOnPlaybackStart, false);
+  assert.equal(env.nowPlayingShowProgress, false);
+  assert.equal(env.discordGatewayWatchdogEnabled, true);
+  assert.equal(env.discordGatewayWatchdogCheckIntervalMs, 5000);
+  assert.equal(env.discordGatewayWatchdogDisconnectThresholdMs, 20000);
+  assert.equal(env.discordGatewayWatchdogBackoffBaseMs, 8000);
+  assert.equal(env.discordGatewayWatchdogBackoffMaxMs, 120000);
+  assert.equal(env.authServerEnabled, true);
+  assert.equal(env.authServerHost, "127.0.0.1");
+  assert.equal(Number.isNaN(env.authServerPort), true);
+  assert.equal(Number.isNaN(env.authSessionTtlMs), true);
+  assert.equal(env.authSessionCookieName, "qdex_session");
+  assert.equal(env.authSessionCookieSecure, true);
+  assert.equal(env.authSessionStoreEnabled, true);
+  assert.equal(env.authSessionStorePath, "data/auth-sessions.json");
+  assert.deepEqual(env.authAdminUserIds, []);
+  assert.equal(env.logLevel, "info");
+  assert.equal(env.logDir, "logs");
+  assert.equal(env.logServiceName, "controller");
+  assert.equal(env.logPretty, true);
+  assert.equal(env.logMaxSizeBytes, 10 * 1024 * 1024);
+  assert.equal(env.logMaxFiles, 10);
+  assert.equal(env.devLogLevel, "info");
+  assert.equal(env.devAlertLevel, "error");
 });
 
 test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   const env = loadEnvVars({
     DISCORD_TOKEN: "token",
+    APPLICATION_ID: "app123",
     YOUTUBE_COOKIES: "cookie=value",
     YOUTUBE_COOKIES_PATH: "./cookies.json",
     YOUTUBE_USER_AGENT: "Mozilla/5.0 Test",
@@ -29,9 +61,39 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
     SPOTIFY_REFRESH_TOKEN: "ghi",
     YTDLP_STREAM: "1",
     YTDLP_CONCURRENT_FRAGMENTS: "8",
+    DISCORD_OAUTH_CLIENT_SECRET: "oauthsecret",
+    DISCORD_OAUTH_REDIRECT_URI_WEB: "https://app.example.com/auth/discord/web/callback",
+    DISCORD_OAUTH_REDIRECT_URI_ACTIVITY: "https://activity.example.com",
+    DISCORD_OAUTH_SCOPES: "identify guilds",
+    ACTIVITY_WEB_URL: "https://activity.example.com",
+    ACTIVITY_INVITE_PREWARM_ON_PLAYBACK_START: "1",
+    NOW_PLAYING_SHOW_PROGRESS: "1",
+    DISCORD_GATEWAY_WATCHDOG_ENABLED: "0",
+    DISCORD_GATEWAY_WATCHDOG_CHECK_INTERVAL_MS: "7500",
+    DISCORD_GATEWAY_WATCHDOG_DISCONNECT_THRESHOLD_MS: "12000",
+    DISCORD_GATEWAY_WATCHDOG_BACKOFF_BASE_MS: "5000",
+    DISCORD_GATEWAY_WATCHDOG_BACKOFF_MAX_MS: "45000",
+    AUTH_SERVER_ENABLED: "0",
+    AUTH_SERVER_HOST: "0.0.0.0",
+    AUTH_SERVER_PORT: "8787",
+    AUTH_SESSION_TTL_MS: "3600000",
+    AUTH_SESSION_COOKIE_NAME: "qdex_cookie",
+    AUTH_SESSION_COOKIE_SECURE: "0",
+    AUTH_SESSION_STORE_ENABLED: "0",
+    AUTH_SESSION_STORE_PATH: "/tmp/qdex-sessions.json",
+    AUTH_ADMIN_USER_IDS: "123, 456 789,123",
+    LOG_LEVEL: "debug",
+    LOG_DIR: "/tmp/queuedex-logs",
+    LOG_SERVICE_NAME: "worker",
+    LOG_PRETTY: "0",
+    LOG_MAX_SIZE_BYTES: "5mb",
+    LOG_MAX_FILES: "42",
+    DEV_LOG_LEVEL: "debug",
+    DEV_ALERT_LEVEL: "warn",
   });
 
   assert.equal(env.token, "token");
+  assert.equal(env.applicationId, "app123");
   assert.equal(env.youtubeCookies, "cookie=value");
   assert.equal(env.youtubeCookiesPath, "./cookies.json");
   assert.equal(env.youtubeUserAgent, "Mozilla/5.0 Test");
@@ -43,4 +105,44 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   assert.equal(env.spotifyRefreshToken, "ghi");
   assert.equal(env.ytdlpStream, true);
   assert.equal(env.ytdlpConcurrentFragments, 8);
+  assert.equal(env.oauthClientId, "app123");
+  assert.equal(env.oauthClientSecret, "oauthsecret");
+  assert.equal(env.oauthWebRedirectUri, "https://app.example.com/auth/discord/web/callback");
+  assert.equal(env.oauthActivityRedirectUri, "https://activity.example.com");
+  assert.equal(env.oauthScopes, "identify guilds");
+  assert.equal(env.activityWebUrl, "https://activity.example.com");
+  assert.equal(env.activityInvitePrewarmOnPlaybackStart, true);
+  assert.equal(env.nowPlayingShowProgress, true);
+  assert.equal(env.discordGatewayWatchdogEnabled, false);
+  assert.equal(env.discordGatewayWatchdogCheckIntervalMs, 7500);
+  assert.equal(env.discordGatewayWatchdogDisconnectThresholdMs, 12000);
+  assert.equal(env.discordGatewayWatchdogBackoffBaseMs, 5000);
+  assert.equal(env.discordGatewayWatchdogBackoffMaxMs, 45000);
+  assert.equal(env.authServerEnabled, false);
+  assert.equal(env.authServerHost, "0.0.0.0");
+  assert.equal(env.authServerPort, 8787);
+  assert.equal(env.authSessionTtlMs, 3600000);
+  assert.equal(env.authSessionCookieName, "qdex_cookie");
+  assert.equal(env.authSessionCookieSecure, false);
+  assert.equal(env.authSessionStoreEnabled, false);
+  assert.equal(env.authSessionStorePath, "/tmp/qdex-sessions.json");
+  assert.deepEqual(env.authAdminUserIds, ["123", "456", "789"]);
+  assert.equal(env.logLevel, "debug");
+  assert.equal(env.logDir, "/tmp/queuedex-logs");
+  assert.equal(env.logServiceName, "worker");
+  assert.equal(env.logPretty, false);
+  assert.equal(env.logMaxSizeBytes, 5 * 1024 * 1024);
+  assert.equal(env.logMaxFiles, 42);
+  assert.equal(env.devLogLevel, "debug");
+  assert.equal(env.devAlertLevel, "warn");
+});
+
+test("loadEnvVars prefers explicit oauth client id over application id", () => {
+  const env = loadEnvVars({
+    APPLICATION_ID: "app123",
+    DISCORD_OAUTH_CLIENT_ID: "oauth456",
+  });
+
+  assert.equal(env.applicationId, "app123");
+  assert.equal(env.oauthClientId, "oauth456");
 });

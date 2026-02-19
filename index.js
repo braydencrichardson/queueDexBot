@@ -1,4 +1,4 @@
-const { Client, Intents } = require("discord.js");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const {
   joinVoiceChannel,
   createAudioPlayer,
@@ -29,6 +29,7 @@ const {
   TRACK_RESOLVER_HTTP_TIMEOUT_MS,
   YTDLP_STREAM_TIMEOUT_MS,
 } = require("./src/config/constants");
+const { createDiscordReconnectWatchdog } = require("./src/bot/discord-reconnect-watchdog");
 const { createRuntimeState } = require("./src/bot/runtime-state");
 const { createDevLogger } = require("./src/logging/dev-logger");
 const { searchYouTubeOptions, searchYouTubePreferred, getYoutubeId, toShortYoutubeUrl } = require("./src/providers/youtube-search");
@@ -39,6 +40,8 @@ const { createTrackResolver } = require("./src/providers/track-resolver");
 const { enqueueTracks, ensureTrackId, getTrackIndexById, getQueuedTrackIndex, formatDuration } = require("./src/queue/utils");
 const { createQueuePlayback } = require("./src/queue/playback");
 const { createQueueSession } = require("./src/queue/session");
+const { createQueueService } = require("./src/queue/service");
+const { createActivityInviteService } = require("./src/activity/invite-service");
 const { buildQueueViewComponents, formatQueueViewContent, buildMoveMenu } = require("./src/ui/queueView");
 const { buildQueuedActionComponents, buildNowPlayingControls, buildPlaylistQueuedComponents } = require("./src/ui/controls");
 const { formatMovePrompt } = require("./src/ui/messages");
@@ -47,6 +50,8 @@ const { normalizeQueryInput } = require("./src/utils/query");
 const { registerInteractionHandler } = require("./src/handlers/interaction");
 const { registerReadyHandler } = require("./src/handlers/ready");
 const { registerVoiceStateHandler } = require("./src/handlers/voice-state");
+const { createAdminEventFeed } = require("./src/web/admin-event-feed");
+const { createApiServer } = require("./src/web/api-server");
 
 dotenv.config();
 const env = loadEnvVars(process.env);
@@ -58,13 +63,15 @@ if (!env.token) {
 
 const client = new Client({
   intents: [
-    Intents.FLAGS.GUILDS,
-    Intents.FLAGS.GUILD_MESSAGES,
-    Intents.FLAGS.GUILD_MESSAGE_REACTIONS,
-    Intents.FLAGS.GUILD_VOICE_STATES,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildVoiceStates,
   ],
-  partials: ["MESSAGE", "CHANNEL", "REACTION"],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
+
+let discordLoginPromise = null;
 
 const {
   queues,
@@ -73,16 +80,226 @@ const {
   pendingMoves,
   pendingQueuedActions,
 } = createRuntimeState();
-const { logInfo, logError, sendDevAlert } = createDevLogger({
+const logger = createDevLogger({
   client,
+  canSendDiscordMessages,
   devAlertChannelId: env.devAlertChannelId,
   devLogChannelId: env.devLogChannelId,
+  level: env.logLevel,
+  service: env.logServiceName,
+  pretty: env.logPretty,
+  logDir: env.logDir,
+  maxFileSizeBytes: env.logMaxSizeBytes,
+  maxFiles: env.logMaxFiles,
+  discordLogLevel: env.devLogLevel,
+  discordAlertLevel: env.devAlertLevel,
 });
+const adminEventFeed = createAdminEventFeed({
+  maxEntries: 500,
+});
+
+function logInfo(message, data) {
+  logger.logInfo(message, data);
+  adminEventFeed.push({
+    level: "info",
+    service: env.logServiceName || "controller",
+    message,
+    data,
+  });
+}
+
+function logError(message, data) {
+  logger.logError(message, data);
+  adminEventFeed.push({
+    level: "error",
+    service: env.logServiceName || "controller",
+    message,
+    data,
+  });
+}
+
+const { sendDevAlert } = logger;
+const activityInviteService = createActivityInviteService();
+
+function canSendDiscordMessages() {
+  if (!client) {
+    return false;
+  }
+  if (discordLoginPromise) {
+    return false;
+  }
+  if (typeof client.isReady === "function") {
+    if (!client.isReady()) {
+      return false;
+    }
+  }
+  if (!client.user?.id) {
+    return false;
+  }
+  const restClient = client.rest;
+  const restExposesToken = Boolean(
+    restClient
+    && (Object.prototype.hasOwnProperty.call(restClient, "token") || "token" in restClient)
+  );
+  if (restExposesToken) {
+    const restToken = restClient.token;
+    const hasRestToken = typeof restToken === "string"
+      ? restToken.trim().length > 0
+      : Boolean(restToken);
+    if (!hasRestToken) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function getActivityApplicationId() {
+  return String(client.application?.id || env.oauthClientId || "").trim();
+}
+
+async function resolveGuildChannelById(guildId, channelId) {
+  const normalizedGuildId = String(guildId || "").trim();
+  const normalizedChannelId = String(channelId || "").trim();
+  if (!normalizedGuildId || !normalizedChannelId) {
+    return null;
+  }
+
+  const guild = client.guilds?.cache?.get(normalizedGuildId);
+  if (!guild) {
+    return null;
+  }
+
+  const cached = guild.channels?.cache?.get(normalizedChannelId)
+    || client.channels?.cache?.get(normalizedChannelId);
+  if (cached) {
+    return cached;
+  }
+
+  if (typeof guild.channels?.fetch === "function") {
+    try {
+      return await guild.channels.fetch(normalizedChannelId);
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof client.channels?.fetch === "function") {
+    try {
+      return await client.channels.fetch(normalizedChannelId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function resolveVoiceChannelById(guildId, channelId) {
+  return resolveGuildChannelById(guildId, channelId);
+}
+
+async function resolveTextChannelById(guildId, channelId) {
+  const resolvedChannel = await resolveGuildChannelById(guildId, channelId);
+  if (!resolvedChannel?.send) {
+    return null;
+  }
+  return resolvedChannel;
+}
+
+async function prewarmActivityInviteOnPlaybackStart({ guildId, queue, track }) {
+  if (!env.activityInvitePrewarmOnPlaybackStart) {
+    return;
+  }
+
+  const applicationId = getActivityApplicationId();
+  if (!applicationId) {
+    return;
+  }
+
+  const queueVoiceChannelId = String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim();
+  if (!queueVoiceChannelId) {
+    return;
+  }
+
+  let voiceChannel = queue?.voiceChannel;
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    voiceChannel = await resolveVoiceChannelById(guildId, queueVoiceChannelId);
+  }
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    logInfo("Skipping activity invite prewarm; queue voice channel is unavailable", {
+      guildId,
+      channelId: queueVoiceChannelId,
+    });
+    return;
+  }
+
+  const reasonTrackTitle = String(track?.title || "unknown track").trim().slice(0, 96) || "unknown track";
+  try {
+    const result = await activityInviteService.getOrCreateInvite({
+      voiceChannel,
+      applicationId,
+      reason: `Activity invite prewarm on playback start (${reasonTrackTitle})`,
+    });
+    logInfo("Activity invite prewarm completed", {
+      guildId,
+      channel: voiceChannel.id,
+      reused: Boolean(result?.reused),
+    });
+  } catch (error) {
+    logError("Activity invite prewarm failed", {
+      guildId,
+      channelId: queueVoiceChannelId,
+      error,
+    });
+  }
+}
+
+async function getNowPlayingActivityLinks(queue) {
+  const webUrl = String(env.activityWebUrl || "").trim() || null;
+  const applicationId = getActivityApplicationId();
+  if (!applicationId) {
+    return webUrl ? { webUrl } : null;
+  }
+
+  const queueVoiceChannelId = String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim();
+  if (!queueVoiceChannelId) {
+    return webUrl ? { webUrl } : null;
+  }
+
+  let voiceChannel = queue?.voiceChannel;
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    voiceChannel = await resolveVoiceChannelById(queue?.guildId, queueVoiceChannelId);
+  }
+  if (!voiceChannel || typeof voiceChannel.createInvite !== "function") {
+    return webUrl ? { webUrl } : null;
+  }
+
+  try {
+    const inviteResult = await activityInviteService.getOrCreateInvite({
+      voiceChannel,
+      applicationId,
+      reason: "Now playing activity link refresh",
+    });
+    return {
+      inviteUrl: inviteResult.url,
+      webUrl,
+    };
+  } catch (error) {
+    logError("Failed to resolve activity invite for now playing content", {
+      guildId: queue?.guildId || null,
+      channelId: queueVoiceChannelId,
+      error,
+    });
+    return webUrl ? { webUrl } : null;
+  }
+}
 
 const {
   getSoundcloudClientId,
   getSoundcloudCookieHeader,
   getYoutubeCookiesNetscapePath,
+  getProviderStatus,
+  verifyProviderAuthStatus,
   hasSpotifyCredentials,
   tryCheckYoutubeCookiesOnFailure,
   ensureSoundcloudReady,
@@ -152,6 +369,35 @@ async function ensureSodiumReady() {
   }
 }
 
+async function loginDiscordClient({ reason = "manual", destroyFirst = false } = {}) {
+  if (discordLoginPromise) {
+    logInfo("Discord login already in progress; skipping duplicate request", { reason });
+    return discordLoginPromise;
+  }
+
+  discordLoginPromise = (async () => {
+    if (destroyFirst) {
+      try {
+        client.destroy();
+      } catch (error) {
+        logError("Failed to destroy Discord client before relogin", error);
+      }
+    }
+
+    logInfo("Attempting Discord login", {
+      reason,
+      destroyFirst: Boolean(destroyFirst),
+    });
+    return client.login(env.token);
+  })();
+
+  try {
+    return await discordLoginPromise;
+  } finally {
+    discordLoginPromise = null;
+  }
+}
+
 let playNext = async () => {
   throw new Error("playNext not initialized");
 };
@@ -178,6 +424,9 @@ const {
   logError,
   getPlayNext: () => playNext,
   ensureNextTrackPreload: (queue) => ensureNextTrackPreload(queue),
+  getNowPlayingActivityLinks,
+  showNowPlayingProgress: env.nowPlayingShowProgress,
+  canSendDiscordMessages,
   resolveNowPlayingChannelById: async (channelId) => {
     if (!channelId) {
       return null;
@@ -196,6 +445,274 @@ const {
     }
   },
 });
+
+async function ensureQueueVoiceConnection(queue, options = {}) {
+  const normalizedGuildId = String(
+    options.guildId
+    || queue?.guildId
+    || options.preferredVoiceChannel?.guild?.id
+    || queue?.voiceChannel?.guild?.id
+    || queue?.connection?.joinConfig?.guildId
+    || ""
+  ).trim();
+  const preferredVoiceChannelId = String(options.preferredVoiceChannelId || "").trim();
+  const queueVoiceChannelId = String(
+    queue?.voiceChannel?.id
+    || queue?.connection?.joinConfig?.channelId
+    || ""
+  ).trim();
+
+  let targetVoiceChannel = options.preferredVoiceChannel || null;
+  if (
+    !targetVoiceChannel
+    || !targetVoiceChannel?.id
+    || !targetVoiceChannel?.guild?.voiceAdapterCreator
+  ) {
+    targetVoiceChannel = null;
+  }
+
+  if (!targetVoiceChannel && queue?.voiceChannel?.id && queue?.voiceChannel?.guild?.voiceAdapterCreator) {
+    targetVoiceChannel = queue.voiceChannel;
+  }
+
+  if (!targetVoiceChannel) {
+    const resolveChannelId = preferredVoiceChannelId || queueVoiceChannelId;
+    if (resolveChannelId && normalizedGuildId) {
+      targetVoiceChannel = await resolveVoiceChannelById(normalizedGuildId, resolveChannelId);
+    }
+  }
+
+  if (!targetVoiceChannel?.id || !targetVoiceChannel?.guild?.voiceAdapterCreator) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "No voice channel is available to resume playback.",
+    };
+  }
+
+  const targetGuildId = String(targetVoiceChannel.guild?.id || normalizedGuildId || "").trim();
+  const targetChannelId = String(targetVoiceChannel.id || "").trim();
+  if (!targetGuildId || !targetChannelId) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "No voice channel is available to resume playback.",
+    };
+  }
+
+  queue.voiceChannel = targetVoiceChannel;
+
+  const liveBotVoiceChannelId = String(
+    targetVoiceChannel.guild?.members?.me?.voice?.channelId
+    || targetVoiceChannel.guild?.members?.me?.voice?.channel?.id
+    || ""
+  ).trim() || null;
+  const connectionChannelId = String(queue?.connection?.joinConfig?.channelId || "").trim() || null;
+
+  if (liveBotVoiceChannelId === targetChannelId && queue.connection && connectionChannelId === targetChannelId) {
+    try {
+      queue.connection.subscribe(queue.player);
+    } catch (error) {
+      logError("Failed to re-subscribe player to existing voice connection", {
+        guildId: targetGuildId,
+        channelId: targetChannelId,
+        error,
+      });
+    }
+    return {
+      ok: true,
+      reused: true,
+      guildId: targetGuildId,
+      channelId: targetChannelId,
+    };
+  }
+
+  if (queue.connection) {
+    try {
+      queue.connection.destroy();
+    } catch (error) {
+      logError("Failed to destroy stale voice connection before resume reconnect", {
+        guildId: targetGuildId,
+        channelId: connectionChannelId,
+        error,
+      });
+    }
+    queue.connection = null;
+  }
+
+  await ensureSodiumReady();
+
+  try {
+    queue.connection = joinVoiceChannel({
+      channelId: targetChannelId,
+      guildId: targetGuildId,
+      adapterCreator: targetVoiceChannel.guild.voiceAdapterCreator,
+    });
+    queue.connection.on("error", (error) => {
+      logError("Voice connection error", error);
+    });
+    ensurePlayerListeners(queue, targetGuildId);
+    queue.connection.subscribe(queue.player);
+    return {
+      ok: true,
+      joined: true,
+      guildId: targetGuildId,
+      channelId: targetChannelId,
+    };
+  } catch (error) {
+    queue.connection = null;
+    logError("Failed to establish voice connection for resume", {
+      guildId: targetGuildId,
+      channelId: targetChannelId,
+      error,
+    });
+    return {
+      ok: false,
+      statusCode: 500,
+      error: "I couldn't rejoin the voice channel.",
+    };
+  }
+}
+
+const queueService = createQueueService({
+  stopAndLeaveQueue,
+  maybeRefreshNowPlayingUpNext,
+  sendNowPlaying,
+  ensureTrackId,
+  ensureVoiceConnection: ensureQueueVoiceConnection,
+});
+
+let gatewayReconnectWatchdog = null;
+
+const apiServer = env.authServerEnabled
+  ? createApiServer({
+    queues,
+    logInfo,
+    logError,
+    getQueueForGuild: (guildId) => getGuildQueue(guildId),
+    isBotInGuild: (guildId) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      if (!normalizedGuildId) {
+        return false;
+      }
+      if (typeof client.isReady === "function" && !client.isReady()) {
+        return true;
+      }
+      return Boolean(client.guilds?.cache?.has(normalizedGuildId));
+    },
+    isUserInGuild: async (guildId, userId) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      if (!normalizedGuildId || !normalizedUserId) {
+        return false;
+      }
+      const guild = client.guilds?.cache?.get(normalizedGuildId);
+      if (!guild) {
+        return false;
+      }
+
+      if (guild.members?.cache?.has(normalizedUserId)) {
+        return true;
+      }
+
+      if (typeof guild.members?.fetch !== "function") {
+        return false;
+      }
+
+      try {
+        const member = await guild.members.fetch(normalizedUserId);
+        return Boolean(member?.id === normalizedUserId);
+      } catch {
+        return false;
+      }
+    },
+    getBotGuilds: () => Array.from(client.guilds?.cache?.values?.() || [])
+      .map((guild) => ({
+        id: guild?.id || null,
+        name: guild?.name || null,
+      }))
+      .filter((guild) => guild.id),
+    getUserVoiceChannelId: async (guildId, userId) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      if (!normalizedGuildId || !normalizedUserId) {
+        return null;
+      }
+      const guild = client.guilds?.cache?.get(normalizedGuildId);
+      if (!guild) {
+        return null;
+      }
+
+      const voiceState = guild.voiceStates?.cache?.get(normalizedUserId);
+      if (voiceState?.channelId) {
+        return voiceState.channelId;
+      }
+
+      let member = guild.members?.cache?.get(normalizedUserId) || null;
+      if (!member && typeof guild.members?.fetch === "function") {
+        try {
+          member = await guild.members.fetch(normalizedUserId);
+        } catch {
+          return null;
+        }
+      }
+      return member?.voice?.channelId || member?.voice?.channel?.id || null;
+    },
+    resolveTextChannelById,
+    getAdminEvents: ({ minLevel, limit }) => adminEventFeed.list({ minLevel, limit }),
+    getProviderStatus,
+    verifyProviderAuthStatus,
+    reinitializeProviders,
+    getDiscordGatewayStatus: async () => gatewayReconnectWatchdog?.getState?.() || null,
+    forceDiscordRelogin: async ({ reason } = {}) => {
+      loginDiscordClient({
+        reason: reason || "api-admin-force-relogin",
+        destroyFirst: true,
+      }).catch((error) => {
+        logError("Admin-triggered Discord relogin failed", {
+          reason: reason || "api-admin-force-relogin",
+          error,
+        });
+      });
+      return {
+        accepted: true,
+        inFlight: true,
+      };
+    },
+    queueService,
+    stopAndLeaveQueue,
+    maybeRefreshNowPlayingUpNext,
+    sendNowPlaying,
+    normalizeQueryInput,
+    resolveTracks,
+    getSearchOptionsForQuery,
+    ensureQueueVoiceConnection,
+    ensureTrackId,
+    getPlayNext: () => playNext,
+    config: {
+      oauthClientId: env.oauthClientId,
+      oauthClientSecret: env.oauthClientSecret,
+      oauthWebRedirectUri: env.oauthWebRedirectUri,
+      oauthActivityRedirectUri: env.oauthActivityRedirectUri,
+      oauthScopes: env.oauthScopes,
+      host: env.authServerHost,
+      port: env.authServerPort,
+      activityQueueSearchConcurrency: env.activityQueueSearchConcurrency,
+      sessionTtlMs: env.authSessionTtlMs,
+      cookieName: env.authSessionCookieName,
+      cookieSecure: env.authSessionCookieSecure,
+      sessionStoreEnabled: env.authSessionStoreEnabled,
+      sessionStorePath: env.authSessionStorePath,
+      adminUserIds: env.authAdminUserIds,
+    },
+  })
+  : null;
+
+if (apiServer) {
+  apiServer.start();
+} else {
+  logInfo("API/Auth server disabled by AUTH_SERVER_ENABLED=0");
+}
 
 const { trySendSearchChooser } = createSearchChooser({
   formatDuration,
@@ -250,6 +767,7 @@ const { createSoundcloudResource } = createSoundcloudResourceFactory({
   deferredResolveLookahead,
   hydrateDeferredTrackMetadata,
   resolveDeferredTrack,
+  onPlaybackStarted: prewarmActivityInviteOnPlaybackStart,
   logInfo,
   logError,
 }));
@@ -319,12 +837,49 @@ registerVoiceStateHandler(client, {
   inactivityTimeoutMs: QUEUE_INACTIVITY_TIMEOUT_MS,
 });
 
+gatewayReconnectWatchdog = createDiscordReconnectWatchdog({
+  client,
+  logInfo,
+  logError,
+  relogin: async ({ reason, attempt, shardIds } = {}) => {
+    await loginDiscordClient({
+      reason: `watchdog:${reason || "unknown"}:attempt:${attempt || 1}:shards:${Array.isArray(shardIds) ? shardIds.join(",") : "unknown"}`,
+      destroyFirst: true,
+    });
+  },
+  enabled: env.discordGatewayWatchdogEnabled,
+  checkIntervalMs: env.discordGatewayWatchdogCheckIntervalMs,
+  disconnectThresholdMs: env.discordGatewayWatchdogDisconnectThresholdMs,
+  backoffBaseMs: env.discordGatewayWatchdogBackoffBaseMs,
+  backoffMaxMs: env.discordGatewayWatchdogBackoffMaxMs,
+});
+gatewayReconnectWatchdog.start();
+
 client.on("error", (error) => {
   logError("Discord client error", error);
 });
 
-client.on("shardError", (error) => {
-  logError("Discord shard error", error);
+client.on("shardError", (error, shardId) => {
+  logError("Discord shard error", {
+    shardId: Number.isInteger(shardId) ? shardId : null,
+    name: error?.name || "Error",
+    message: error?.message || String(error || ""),
+    stack: error?.stack || null,
+    code: error?.code || null,
+  });
+});
+
+client.on("shardDisconnect", (event, shardId) => {
+  logError("Discord shard disconnected", {
+    shardId: Number.isInteger(shardId) ? shardId : null,
+    code: event?.code ?? null,
+    reason: event?.reason ?? null,
+    wasClean: typeof event?.wasClean === "boolean" ? event.wasClean : null,
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  logError("Unhandled promise rejection", reason);
 });
 
 registerInteractionHandler(client, {
@@ -365,9 +920,14 @@ registerInteractionHandler(client, {
   isSpotifyUrl,
   hasSpotifyCredentials,
   stopAndLeaveQueue,
+  queueService,
+  activityInviteService,
+  getActivityApplicationId,
+  resolveVoiceChannelById,
+  activityWebUrl: env.activityWebUrl,
 });
 
-client.login(env.token).catch((error) => {
+loginDiscordClient({ reason: "startup", destroyFirst: false }).catch((error) => {
   logError("Failed to login to Discord", error);
   process.exit(1);
 });

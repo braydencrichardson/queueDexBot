@@ -1,6 +1,5 @@
 const dotenv = require("dotenv");
-const { REST } = require("@discordjs/rest");
-const { Routes } = require("discord-api-types/v10");
+const { REST, Routes } = require("discord.js");
 const { commands } = require("./src/commands");
 
 dotenv.config();
@@ -24,6 +23,51 @@ if (!applicationId) {
 }
 
 const rest = new REST({ version: "10" }).setToken(token);
+
+const ENTRY_POINT_COMMAND_TYPE = 4;
+
+function sanitizeForBulkOverwrite(command) {
+  const allowedKeys = [
+    "id",
+    "type",
+    "name",
+    "name_localizations",
+    "description",
+    "description_localizations",
+    "options",
+    "default_member_permissions",
+    "dm_permission",
+    "default_permission",
+    "nsfw",
+    "integration_types",
+    "contexts",
+    "handler",
+  ];
+  const sanitized = {};
+  allowedKeys.forEach((key) => {
+    if (command[key] !== undefined) {
+      sanitized[key] = command[key];
+    }
+  });
+  return sanitized;
+}
+
+function withPreservedEntryPoint(localCommands, existingCommands) {
+  const localHasEntryPoint = localCommands.some((command) => Number(command?.type) === ENTRY_POINT_COMMAND_TYPE);
+  if (localHasEntryPoint) {
+    return localCommands;
+  }
+
+  const existingEntryPoints = (Array.isArray(existingCommands) ? existingCommands : [])
+    .filter((command) => Number(command?.type) === ENTRY_POINT_COMMAND_TYPE)
+    .map((command) => sanitizeForBulkOverwrite(command));
+
+  if (!existingEntryPoints.length) {
+    return localCommands;
+  }
+
+  return [...localCommands, ...existingEntryPoints];
+}
 
 async function deploy() {
   try {
@@ -51,15 +95,29 @@ async function deploy() {
       process.exit(1);
     }
 
-    console.log(
-      `Deploying ${commands.length} command(s): ${commands.map((command) => `/${command.name}`).join(", ")}`
-    );
-
     if (deployTarget === "guild") {
-      await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: commands });
+      const existingGuildCommands = await rest.get(Routes.applicationGuildCommands(applicationId, guildId));
+      const payload = withPreservedEntryPoint(commands, existingGuildCommands);
+      const preserved = payload.length - commands.length;
+      console.log(
+        `Deploying ${payload.length} command(s): ${payload.map((command) => `/${command.name}`).join(", ")}`
+      );
+      if (preserved > 0) {
+        console.log(`Preserving ${preserved} existing Entry Point command(s) from guild scope.`);
+      }
+      await rest.put(Routes.applicationGuildCommands(applicationId, guildId), { body: payload });
       console.log(`Registered commands for guild ${guildId}.`);
     } else {
-      await rest.put(Routes.applicationCommands(applicationId), { body: commands });
+      const existingGlobalCommands = await rest.get(Routes.applicationCommands(applicationId));
+      const payload = withPreservedEntryPoint(commands, existingGlobalCommands);
+      const preserved = payload.length - commands.length;
+      console.log(
+        `Deploying ${payload.length} command(s): ${payload.map((command) => `/${command.name}`).join(", ")}`
+      );
+      if (preserved > 0) {
+        console.log(`Preserving ${preserved} existing Entry Point command(s) from global scope.`);
+      }
+      await rest.put(Routes.applicationCommands(applicationId), { body: payload });
       console.log("Registered global commands (may take up to an hour to appear).");
     }
   } catch (error) {

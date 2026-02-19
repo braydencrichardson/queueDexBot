@@ -43,6 +43,18 @@ function sanitizeTrackForDiscord(track) {
   if (track.displayUrl !== undefined && track.displayUrl !== null) {
     track.displayUrl = sanitizeDiscordText(track.displayUrl).trim();
   }
+  if (track.thumbnailUrl !== undefined && track.thumbnailUrl !== null) {
+    track.thumbnailUrl = sanitizeDiscordText(track.thumbnailUrl).trim();
+  }
+  if (track.thumbnail !== undefined && track.thumbnail !== null) {
+    track.thumbnail = sanitizeDiscordText(track.thumbnail).trim();
+  }
+  if (track.artworkUrl !== undefined && track.artworkUrl !== null) {
+    track.artworkUrl = sanitizeDiscordText(track.artworkUrl).trim();
+  }
+  if (track.artwork_url !== undefined && track.artwork_url !== null) {
+    track.artwork_url = sanitizeDiscordText(track.artwork_url).trim();
+  }
 
   return track;
 }

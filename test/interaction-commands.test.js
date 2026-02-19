@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { MessageFlags } = require("discord.js");
 
 const { createCommandInteractionHandler } = require("../src/handlers/interaction-commands");
 
@@ -80,7 +81,7 @@ test("stop replies ephemerally when nothing is playing and queue is empty", asyn
   await handler(interaction);
 
   assert.equal(stopCalled, false);
-  assert.deepEqual(replyPayload, { content: "Nothing is playing and the queue is empty.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Nothing is playing and the queue is empty.", flags: MessageFlags.Ephemeral });
 });
 
 test("stop requires caller in voice channel when there is active playback", async () => {
@@ -119,7 +120,7 @@ test("stop requires caller in voice channel when there is active playback", asyn
   await handler(interaction);
 
   assert.equal(stopCalled, false);
-  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
 });
 
 test("queue clear reports already empty before voice-channel checks", async () => {
@@ -151,7 +152,7 @@ test("queue clear reports already empty before voice-channel checks", async () =
 
   await handler(interaction);
 
-  assert.deepEqual(replyPayload, { content: "Queue is already empty.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Queue is already empty.", flags: MessageFlags.Ephemeral });
 });
 
 test("queue clear requires user in voice channel before mutating queue", async () => {
@@ -184,7 +185,7 @@ test("queue clear requires user in voice channel before mutating queue", async (
   await handler(interaction);
 
   assert.equal(queue.tracks.length, 1);
-  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", ephemeral: true });
+  assert.deepEqual(replyPayload, { content: "Join a voice channel first.", flags: MessageFlags.Ephemeral });
 });
 
 test("join command connects bot to caller voice channel", async () => {
@@ -245,7 +246,290 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(queue.voiceChannel, voiceChannel);
   assert.equal(queue.connection, connection);
   assert.equal(subscribeCalledWith, queue.player);
-  assert.equal(replyPayload, "Joined **General**.");
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("Joined **General** and bound updates to <#text-1>."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    true
+  );
+});
+
+test("join command clears stale queue voice state when bot is disconnected", async () => {
+  let replyPayload = null;
+  let staleConnectionDestroyed = false;
+  let joinCalled = false;
+  const staleConnection = {
+    on: () => {},
+    subscribe: () => {},
+    destroy: () => {
+      staleConnectionDestroyed = true;
+    },
+  };
+  const newConnection = {
+    on: () => {},
+    subscribe: () => {},
+    destroy: () => {},
+  };
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: { id: "vc-1" },
+    connection: staleConnection,
+    player: { id: "player-1" },
+  };
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      joinVoiceChannel: () => {
+        joinCalled = true;
+        return newConnection;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      members: {
+        me: {
+          voice: {
+            channelId: null,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(staleConnectionDestroyed, true);
+  assert.equal(joinCalled, true);
+  assert.equal(queue.connection, newConnection);
+  assert.equal(queue.voiceChannel, voiceChannel);
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("Joined **General** and bound updates to <#text-1>."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    true
+  );
+});
+
+test("join command reports already connected based on live bot voice state", async () => {
+  let replyPayload = null;
+  let joinCalled = false;
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: null,
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      joinVoiceChannel: () => {
+        joinCalled = true;
+        return {
+          on: () => {},
+          subscribe: () => {},
+          destroy: () => {},
+        };
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-1", voiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-1",
+            channel: voiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(joinCalled, false);
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+  assert.equal(
+    String(replyPayload?.content || "").includes("Already in your voice channel. Bound updates to <#text-1>."),
+    true
+  );
+  assert.equal(
+    String(replyPayload?.content || "").includes("Use `/play` here or open the Activity/Web UI to queue tracks."),
+    true
+  );
+});
+
+test("join posts now-playing controls when first text-channel bind happens during active playback", async () => {
+  let replyPayload = null;
+  let sendNowPlayingCalls = 0;
+  let sendNowPlayingArgs = null;
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const queue = {
+    tracks: [],
+    current: { id: "track-now", title: "Now Playing" },
+    voiceChannel: null,
+    connection: null,
+    textChannel: null,
+    textChannelId: null,
+    player: {
+      id: "player-1",
+      state: { status: "playing" },
+    },
+  };
+
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      sendNowPlaying: async (...args) => {
+        sendNowPlayingCalls += 1;
+        sendNowPlayingArgs = args;
+        return { id: "now-playing-message-1" };
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-1", voiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-1",
+            channel: voiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(sendNowPlayingCalls, 1);
+  assert.deepEqual(sendNowPlayingArgs, [queue, true]);
+  assert.equal(replyPayload?.flags, MessageFlags.Ephemeral);
+});
+
+test("join does not post now-playing controls when text channel was already attached", async () => {
+  let sendNowPlayingCalls = 0;
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const queue = {
+    tracks: [],
+    current: { id: "track-now", title: "Now Playing" },
+    voiceChannel: voiceChannel,
+    connection: null,
+    textChannel: { id: "text-1" },
+    textChannelId: "text-1",
+    player: {
+      id: "player-1",
+      state: { status: "playing" },
+    },
+  };
+
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      sendNowPlaying: async () => {
+        sendNowPlayingCalls += 1;
+        return { id: "now-playing-message-1" };
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-1", voiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-1",
+            channel: voiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async () => {},
+  };
+
+  await handler(interaction);
+
+  assert.equal(sendNowPlayingCalls, 0);
 });
 
 test("play resolves tracks before joining voice", async () => {
@@ -415,9 +699,9 @@ test("playing reports an error when now playing controls cannot be posted", asyn
 
   await handler(interaction);
 
-  assert.deepEqual(deferReplyPayload, { ephemeral: true });
+  assert.deepEqual(deferReplyPayload, { flags: MessageFlags.Ephemeral });
   assert.deepEqual(editReplyPayload, {
-    content: "I couldn't post now playing controls in this channel. Check my message permissions.",
+    content: "I couldn't post now playing controls right now. I may be reconnecting to Discord, or I might not have send permissions in this channel.",
   });
 });
 

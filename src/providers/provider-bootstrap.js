@@ -322,6 +322,96 @@ function createProviderBootstrap(deps) {
     })();
   }
 
+  function resolveYoutubeCookieSourceLabel() {
+    if (youtubeCookiesPath) {
+      return "YOUTUBE_COOKIES_PATH";
+    }
+    if (fs.existsSync(path.join(process.cwd(), ".cookies.json"))) {
+      return ".cookies.json";
+    }
+    if (youtubeCookies) {
+      return "YOUTUBE_COOKIES";
+    }
+    return null;
+  }
+
+  function resolveSoundcloudCookieSourceLabel() {
+    if (soundcloudCookiesPath) {
+      return "SOUNDCLOUD_COOKIES_PATH";
+    }
+    if (soundcloudCookies) {
+      return "SOUNDCLOUD_COOKIES";
+    }
+    return null;
+  }
+
+  function getProviderStatus() {
+    return {
+      soundcloud: {
+        ready: Boolean(soundcloudReady),
+        hasClientId: Boolean(soundcloudClientId),
+        hasCookieHeader: Boolean(soundcloudCookieHeader),
+        cookieSource: resolveSoundcloudCookieSourceLabel(),
+      },
+      youtube: {
+        ready: Boolean(youtubeReady),
+        hasCookieHeader: Boolean(youtubeCookieHeader),
+        hasNetscapeCookieFile: Boolean(youtubeCookiesNetscapePath),
+        cookieSource: resolveYoutubeCookieSourceLabel(),
+        userAgentConfigured: Boolean(youtubeUserAgent),
+      },
+      spotify: {
+        ready: Boolean(spotifyReady),
+        hasCredentials: hasSpotifyCredentials(),
+        credentials: getSpotifyCredentialState(),
+      },
+      updatedAt: Date.now(),
+    };
+  }
+
+  async function verifyProviderAuthStatus() {
+    const startedAt = Date.now();
+
+    await ensureSoundcloudReady();
+    await ensureYoutubeReady();
+    if (hasSpotifyCredentials()) {
+      try {
+        await ensureSpotifyReady();
+      } catch {
+        // Errors are already logged in ensureSpotifyReady callers; status response captures readiness.
+      }
+    }
+
+    const youtubeCookieCheck = youtubeCookieHeader
+      ? await checkYoutubeCookiesLoggedIn(youtubeCookieHeader)
+      : { ok: false, reason: "missing_cookie_header" };
+
+    const status = getProviderStatus();
+    const soundcloudOk = Boolean(status.soundcloud.ready && status.soundcloud.hasClientId);
+    const youtubeOk = Boolean(status.youtube.ready && youtubeCookieCheck.ok);
+    const spotifyRequired = Boolean(status.spotify.hasCredentials);
+    const spotifyOk = spotifyRequired ? Boolean(status.spotify.ready) : true;
+
+    return {
+      soundcloud: {
+        ok: soundcloudOk,
+        ...status.soundcloud,
+      },
+      youtube: {
+        ok: youtubeOk,
+        ...status.youtube,
+        cookieCheck: youtubeCookieCheck,
+      },
+      spotify: {
+        ok: spotifyOk,
+        ...status.spotify,
+      },
+      overallOk: Boolean(soundcloudOk && youtubeOk && spotifyOk),
+      checkedAt: Date.now(),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
   async function tryCheckYoutubeCookiesOnFailure() {
     if (youtubeCookieCheckOnFailure || !youtubeCookieHeader) {
       return;
@@ -373,6 +463,8 @@ function createProviderBootstrap(deps) {
     getSoundcloudClientId: () => soundcloudClientId,
     getSoundcloudCookieHeader: () => soundcloudCookieHeader,
     getYoutubeCookiesNetscapePath: () => youtubeCookiesNetscapePath,
+    getProviderStatus,
+    verifyProviderAuthStatus,
     hasSpotifyCredentials,
     tryCheckYoutubeCookiesOnFailure,
     ensureSoundcloudReady,
