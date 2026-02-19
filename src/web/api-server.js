@@ -544,6 +544,34 @@ function createApiServer(options) {
     };
   }
 
+  async function refreshSessionGuilds(session) {
+    if (!session) {
+      throw new Error("Session is unavailable");
+    }
+    const accessToken = String(session.accessToken || "").trim();
+    if (!accessToken) {
+      const error = new Error("Session access token is unavailable");
+      error.code = "NO_ACCESS_TOKEN";
+      throw error;
+    }
+    const scopes = String(session.scopes || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!scopes.includes("guilds")) {
+      const error = new Error("Session missing guilds scope");
+      error.code = "MISSING_GUILDS_SCOPE";
+      throw error;
+    }
+
+    const guildPayload = await fetchDiscordResource(accessToken, "/users/@me/guilds");
+    const guilds = Array.isArray(guildPayload)
+      ? guildPayload.map(summarizeGuild).filter(Boolean)
+      : [];
+    session.guilds = guilds;
+    return guilds;
+  }
+
   function summarizeQueueActionResult(result) {
     if (!result || typeof result !== "object") {
       return null;
@@ -1193,6 +1221,38 @@ function createApiServer(options) {
     }
   }
 
+  async function handleRefreshGuilds(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    const session = getSessionFromRequest(request);
+    if (!session) {
+      sendJson(response, 401, { error: "Unauthorized" });
+      return;
+    }
+
+    try {
+      const guilds = await refreshSessionGuilds(session);
+      sendJson(response, 200, {
+        ok: true,
+        guilds,
+        refreshedAt: Date.now(),
+      });
+    } catch (error) {
+      if (error?.code === "MISSING_GUILDS_SCOPE") {
+        sendJson(response, 409, { error: "Session is missing guilds scope. Sign in again with guilds scope enabled." });
+        return;
+      }
+      if (error?.code === "NO_ACCESS_TOKEN") {
+        sendJson(response, 409, { error: "Session cannot refresh guilds because access token is unavailable." });
+        return;
+      }
+      logError("Failed to refresh session guild list", error);
+      sendJson(response, 502, { error: error.message || "Failed to refresh guild list" });
+    }
+  }
+
   function buildWebAuthorizeUrl(state, redirectPath, scopes) {
     pendingWebStates.set(state, {
       createdAt: Date.now(),
@@ -1355,6 +1415,11 @@ function createApiServer(options) {
           guilds: visibleGuilds,
           admin: getSessionAdminSettings(session),
         });
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/auth/refresh-guilds") {
+        await handleRefreshGuilds(request, response);
         return;
       }
 

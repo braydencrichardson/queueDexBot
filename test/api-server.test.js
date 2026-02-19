@@ -266,6 +266,123 @@ test("activity session endpoint enforces JSON content type", async () => {
   }
 });
 
+test("auth refresh-guilds updates current session guild list", async () => {
+  const originalFetch = global.fetch;
+  let guildCallCount = 0;
+  global.fetch = async (url) => {
+    const target = String(url || "");
+    if (target === "https://discord.com/api/v10/users/@me") {
+      return jsonResponse({
+        id: "user-1",
+        username: "userone",
+        global_name: "User One",
+      });
+    }
+    if (target === "https://discord.com/api/v10/users/@me/guilds") {
+      guildCallCount += 1;
+      if (guildCallCount <= 1) {
+        return jsonResponse([{ id: "guild-1", name: "Guild One", owner: true, permissions: "0" }]);
+      }
+      return jsonResponse([
+        { id: "guild-1", name: "Guild One", owner: true, permissions: "0" },
+        { id: "guild-2", name: "Guild Two", owner: false, permissions: "0" },
+      ]);
+    }
+    throw new Error(`Unexpected fetch URL in test: ${target}`);
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const beforeRefresh = await dispatch(serverApi, {
+      method: "GET",
+      path: "/auth/me",
+      headers: {
+        cookie,
+      },
+    });
+    assert.equal(beforeRefresh.statusCode, 200);
+    assert.equal(beforeRefresh.json?.guilds?.length, 1);
+
+    const refreshResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/auth/refresh-guilds",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(refreshResponse.statusCode, 200);
+    assert.equal(refreshResponse.json?.ok, true);
+    assert.equal(refreshResponse.json?.guilds?.length, 2);
+
+    const afterRefresh = await dispatch(serverApi, {
+      method: "GET",
+      path: "/auth/me",
+      headers: {
+        cookie,
+      },
+    });
+    assert.equal(afterRefresh.statusCode, 200);
+    assert.equal(afterRefresh.json?.guilds?.length, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("auth refresh-guilds returns conflict when session lacks guilds scope", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const sessionResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/auth/discord/activity/session",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        access_token: "access-token-1",
+        scopes: ["identify"],
+      }),
+    });
+    assert.equal(sessionResponse.statusCode, 200);
+    const cookie = String(sessionResponse.headers.get("set-cookie") || "").split(";")[0];
+
+    const refreshResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/auth/refresh-guilds",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(refreshResponse.statusCode, 409);
+    assert.equal(
+      refreshResponse.json?.error,
+      "Session is missing guilds scope. Sign in again with guilds scope enabled."
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("activity queue endpoint returns paged queue data", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();

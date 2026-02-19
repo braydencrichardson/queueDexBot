@@ -592,6 +592,9 @@ function renderDashboard() {
             <input type="checkbox" id="debug-show-guild-ids"${state.showGuildIdsInSelector ? " checked" : ""}>
             <span>Show guild IDs in selector labels</span>
           </label>
+          <div class="action-row">
+            <button type="button" class="btn" id="debug-refresh-guilds">Refresh Guild Memberships</button>
+          </div>
         </article>
       </section>
       <p class="footer-note">Local clock: <span id="clock">${escapeHtml(formatTime(new Date()))}</span></p>
@@ -712,6 +715,13 @@ function wireDashboardEvents() {
   if (refreshButton) {
     refreshButton.addEventListener("click", () => {
       void refreshDashboardData();
+    });
+  }
+
+  const refreshGuildsButton = root.querySelector("#debug-refresh-guilds");
+  if (refreshGuildsButton) {
+    refreshGuildsButton.addEventListener("click", () => {
+      void refreshGuildMemberships();
     });
   }
 
@@ -1106,6 +1116,30 @@ async function refreshAdminPanelDataAndRender(successNotice = "") {
     state.noticeError = true;
   }
   renderDashboard();
+}
+
+async function refreshGuildMemberships() {
+  pushDebugEvent("guilds.refresh.start");
+  try {
+    await fetchJson("/auth/refresh-guilds", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify({}),
+    });
+
+    state.notice = "Guild membership list refreshed.";
+    state.noticeError = false;
+    pushDebugEvent("guilds.refresh.success");
+    await refreshDashboardData();
+  } catch (error) {
+    state.notice = `Guild refresh failed: ${error?.message || String(error)}`;
+    state.noticeError = true;
+    pushDebugEvent("guilds.refresh.failed", state.notice);
+    renderDashboard();
+  }
 }
 
 async function refreshDashboardData() {

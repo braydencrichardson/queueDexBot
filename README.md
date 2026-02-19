@@ -223,6 +223,7 @@ Auth mode notes:
 Web mode notes:
 - Opening the Activity URL directly in a browser now shows a web login screen (via `/auth/discord/web/start`).
 - After login, you can select a guild and use basic controls (`pause`, `resume`, `skip`, `stop`, `clear queue`) from the web UI.
+- Use `Refresh Guild Memberships` in the `Debug` tab to re-sync your Discord guild membership list into the current session after adding/removing bot access.
 - Activity/web controls require the user to be in the same voice channel as the bot when the bot is connected.
 - Admin users listed in `AUTH_ADMIN_USER_IDS` can enable a session-level bypass for this voice check in the Activity Admin tab.
 - The Activity Admin tab also includes provider status/verification, queue repair actions, and an admin event feed.
@@ -236,6 +237,7 @@ Activity API notes:
 - `GET /api/activity/queue?guild_id=...&offset=0&limit=100`: paged queue listing for richer UIs (e.g. drag-drop).
 - `POST /api/activity/control`: playback actions (`pause|resume|skip|stop|clear`).
 - `POST /api/activity/queue/action`: queue actions (`clear|shuffle|move|move_to_front|remove|loop`).
+- `POST /auth/refresh-guilds`: refresh guild list for current session (requires `guilds` scope).
 - `POST /api/activity/admin/settings`: admin-only settings endpoint (`bypass_voice_check`, `bypass_guild_access`).
 - `GET /api/activity/admin/guilds`: admin-only list of all guilds where the bot is currently present.
 - `GET /api/activity/admin/events?level=info&limit=120`: admin-only in-memory event feed.
