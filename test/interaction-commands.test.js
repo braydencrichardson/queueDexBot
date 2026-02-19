@@ -781,7 +781,7 @@ test("playing reports an error when now playing controls cannot be posted", asyn
 
   assert.deepEqual(deferReplyPayload, { flags: MessageFlags.Ephemeral });
   assert.deepEqual(editReplyPayload, {
-    content: "I couldn't post now playing controls in this channel. Check my message permissions.",
+    content: "I couldn't post now playing controls right now. I may be reconnecting to Discord, or I might not have send permissions in this channel.",
   });
 });
 

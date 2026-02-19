@@ -654,6 +654,7 @@ test("queue_nowplaying opens now playing and closes queue view controls", async 
     logError: () => {},
     sendNowPlaying: async (q, forceNew) => {
       sendNowPlayingArgs = { q, forceNew };
+      return { id: "np-msg-1" };
     },
     stopAndLeaveQueue: () => {},
   });
@@ -700,6 +701,104 @@ test("queue_nowplaying opens now playing and closes queue view controls", async 
   assert.equal(deferred, true);
   assert.equal(queueViews.has("queue-msg-1"), false);
   assert.deepEqual(closedPayload, { content: "Queue view closed (now playing opened).", components: [] });
+});
+
+test("queue_nowplaying keeps queue view open and reports failure when now playing cannot be posted", async () => {
+  const queue = {
+    tracks: [{ id: "t1", title: "Song 1" }],
+    current: { id: "c1", title: "Now Playing" },
+    playing: true,
+    player: {
+      state: { status: "playing" },
+    },
+  };
+  const queueViews = new Map();
+  queueViews.set("queue-msg-1", {
+    guildId: "guild-1",
+    ownerId: "user-1",
+    channelId: "text-1",
+    page: 1,
+    pageSize: 10,
+    selectedTrackId: null,
+    stale: false,
+    timeout: setTimeout(() => {}, 60000),
+  });
+
+  let deferred = false;
+  let closedPayload = null;
+  let followUpPayload = null;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {},
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews,
+    logInfo: () => {},
+    logError: () => {},
+    sendNowPlaying: async () => null,
+    stopAndLeaveQueue: () => {},
+  });
+
+  const interaction = {
+    guildId: "guild-1",
+    customId: "queue_nowplaying",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({ user: { id: "user-1" } }),
+      },
+    },
+    message: { id: "queue-msg-1" },
+    channel: { id: "text-1" },
+    client: {
+      channels: {
+        cache: new Map([
+          ["text-1", {
+            messages: {
+              fetch: async () => ({
+                edit: async (payload) => {
+                  closedPayload = payload;
+                },
+              }),
+            },
+          }],
+        ]),
+      },
+    },
+    deferUpdate: async () => {
+      deferred = true;
+    },
+    followUp: async (payload) => {
+      followUpPayload = payload;
+    },
+    reply: async () => {},
+    update: async () => {
+      throw new Error("should not call update when queue_nowplaying is used");
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(queue.textChannel, interaction.channel);
+  assert.equal(deferred, true);
+  assert.equal(queueViews.has("queue-msg-1"), true);
+  assert.equal(closedPayload, null);
+  assert.deepEqual(followUpPayload, {
+    content: "Couldn't open now playing controls right now. I may be reconnecting to Discord, or I might not have send permissions in this channel.",
+    flags: MessageFlags.Ephemeral,
+  });
+  clearTimeout(queueViews.get("queue-msg-1")?.timeout);
 });
 
 test("np_activity replies with an ephemeral activity invite link", async () => {

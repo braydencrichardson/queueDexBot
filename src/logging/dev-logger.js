@@ -21,6 +21,7 @@ const DEFAULT_DISCORD_LOG_LEVEL = "info";
 const DEFAULT_DISCORD_ALERT_LEVEL = "error";
 const DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 10;
+const DISCORD_SEND_SUPPRESSION_WARN_INTERVAL_MS = 30 * 1000;
 
 function normalizeLevel(rawLevel, fallback = DEFAULT_LOG_LEVEL) {
   const normalized = String(rawLevel || "")
@@ -195,6 +196,19 @@ function createDevLogger(deps) {
   });
 
   const channelCache = new Map();
+  let lastDiscordSendSuppressionWarnAt = 0;
+
+  function maybeWarnDiscordSendSuppressed(reason, channelId) {
+    const now = Date.now();
+    if (now - lastDiscordSendSuppressionWarnAt < DISCORD_SEND_SUPPRESSION_WARN_INTERVAL_MS) {
+      return;
+    }
+    lastDiscordSendSuppressionWarnAt = now;
+    console.warn("Discord log delivery skipped", {
+      reason,
+      channelId: String(channelId || "").trim() || null,
+    });
+  }
 
   function canSendDiscordMessagesNow() {
     if (typeof canSendDiscordMessages === "function") {
@@ -238,6 +252,7 @@ function createDevLogger(deps) {
       return;
     }
     if (!canSendDiscordMessagesNow()) {
+      maybeWarnDiscordSendSuppressed("messaging_unavailable", channelId);
       return;
     }
 
@@ -250,6 +265,7 @@ function createDevLogger(deps) {
       await channel.send(trimmed);
     } catch (error) {
       if (isMissingDiscordTokenError(error)) {
+        maybeWarnDiscordSendSuppressed("missing_token", channelId);
         return;
       }
       console.error("Failed to send Discord log line", { channelId, error });

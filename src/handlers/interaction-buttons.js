@@ -661,7 +661,16 @@ function createButtonInteractionHandler(deps) {
       } else if (customId === "queue_nowplaying") {
         queue.textChannel = interaction.channel;
         await interaction.deferUpdate();
-        await sendNowPlaying(queue, true);
+        const nowPlayingMessage = await sendNowPlaying(queue, true);
+        if (!nowPlayingMessage) {
+          if (typeof interaction.followUp === "function") {
+            await interaction.followUp({
+              content: "Couldn't open now playing controls right now. I may be reconnecting to Discord, or I might not have send permissions in this channel.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          return;
+        }
         await queueViewService.closeByMessageId(
           interaction.message.id,
           interaction,

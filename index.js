@@ -71,6 +71,8 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
+let discordLoginPromise = null;
+
 const {
   queues,
   queueViews,
@@ -123,11 +125,7 @@ function canSendDiscordMessages() {
   if (!client) {
     return false;
   }
-  const restToken = client.rest?.token;
-  const hasRestToken = typeof restToken === "string"
-    ? restToken.trim().length > 0
-    : Boolean(restToken);
-  if (!hasRestToken) {
+  if (discordLoginPromise) {
     return false;
   }
   if (typeof client.isReady === "function") {
@@ -135,7 +133,24 @@ function canSendDiscordMessages() {
       return false;
     }
   }
-  return Boolean(client.user?.id);
+  if (!client.user?.id) {
+    return false;
+  }
+  const restClient = client.rest;
+  const restExposesToken = Boolean(
+    restClient
+    && (Object.prototype.hasOwnProperty.call(restClient, "token") || "token" in restClient)
+  );
+  if (restExposesToken) {
+    const restToken = restClient.token;
+    const hasRestToken = typeof restToken === "string"
+      ? restToken.trim().length > 0
+      : Boolean(restToken);
+    if (!hasRestToken) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function getActivityApplicationId() {
@@ -341,8 +356,6 @@ async function ensureSodiumReady() {
     logError("libsodium failed to initialize", error);
   }
 }
-
-let discordLoginPromise = null;
 
 async function loginDiscordClient({ reason = "manual", destroyFirst = false } = {}) {
   if (discordLoginPromise) {
