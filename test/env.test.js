@@ -22,6 +22,11 @@ test("loadEnvVars applies defaults for env-backed non-secret settings", () => {
   assert.equal(env.activityWebUrl, undefined);
   assert.equal(env.activityInvitePrewarmOnPlaybackStart, false);
   assert.equal(env.nowPlayingShowProgress, false);
+  assert.equal(env.discordGatewayWatchdogEnabled, true);
+  assert.equal(env.discordGatewayWatchdogCheckIntervalMs, 5000);
+  assert.equal(env.discordGatewayWatchdogDisconnectThresholdMs, 20000);
+  assert.equal(env.discordGatewayWatchdogBackoffBaseMs, 8000);
+  assert.equal(env.discordGatewayWatchdogBackoffMaxMs, 120000);
   assert.equal(env.authServerEnabled, true);
   assert.equal(env.authServerHost, "127.0.0.1");
   assert.equal(Number.isNaN(env.authServerPort), true);
@@ -63,6 +68,11 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
     ACTIVITY_WEB_URL: "https://activity.example.com",
     ACTIVITY_INVITE_PREWARM_ON_PLAYBACK_START: "1",
     NOW_PLAYING_SHOW_PROGRESS: "1",
+    DISCORD_GATEWAY_WATCHDOG_ENABLED: "0",
+    DISCORD_GATEWAY_WATCHDOG_CHECK_INTERVAL_MS: "7500",
+    DISCORD_GATEWAY_WATCHDOG_DISCONNECT_THRESHOLD_MS: "12000",
+    DISCORD_GATEWAY_WATCHDOG_BACKOFF_BASE_MS: "5000",
+    DISCORD_GATEWAY_WATCHDOG_BACKOFF_MAX_MS: "45000",
     AUTH_SERVER_ENABLED: "0",
     AUTH_SERVER_HOST: "0.0.0.0",
     AUTH_SERVER_PORT: "8787",
@@ -103,6 +113,11 @@ test("loadEnvVars keeps secrets and optional endpoints as provided", () => {
   assert.equal(env.activityWebUrl, "https://activity.example.com");
   assert.equal(env.activityInvitePrewarmOnPlaybackStart, true);
   assert.equal(env.nowPlayingShowProgress, true);
+  assert.equal(env.discordGatewayWatchdogEnabled, false);
+  assert.equal(env.discordGatewayWatchdogCheckIntervalMs, 7500);
+  assert.equal(env.discordGatewayWatchdogDisconnectThresholdMs, 12000);
+  assert.equal(env.discordGatewayWatchdogBackoffBaseMs, 5000);
+  assert.equal(env.discordGatewayWatchdogBackoffMaxMs, 45000);
   assert.equal(env.authServerEnabled, false);
   assert.equal(env.authServerHost, "0.0.0.0");
   assert.equal(env.authServerPort, 8787);

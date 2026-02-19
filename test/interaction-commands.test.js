@@ -249,6 +249,141 @@ test("join command connects bot to caller voice channel", async () => {
   assert.equal(replyPayload, "Joined **General**.");
 });
 
+test("join command clears stale queue voice state when bot is disconnected", async () => {
+  let replyPayload = null;
+  let staleConnectionDestroyed = false;
+  let joinCalled = false;
+  const staleConnection = {
+    on: () => {},
+    subscribe: () => {},
+    destroy: () => {
+      staleConnectionDestroyed = true;
+    },
+  };
+  const newConnection = {
+    on: () => {},
+    subscribe: () => {},
+    destroy: () => {},
+  };
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: { id: "vc-1" },
+    connection: staleConnection,
+    player: { id: "player-1" },
+  };
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      joinVoiceChannel: () => {
+        joinCalled = true;
+        return newConnection;
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      members: {
+        me: {
+          voice: {
+            channelId: null,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(staleConnectionDestroyed, true);
+  assert.equal(joinCalled, true);
+  assert.equal(queue.connection, newConnection);
+  assert.equal(queue.voiceChannel, voiceChannel);
+  assert.equal(replyPayload, "Joined **General**.");
+});
+
+test("join command reports already connected based on live bot voice state", async () => {
+  let replyPayload = null;
+  let joinCalled = false;
+  const queue = {
+    tracks: [],
+    current: null,
+    voiceChannel: null,
+    connection: null,
+    player: { id: "player-1" },
+  };
+  const voiceChannel = {
+    id: "vc-1",
+    name: "General",
+    guild: { id: "guild-1", voiceAdapterCreator: {} },
+  };
+  const { deps } = createDeps({
+    queue,
+    deps: {
+      joinVoiceChannel: () => {
+        joinCalled = true;
+        return {
+          on: () => {},
+          subscribe: () => {},
+          destroy: () => {},
+        };
+      },
+    },
+  });
+  const handler = createCommandInteractionHandler(deps);
+  const interaction = {
+    isCommand: () => true,
+    guildId: "guild-1",
+    guild: {
+      channels: {
+        cache: new Map([["vc-1", voiceChannel]]),
+      },
+      members: {
+        me: {
+          voice: {
+            channelId: "vc-1",
+            channel: voiceChannel,
+          },
+        },
+      },
+    },
+    channelId: "text-1",
+    channel: { id: "text-1" },
+    user: { id: "user-1", tag: "User#0001" },
+    member: { voice: { channel: voiceChannel } },
+    commandName: "join",
+    options: {},
+    reply: async (payload) => {
+      replyPayload = payload;
+    },
+  };
+
+  await handler(interaction);
+
+  assert.equal(joinCalled, false);
+  assert.deepEqual(replyPayload, {
+    content: "I am already in your voice channel.",
+    flags: MessageFlags.Ephemeral,
+  });
+});
+
 test("launch requires caller in voice channel", async () => {
   let replyPayload = null;
   const { deps } = createDeps();

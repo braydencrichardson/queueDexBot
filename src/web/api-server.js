@@ -476,6 +476,8 @@ function createApiServer(options) {
     getProviderStatus = () => null,
     verifyProviderAuthStatus = async () => null,
     reinitializeProviders = async () => null,
+    getDiscordGatewayStatus = async () => null,
+    forceDiscordRelogin = async () => null,
     queueService = null,
     stopAndLeaveQueue = null,
     maybeRefreshNowPlayingUpNext = async () => {},
@@ -987,11 +989,35 @@ function createApiServer(options) {
     }
 
     const { session, queue } = context;
+    const isResumeAction = action === "resume";
+    const ensureVoiceConnectionOptions = {
+      guildId,
+    };
+    if (isResumeAction) {
+      const sessionUserId = String(session?.user?.id || "").trim();
+      if (sessionUserId) {
+        try {
+          const userVoiceChannelId = await getUserVoiceChannelId(guildId, sessionUserId);
+          const normalizedUserVoiceChannelId = String(userVoiceChannelId || "").trim() || null;
+          if (normalizedUserVoiceChannelId) {
+            ensureVoiceConnectionOptions.preferredVoiceChannelId = normalizedUserVoiceChannelId;
+          }
+        } catch (error) {
+          logError("Failed to resolve user voice channel for resume ensure-connection", {
+            guildId,
+            userId: sessionUserId,
+            error,
+          });
+        }
+      }
+    }
 
     try {
       const result = await controlService.applyControlAction(queue, action, {
         refreshNowPlayingUpNextOnClear: true,
         refreshNowPlayingOnPauseResume: true,
+        ensureVoiceConnectionOnResume: isResumeAction,
+        ensureVoiceConnectionOptions,
         stopReason: "Stopping playback and clearing queue (Activity/web control)",
       });
       if (!result.ok) {
@@ -1300,6 +1326,92 @@ function createApiServer(options) {
       logError("Failed to reinitialize providers from admin endpoint", error);
       sendJson(response, 500, { error: "Failed to reinitialize providers" });
     }
+  }
+
+  async function handleAdminDiscordGatewayStatus(request, response) {
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    let gateway = null;
+    try {
+      gateway = await getDiscordGatewayStatus();
+    } catch (error) {
+      logError("Failed to load Discord gateway status", error);
+      sendJson(response, 500, { error: "Failed to load Discord gateway status" });
+      return;
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      gateway: gateway && typeof gateway === "object" ? gateway : null,
+      fetchedAt: Date.now(),
+    });
+  }
+
+  async function handleAdminDiscordGatewayRelogin(request, response) {
+    if (!requireJsonRequest(request, response)) {
+      return;
+    }
+
+    const context = resolveAdminSessionContext(request, response);
+    if (!context) {
+      return;
+    }
+
+    let body;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      sendJson(response, 400, { error: error.message || "Invalid request body" });
+      return;
+    }
+
+    const requestedReason = String(body.reason || "").trim();
+    const reasonSuffix = requestedReason || "manual admin action";
+    const reason = `api-admin:${context?.session?.user?.id || "unknown-user"}:${reasonSuffix}`.slice(0, 240);
+
+    let reloginResult = null;
+    try {
+      reloginResult = await forceDiscordRelogin({
+        reason,
+        actor: {
+          userId: context?.session?.user?.id || null,
+          username: context?.session?.user?.username || null,
+        },
+      });
+    } catch (error) {
+      logError("Admin Discord relogin request failed", {
+        reason,
+        userId: context?.session?.user?.id || null,
+        error,
+      });
+      sendJson(response, 500, { error: "Failed to trigger Discord relogin" });
+      return;
+    }
+
+    const gateway = await (async () => {
+      try {
+        return await getDiscordGatewayStatus();
+      } catch {
+        return null;
+      }
+    })();
+
+    logInfo("Admin requested Discord relogin", {
+      reason,
+      userId: context?.session?.user?.id || null,
+    });
+
+    sendJson(response, 200, {
+      ok: true,
+      relogin: reloginResult && typeof reloginResult === "object"
+        ? reloginResult
+        : { accepted: Boolean(reloginResult) },
+      gateway: gateway && typeof gateway === "object" ? gateway : null,
+      triggeredAt: Date.now(),
+    });
   }
 
   async function handleAdminQueueForceCleanup(request, response) {
@@ -1994,6 +2106,16 @@ function createApiServer(options) {
 
       if (request.method === "POST" && pathname === "/api/activity/admin/providers/reinitialize") {
         await handleAdminProviderReinitialize(request, response);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/activity/admin/discord/status") {
+        await handleAdminDiscordGatewayStatus(request, response);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/activity/admin/discord/relogin") {
+        await handleAdminDiscordGatewayRelogin(request, response);
         return;
       }
 

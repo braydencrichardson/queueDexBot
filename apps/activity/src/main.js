@@ -75,6 +75,7 @@ const state = {
   queueSummary: null,
   queueList: null,
   adminProviders: null,
+  adminGatewayStatus: null,
   adminEvents: [],
   adminEventsLevel: "info",
   adminBotGuilds: [],
@@ -1086,6 +1087,7 @@ function getAdminPanelMarkup(adminState) {
   }
 
   const providerStatus = state.adminProviders;
+  const gatewayStatus = state.adminGatewayStatus;
   const verification = state.adminVerification;
   const events = Array.isArray(state.adminEvents) ? state.adminEvents : [];
 
@@ -1096,6 +1098,21 @@ function getAdminPanelMarkup(adminState) {
   const verificationSummary = verification
     ? `${verification.overallOk ? "ok" : "issues"} (${Number.isFinite(verification.durationMs) ? `${verification.durationMs}ms` : "n/a"})`
     : "not run";
+
+  const gatewaySummary = gatewayStatus
+    ? [
+      gatewayStatus.enabled ? "watchdog enabled" : "watchdog disabled",
+      gatewayStatus.invalidated ? "session invalidated" : "session valid",
+      gatewayStatus.reloginInFlight ? "relogin in flight" : "idle",
+      `${Number.isFinite(gatewayStatus.disconnectedShardCount) ? gatewayStatus.disconnectedShardCount : 0} disconnected shard(s)`,
+    ].join(" | ")
+    : "not loaded";
+  const gatewayDisconnectedShards = Array.isArray(gatewayStatus?.disconnectedShardIds) && gatewayStatus.disconnectedShardIds.length
+    ? gatewayStatus.disconnectedShardIds.join(", ")
+    : "none";
+  const gatewayNextReloginAt = Number.isFinite(gatewayStatus?.nextReloginAt) && gatewayStatus.nextReloginAt > 0
+    ? new Date(gatewayStatus.nextReloginAt).toISOString()
+    : "n/a";
 
   const eventLines = events.length
     ? events.map((entry) => {
@@ -1140,6 +1157,21 @@ function getAdminPanelMarkup(adminState) {
             <button type="button" class="btn btn-danger" data-admin-action="queue-force-cleanup">Force Cleanup</button>
             <button type="button" class="btn" data-admin-action="queue-refresh-now-playing">Refresh Now Playing Message</button>
           </div>
+        </article>
+        <article class="panel-card">
+          <h2>Discord Gateway</h2>
+          <p class="muted">Gateway lifecycle and reconnect watchdog diagnostics for this bot process.</p>
+          <dl>
+            <dt>Status</dt><dd>${escapeHtml(gatewaySummary)}</dd>
+            <dt>Relogin Attempts</dt><dd>${escapeHtml(String(Number.isFinite(gatewayStatus?.reloginAttempts) ? gatewayStatus.reloginAttempts : 0))}</dd>
+            <dt>Next Retry</dt><dd>${escapeHtml(gatewayNextReloginAt)}</dd>
+            <dt>Disconnected Shards</dt><dd>${escapeHtml(gatewayDisconnectedShards)}</dd>
+          </dl>
+          <div class="action-row">
+            <button type="button" class="btn" data-admin-action="gateway-refresh">Refresh Gateway</button>
+            <button type="button" class="btn btn-danger" data-admin-action="gateway-relogin">Force Re-Login</button>
+          </div>
+          <pre class="admin-log-view">${escapeHtml(toPrettyJson(gatewayStatus || {}))}</pre>
         </article>
         <article class="panel-card">
           <h2>Admin Event Feed</h2>
@@ -1629,6 +1661,16 @@ function wireDashboardEvents() {
         void sendAdminCommand("/api/activity/admin/providers/reinitialize");
         return;
       }
+      if (action === "gateway-refresh") {
+        void refreshAdminPanelDataAndRender("Discord gateway status refreshed.");
+        return;
+      }
+      if (action === "gateway-relogin") {
+        void sendAdminCommand("/api/activity/admin/discord/relogin", {
+          reason: "manual force relogin from admin UI",
+        });
+        return;
+      }
       if (action === "queue-force-cleanup") {
         void sendAdminGuildCommand("/api/activity/admin/queue/force-cleanup");
         return;
@@ -1958,6 +2000,17 @@ async function refreshAdminProvidersStatus() {
   state.adminProviders = payload?.providers || null;
 }
 
+async function refreshAdminGatewayStatus() {
+  if (!getAdminState().isAdmin) {
+    state.adminGatewayStatus = null;
+    return;
+  }
+  const payload = await fetchJson("/api/activity/admin/discord/status", {
+    credentials: "include",
+  });
+  state.adminGatewayStatus = payload?.gateway || null;
+}
+
 async function refreshAdminGuildList() {
   const adminState = getAdminState();
   if (!adminState.isAdmin || !adminState.bypassGuildAccess) {
@@ -1993,12 +2046,14 @@ async function refreshAdminEvents() {
 async function refreshAdminPanelData() {
   if (!getAdminState().isAdmin) {
     state.adminProviders = null;
+    state.adminGatewayStatus = null;
     state.adminEvents = [];
     state.adminVerification = null;
     return;
   }
   const refreshResults = await Promise.allSettled([
     refreshAdminProvidersStatus(),
+    refreshAdminGatewayStatus(),
     refreshAdminEvents(),
     refreshAdminGuildList(),
   ]);
@@ -2198,9 +2253,16 @@ async function sendAdminCommand(path, body = {}) {
     if (path === "/api/activity/admin/providers/reinitialize") {
       state.adminVerification = null;
     }
+    if (path === "/api/activity/admin/discord/relogin" && payload?.gateway) {
+      state.adminGatewayStatus = payload.gateway;
+    }
 
     await refreshAdminPanelData();
-    state.notice = "Admin command applied.";
+    if (path === "/api/activity/admin/discord/relogin") {
+      state.notice = "Discord relogin requested.";
+    } else {
+      state.notice = "Admin command applied.";
+    }
     state.noticeError = false;
     pushDebugEvent("admin.command.success", path);
     renderDashboard();
@@ -2301,6 +2363,7 @@ async function logoutWebSession() {
   state.queueSummary = null;
   state.queueList = null;
   state.adminProviders = null;
+  state.adminGatewayStatus = null;
   state.adminEvents = [];
   state.adminBotGuilds = [];
   state.adminVerification = null;

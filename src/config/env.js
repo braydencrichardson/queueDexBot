@@ -94,6 +94,27 @@ function loadEnvVars(sourceEnv = process.env) {
       false
     ),
     nowPlayingShowProgress: parseBooleanEnv(sourceEnv.NOW_PLAYING_SHOW_PROGRESS, false),
+    discordGatewayWatchdogEnabled: parseBooleanEnv(sourceEnv.DISCORD_GATEWAY_WATCHDOG_ENABLED, true),
+    discordGatewayWatchdogCheckIntervalMs: parseIntEnv(
+      sourceEnv.DISCORD_GATEWAY_WATCHDOG_CHECK_INTERVAL_MS,
+      5000,
+      { min: 1000, max: 600000 }
+    ),
+    discordGatewayWatchdogDisconnectThresholdMs: parseIntEnv(
+      sourceEnv.DISCORD_GATEWAY_WATCHDOG_DISCONNECT_THRESHOLD_MS,
+      20000,
+      { min: 1000, max: 900000 }
+    ),
+    discordGatewayWatchdogBackoffBaseMs: parseIntEnv(
+      sourceEnv.DISCORD_GATEWAY_WATCHDOG_BACKOFF_BASE_MS,
+      8000,
+      { min: 1000, max: 900000 }
+    ),
+    discordGatewayWatchdogBackoffMaxMs: parseIntEnv(
+      sourceEnv.DISCORD_GATEWAY_WATCHDOG_BACKOFF_MAX_MS,
+      120000,
+      { min: 1000, max: 3600000 }
+    ),
     authServerEnabled: parseBooleanEnv(sourceEnv.AUTH_SERVER_ENABLED, true),
     authServerHost: sourceEnv.AUTH_SERVER_HOST || "127.0.0.1",
     authServerPort: parseInt(sourceEnv.AUTH_SERVER_PORT || "", 10),

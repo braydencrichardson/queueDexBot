@@ -12,6 +12,11 @@ const NOW_PLAYING_PROGRESS_INTERVAL_MS = DEFAULT_NOW_PLAYING_PROGRESS_INTERVAL_M
 const NOW_PLAYING_PROGRESS_INITIAL_DELAY_MS = DEFAULT_NOW_PLAYING_PROGRESS_INITIAL_DELAY_MS;
 const NOW_PLAYING_PROGRESS_BAR_WIDTH = 20;
 
+function isMissingDiscordTokenError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("expected token to be set for this request, but none was present");
+}
+
 function createQueueSession(deps) {
   const {
     queues,
@@ -27,6 +32,7 @@ function createQueueSession(deps) {
     resolveNowPlayingChannelById = async () => null,
     getNowPlayingActivityLinks = async () => null,
     showNowPlayingProgress = false,
+    canSendDiscordMessages = () => true,
   } = deps;
   function getGuildQueue(guildId) {
     if (!queues.has(guildId)) {
@@ -389,6 +395,9 @@ function createQueueSession(deps) {
     if (!queue.textChannel || !queue.current) {
       return null;
     }
+    if (!canSendDiscordMessages()) {
+      return null;
+    }
 
     const content = await formatNowPlaying(queue);
     const controls = buildNowPlayingControls({ loopMode: getQueueLoopMode(queue) });
@@ -413,6 +422,9 @@ function createQueueSession(deps) {
       try {
         message = await queue.textChannel.send(payload);
       } catch (error) {
+        if (isMissingDiscordTokenError(error)) {
+          return null;
+        }
         logError("Failed to send now playing message", error);
         return null;
       }
@@ -510,9 +522,15 @@ function createQueueSession(deps) {
     if (!channel?.send) {
       return;
     }
+    if (!canSendDiscordMessages()) {
+      return;
+    }
     try {
       await channel.send(`**${displayName}** ${action}.`);
     } catch (error) {
+      if (isMissingDiscordTokenError(error)) {
+        return;
+      }
       logError("Failed to announce now playing action", error);
     }
   }

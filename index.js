@@ -29,6 +29,7 @@ const {
   TRACK_RESOLVER_HTTP_TIMEOUT_MS,
   YTDLP_STREAM_TIMEOUT_MS,
 } = require("./src/config/constants");
+const { createDiscordReconnectWatchdog } = require("./src/bot/discord-reconnect-watchdog");
 const { createRuntimeState } = require("./src/bot/runtime-state");
 const { createDevLogger } = require("./src/logging/dev-logger");
 const { searchYouTubeOptions, searchYouTubePreferred, getYoutubeId, toShortYoutubeUrl } = require("./src/providers/youtube-search");
@@ -79,6 +80,7 @@ const {
 } = createRuntimeState();
 const logger = createDevLogger({
   client,
+  canSendDiscordMessages,
   devAlertChannelId: env.devAlertChannelId,
   devLogChannelId: env.devLogChannelId,
   level: env.logLevel,
@@ -116,6 +118,25 @@ function logError(message, data) {
 
 const { sendDevAlert } = logger;
 const activityInviteService = createActivityInviteService();
+
+function canSendDiscordMessages() {
+  if (!client) {
+    return false;
+  }
+  const restToken = client.rest?.token;
+  const hasRestToken = typeof restToken === "string"
+    ? restToken.trim().length > 0
+    : Boolean(restToken);
+  if (!hasRestToken) {
+    return false;
+  }
+  if (typeof client.isReady === "function") {
+    if (!client.isReady()) {
+      return false;
+    }
+  }
+  return Boolean(client.user?.id);
+}
 
 function getActivityApplicationId() {
   return String(client.application?.id || env.oauthClientId || "").trim();
@@ -321,6 +342,37 @@ async function ensureSodiumReady() {
   }
 }
 
+let discordLoginPromise = null;
+
+async function loginDiscordClient({ reason = "manual", destroyFirst = false } = {}) {
+  if (discordLoginPromise) {
+    logInfo("Discord login already in progress; skipping duplicate request", { reason });
+    return discordLoginPromise;
+  }
+
+  discordLoginPromise = (async () => {
+    if (destroyFirst) {
+      try {
+        client.destroy();
+      } catch (error) {
+        logError("Failed to destroy Discord client before relogin", error);
+      }
+    }
+
+    logInfo("Attempting Discord login", {
+      reason,
+      destroyFirst: Boolean(destroyFirst),
+    });
+    return client.login(env.token);
+  })();
+
+  try {
+    return await discordLoginPromise;
+  } finally {
+    discordLoginPromise = null;
+  }
+}
+
 let playNext = async () => {
   throw new Error("playNext not initialized");
 };
@@ -349,6 +401,7 @@ const {
   ensureNextTrackPreload: (queue) => ensureNextTrackPreload(queue),
   getNowPlayingActivityLinks,
   showNowPlayingProgress: env.nowPlayingShowProgress,
+  canSendDiscordMessages,
   resolveNowPlayingChannelById: async (channelId) => {
     if (!channelId) {
       return null;
@@ -368,12 +421,143 @@ const {
   },
 });
 
+async function ensureQueueVoiceConnection(queue, options = {}) {
+  const normalizedGuildId = String(
+    options.guildId
+    || queue?.guildId
+    || options.preferredVoiceChannel?.guild?.id
+    || queue?.voiceChannel?.guild?.id
+    || queue?.connection?.joinConfig?.guildId
+    || ""
+  ).trim();
+  const preferredVoiceChannelId = String(options.preferredVoiceChannelId || "").trim();
+  const queueVoiceChannelId = String(
+    queue?.voiceChannel?.id
+    || queue?.connection?.joinConfig?.channelId
+    || ""
+  ).trim();
+
+  let targetVoiceChannel = options.preferredVoiceChannel || null;
+  if (
+    !targetVoiceChannel
+    || !targetVoiceChannel?.id
+    || !targetVoiceChannel?.guild?.voiceAdapterCreator
+  ) {
+    targetVoiceChannel = null;
+  }
+
+  if (!targetVoiceChannel && queue?.voiceChannel?.id && queue?.voiceChannel?.guild?.voiceAdapterCreator) {
+    targetVoiceChannel = queue.voiceChannel;
+  }
+
+  if (!targetVoiceChannel) {
+    const resolveChannelId = preferredVoiceChannelId || queueVoiceChannelId;
+    if (resolveChannelId && normalizedGuildId) {
+      targetVoiceChannel = await resolveVoiceChannelById(normalizedGuildId, resolveChannelId);
+    }
+  }
+
+  if (!targetVoiceChannel?.id || !targetVoiceChannel?.guild?.voiceAdapterCreator) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "No voice channel is available to resume playback.",
+    };
+  }
+
+  const targetGuildId = String(targetVoiceChannel.guild?.id || normalizedGuildId || "").trim();
+  const targetChannelId = String(targetVoiceChannel.id || "").trim();
+  if (!targetGuildId || !targetChannelId) {
+    return {
+      ok: false,
+      statusCode: 409,
+      error: "No voice channel is available to resume playback.",
+    };
+  }
+
+  queue.voiceChannel = targetVoiceChannel;
+
+  const liveBotVoiceChannelId = String(
+    targetVoiceChannel.guild?.members?.me?.voice?.channelId
+    || targetVoiceChannel.guild?.members?.me?.voice?.channel?.id
+    || ""
+  ).trim() || null;
+  const connectionChannelId = String(queue?.connection?.joinConfig?.channelId || "").trim() || null;
+
+  if (liveBotVoiceChannelId === targetChannelId && queue.connection && connectionChannelId === targetChannelId) {
+    try {
+      queue.connection.subscribe(queue.player);
+    } catch (error) {
+      logError("Failed to re-subscribe player to existing voice connection", {
+        guildId: targetGuildId,
+        channelId: targetChannelId,
+        error,
+      });
+    }
+    return {
+      ok: true,
+      reused: true,
+      guildId: targetGuildId,
+      channelId: targetChannelId,
+    };
+  }
+
+  if (queue.connection) {
+    try {
+      queue.connection.destroy();
+    } catch (error) {
+      logError("Failed to destroy stale voice connection before resume reconnect", {
+        guildId: targetGuildId,
+        channelId: connectionChannelId,
+        error,
+      });
+    }
+    queue.connection = null;
+  }
+
+  await ensureSodiumReady();
+
+  try {
+    queue.connection = joinVoiceChannel({
+      channelId: targetChannelId,
+      guildId: targetGuildId,
+      adapterCreator: targetVoiceChannel.guild.voiceAdapterCreator,
+    });
+    queue.connection.on("error", (error) => {
+      logError("Voice connection error", error);
+    });
+    ensurePlayerListeners(queue, targetGuildId);
+    queue.connection.subscribe(queue.player);
+    return {
+      ok: true,
+      joined: true,
+      guildId: targetGuildId,
+      channelId: targetChannelId,
+    };
+  } catch (error) {
+    queue.connection = null;
+    logError("Failed to establish voice connection for resume", {
+      guildId: targetGuildId,
+      channelId: targetChannelId,
+      error,
+    });
+    return {
+      ok: false,
+      statusCode: 500,
+      error: "I couldn't rejoin the voice channel.",
+    };
+  }
+}
+
 const queueService = createQueueService({
   stopAndLeaveQueue,
   maybeRefreshNowPlayingUpNext,
   sendNowPlaying,
   ensureTrackId,
+  ensureVoiceConnection: ensureQueueVoiceConnection,
 });
+
+let gatewayReconnectWatchdog = null;
 
 const apiServer = env.authServerEnabled
   ? createApiServer({
@@ -426,6 +610,22 @@ const apiServer = env.authServerEnabled
     getProviderStatus,
     verifyProviderAuthStatus,
     reinitializeProviders,
+    getDiscordGatewayStatus: async () => gatewayReconnectWatchdog?.getState?.() || null,
+    forceDiscordRelogin: async ({ reason } = {}) => {
+      loginDiscordClient({
+        reason: reason || "api-admin-force-relogin",
+        destroyFirst: true,
+      }).catch((error) => {
+        logError("Admin-triggered Discord relogin failed", {
+          reason: reason || "api-admin-force-relogin",
+          error,
+        });
+      });
+      return {
+        accepted: true,
+        inFlight: true,
+      };
+    },
     queueService,
     stopAndLeaveQueue,
     maybeRefreshNowPlayingUpNext,
@@ -577,12 +777,45 @@ registerVoiceStateHandler(client, {
   inactivityTimeoutMs: QUEUE_INACTIVITY_TIMEOUT_MS,
 });
 
+gatewayReconnectWatchdog = createDiscordReconnectWatchdog({
+  client,
+  logInfo,
+  logError,
+  relogin: async ({ reason, attempt, shardIds } = {}) => {
+    await loginDiscordClient({
+      reason: `watchdog:${reason || "unknown"}:attempt:${attempt || 1}:shards:${Array.isArray(shardIds) ? shardIds.join(",") : "unknown"}`,
+      destroyFirst: true,
+    });
+  },
+  enabled: env.discordGatewayWatchdogEnabled,
+  checkIntervalMs: env.discordGatewayWatchdogCheckIntervalMs,
+  disconnectThresholdMs: env.discordGatewayWatchdogDisconnectThresholdMs,
+  backoffBaseMs: env.discordGatewayWatchdogBackoffBaseMs,
+  backoffMaxMs: env.discordGatewayWatchdogBackoffMaxMs,
+});
+gatewayReconnectWatchdog.start();
+
 client.on("error", (error) => {
   logError("Discord client error", error);
 });
 
-client.on("shardError", (error) => {
-  logError("Discord shard error", error);
+client.on("shardError", (error, shardId) => {
+  logError("Discord shard error", {
+    shardId: Number.isInteger(shardId) ? shardId : null,
+    name: error?.name || "Error",
+    message: error?.message || String(error || ""),
+    stack: error?.stack || null,
+    code: error?.code || null,
+  });
+});
+
+client.on("shardDisconnect", (event, shardId) => {
+  logError("Discord shard disconnected", {
+    shardId: Number.isInteger(shardId) ? shardId : null,
+    code: event?.code ?? null,
+    reason: event?.reason ?? null,
+    wasClean: typeof event?.wasClean === "boolean" ? event.wasClean : null,
+  });
 });
 
 registerInteractionHandler(client, {
@@ -630,7 +863,7 @@ registerInteractionHandler(client, {
   activityWebUrl: env.activityWebUrl,
 });
 
-client.login(env.token).catch((error) => {
+loginDiscordClient({ reason: "startup", destroyFirst: false }).catch((error) => {
   logError("Failed to login to Discord", error);
   process.exit(1);
 });

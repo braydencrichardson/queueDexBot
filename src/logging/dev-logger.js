@@ -140,9 +140,23 @@ function formatDiscordLine(entry) {
   return String(line).slice(0, DISCORD_MESSAGE_SAFE_MAX_LENGTH);
 }
 
+function hasDiscordRestToken(client) {
+  const restToken = client?.rest?.token;
+  if (typeof restToken === "string") {
+    return restToken.trim().length > 0;
+  }
+  return Boolean(restToken);
+}
+
+function isMissingDiscordTokenError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("expected token to be set for this request, but none was present");
+}
+
 function createDevLogger(deps) {
   const {
     client,
+    canSendDiscordMessages = null,
     devAlertChannelId,
     devLogChannelId,
     level = DEFAULT_LOG_LEVEL,
@@ -182,9 +196,22 @@ function createDevLogger(deps) {
 
   const channelCache = new Map();
 
+  function canSendDiscordMessagesNow() {
+    if (typeof canSendDiscordMessages === "function") {
+      return Boolean(canSendDiscordMessages());
+    }
+    if (!client || !hasDiscordRestToken(client)) {
+      return false;
+    }
+    if (typeof client.isReady === "function" && !client.isReady()) {
+      return false;
+    }
+    return Boolean(client.user?.id);
+  }
+
   async function resolveChannel(channelId) {
     const normalizedId = String(channelId || "").trim();
-    if (!normalizedId || !client?.user || !client?.channels?.fetch) {
+    if (!normalizedId || !canSendDiscordMessagesNow() || !client?.channels?.fetch) {
       return null;
     }
 
@@ -210,6 +237,9 @@ function createDevLogger(deps) {
     if (!trimmed) {
       return;
     }
+    if (!canSendDiscordMessagesNow()) {
+      return;
+    }
 
     const channel = await resolveChannel(channelId);
     if (!channel) {
@@ -219,6 +249,9 @@ function createDevLogger(deps) {
     try {
       await channel.send(trimmed);
     } catch (error) {
+      if (isMissingDiscordTokenError(error)) {
+        return;
+      }
       console.error("Failed to send Discord log line", { channelId, error });
     }
   }

@@ -53,6 +53,7 @@ function createQueueService(deps = {}) {
     maybeRefreshNowPlayingUpNext = async () => {},
     sendNowPlaying = async () => {},
     ensureTrackId = null,
+    ensureVoiceConnection = null,
   } = deps;
 
   async function pause(queue, options = {}) {
@@ -68,9 +69,35 @@ function createQueueService(deps = {}) {
   }
 
   async function resume(queue, options = {}) {
-    const { refreshNowPlaying = false } = options;
+    const {
+      refreshNowPlaying = false,
+      ensureVoiceConnection: ensureVoiceConnectionEnabled = false,
+      ensureVoiceConnectionOptions = {},
+    } = options;
     if (!queue?.current) {
       return createFailure("NOTHING_PLAYING", 409, "Nothing is playing.");
+    }
+    if (ensureVoiceConnectionEnabled && typeof ensureVoiceConnection === "function") {
+      let connectionResult = null;
+      try {
+        connectionResult = await ensureVoiceConnection(queue, ensureVoiceConnectionOptions);
+      } catch (error) {
+        return createFailure(
+          "VOICE_CONNECTION_FAILED",
+          500,
+          error?.message || "Failed to reconnect to voice channel."
+        );
+      }
+      if (connectionResult && connectionResult.ok === false) {
+        return createFailure(
+          "VOICE_CONNECTION_FAILED",
+          Number.isFinite(connectionResult.statusCode) ? connectionResult.statusCode : 409,
+          connectionResult.error || "Failed to reconnect to voice channel.",
+          {
+            voice: connectionResult,
+          }
+        );
+      }
     }
     queue.player.unpause();
     if (refreshNowPlaying) {
@@ -228,6 +255,8 @@ function createQueueService(deps = {}) {
     if (normalizedAction === CONTROL_ACTIONS.RESUME) {
       return resume(queue, {
         refreshNowPlaying: Boolean(options.refreshNowPlayingOnPauseResume),
+        ensureVoiceConnection: Boolean(options.ensureVoiceConnectionOnResume),
+        ensureVoiceConnectionOptions: options.ensureVoiceConnectionOptions,
       });
     }
     if (normalizedAction === CONTROL_ACTIONS.SKIP) {

@@ -249,6 +249,175 @@ test("np_toggle refreshes now playing content immediately", async () => {
   assert.equal(deferred, true);
 });
 
+test("np_toggle resume ensures voice reconnect through queue service", async () => {
+  const queue = {
+    nowPlayingMessageId: "msg-1",
+    tracks: [{ title: "Song" }],
+    current: { title: "Song" },
+    playing: true,
+    player: {
+      state: { status: "paused" },
+      pause() {},
+      unpause() {},
+    },
+    connection: { destroy() {} },
+  };
+
+  let queueServiceArgs = null;
+  let announceCalled = false;
+  let sendNowPlayingArgs = null;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {
+      announceCalled = true;
+    },
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews: new Map(),
+    logInfo: () => {},
+    logError: () => {},
+    queueService: {
+      resume: async (q, options) => {
+        queueServiceArgs = { q, options };
+        return { ok: true };
+      },
+    },
+    sendNowPlaying: async (q, forceNew) => {
+      sendNowPlayingArgs = { q, forceNew };
+    },
+    stopAndLeaveQueue: () => {},
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "np_toggle",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({
+          user: { id: "user-1" },
+          voice: { channel: { id: "voice-1" } },
+        }),
+      },
+    },
+    message: {
+      id: "msg-1",
+      channel: {},
+      edit: async () => {},
+    },
+    deferUpdate: async () => {},
+    reply: async () => {},
+    followUp: async () => {},
+    channel: { send: async () => ({ id: "x" }) },
+  });
+
+  assert.deepEqual(queueServiceArgs, {
+    q: queue,
+    options: {
+      refreshNowPlaying: false,
+      ensureVoiceConnection: true,
+      ensureVoiceConnectionOptions: {
+        guildId: "guild-1",
+        preferredVoiceChannel: { id: "voice-1" },
+      },
+    },
+  });
+  assert.equal(announceCalled, true);
+  assert.deepEqual(sendNowPlayingArgs, { q: queue, forceNew: false });
+});
+
+test("np_toggle resume failure does not announce success and reports error", async () => {
+  const queue = {
+    nowPlayingMessageId: "msg-1",
+    tracks: [{ title: "Song" }],
+    current: { title: "Song" },
+    playing: true,
+    player: {
+      state: { status: "paused" },
+      pause() {},
+      unpause() {},
+    },
+    connection: { destroy() {} },
+  };
+
+  let announceCalled = false;
+  let sendNowPlayingCalled = false;
+  let followUpPayload = null;
+
+  const handler = createButtonInteractionHandler({
+    AudioPlayerStatus: { Playing: "playing" },
+    INTERACTION_TIMEOUT_MS: 45000,
+    getGuildQueue: () => queue,
+    isSameVoiceChannel: () => true,
+    announceNowPlayingAction: async () => {
+      announceCalled = true;
+    },
+    buildNowPlayingControls: () => ({ type: "row" }),
+    formatQueueViewContent: () => ({ content: "", page: 1 }),
+    buildQueueViewComponents: () => [],
+    buildMoveMenu: () => ({ components: [], page: 1, totalPages: 1 }),
+    getTrackIndexById: () => -1,
+    ensureTrackId: () => {},
+    pendingSearches: new Map(),
+    pendingMoves: new Map(),
+    pendingQueuedActions: new Map(),
+    queueViews: new Map(),
+    logInfo: () => {},
+    logError: () => {},
+    queueService: {
+      resume: async () => ({
+        ok: false,
+        error: "I couldn't rejoin the voice channel.",
+      }),
+    },
+    sendNowPlaying: async () => {
+      sendNowPlayingCalled = true;
+    },
+    stopAndLeaveQueue: () => {},
+  });
+
+  await handler({
+    guildId: "guild-1",
+    customId: "np_toggle",
+    user: { id: "user-1", tag: "User#0001" },
+    guild: {
+      members: {
+        resolve: () => ({
+          user: { id: "user-1" },
+          voice: { channel: { id: "voice-1" } },
+        }),
+      },
+    },
+    message: {
+      id: "msg-1",
+      channel: {},
+      edit: async () => {},
+    },
+    deferUpdate: async () => {},
+    reply: async () => {},
+    followUp: async (payload) => {
+      followUpPayload = payload;
+    },
+    channel: { send: async () => ({ id: "x" }) },
+  });
+
+  assert.equal(announceCalled, false);
+  assert.equal(sendNowPlayingCalled, false);
+  assert.equal(followUpPayload?.content, "I couldn't rejoin the voice channel.");
+  assert.equal(followUpPayload?.flags, MessageFlags.Ephemeral);
+});
+
 test("np_loop cycles loop mode and refreshes controls with the new mode", async () => {
   const queue = {
     nowPlayingMessageId: "msg-1",

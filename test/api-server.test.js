@@ -249,6 +249,69 @@ test("api control allows playback action for user in same voice channel", async 
   }
 });
 
+test("api control resume forwards ensure-voice options to queue service", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: { id: "track-1", title: "Song" },
+    tracks: [],
+    voiceChannel: { id: "voice-1" },
+    connection: { joinConfig: { channelId: "voice-1" } },
+    player: {
+      state: { status: "paused" },
+      pause() {},
+      unpause() {},
+      stop() {},
+    },
+  };
+
+  let applyControlArgs = null;
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    getUserVoiceChannelId: async () => "voice-1",
+    queueService: {
+      applyControlAction: async (queueArg, action, options) => {
+        applyControlArgs = { queueArg, action, options };
+        return { ok: true };
+      },
+      applyQueueAction: async () => ({ ok: true }),
+    },
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const response = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/control",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        guild_id: "guild-1",
+        action: "resume",
+      }),
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json?.ok, true);
+    assert.equal(applyControlArgs?.action, "resume");
+    assert.equal(applyControlArgs?.queueArg, queue);
+    assert.equal(applyControlArgs?.options?.ensureVoiceConnectionOnResume, true);
+    assert.deepEqual(applyControlArgs?.options?.ensureVoiceConnectionOptions, {
+      guildId: "guild-1",
+      preferredVoiceChannelId: "voice-1",
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("activity session endpoint enforces JSON content type", async () => {
   const originalFetch = global.fetch;
   global.fetch = createDiscordFetchMock();
@@ -1100,6 +1163,75 @@ test("admin provider endpoints return status and verification payloads", async (
     assert.equal(reinitializeResponse.json?.ok, true);
     assert.equal(reinitializeCalled, true);
     assert.equal(reinitializeResponse.json?.result?.youtubeReady, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("admin discord gateway endpoints return watchdog status and trigger relogin", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  let forceReloginCalls = 0;
+  let lastReloginReason = null;
+  const serverApi = createApiServer({
+    queues: new Map(),
+    getDiscordGatewayStatus: async () => ({
+      enabled: true,
+      started: true,
+      invalidated: false,
+      reloginInFlight: false,
+      reloginAttempts: 2,
+      nextReloginAt: 1234567890,
+      disconnectedShardIds: ["0"],
+      disconnectedShardCount: 1,
+    }),
+    forceDiscordRelogin: async ({ reason }) => {
+      forceReloginCalls += 1;
+      lastReloginReason = reason;
+      return {
+        accepted: true,
+      };
+    },
+    config: {
+      cookieSecure: false,
+      adminUserIds: ["user-1"],
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+
+    const statusResponse = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/admin/discord/status",
+      headers: {
+        cookie,
+      },
+    });
+    assert.equal(statusResponse.statusCode, 200);
+    assert.equal(statusResponse.json?.ok, true);
+    assert.equal(statusResponse.json?.gateway?.enabled, true);
+    assert.equal(statusResponse.json?.gateway?.disconnectedShardCount, 1);
+    assert.deepEqual(statusResponse.json?.gateway?.disconnectedShardIds, ["0"]);
+
+    const reloginResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/api/activity/admin/discord/relogin",
+      headers: {
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify({
+        reason: "manual test",
+      }),
+    });
+    assert.equal(reloginResponse.statusCode, 200);
+    assert.equal(reloginResponse.json?.ok, true);
+    assert.equal(reloginResponse.json?.relogin?.accepted, true);
+    assert.equal(forceReloginCalls, 1);
+    assert.equal(String(lastReloginReason || "").includes("manual test"), true);
+    assert.equal(reloginResponse.json?.gateway?.enabled, true);
   } finally {
     global.fetch = originalFetch;
   }

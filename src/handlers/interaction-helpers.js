@@ -49,7 +49,20 @@ function setExpiringMapEntry(options) {
 }
 
 function getQueueVoiceChannelId(queue) {
-  return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+  const guild = queue?.voiceChannel?.guild;
+  const botMember = guild?.members?.me;
+  if (botMember) {
+    const liveVoiceChannelId = String(botMember.voice?.channelId || botMember.voice?.channel?.id || "").trim();
+    return liveVoiceChannelId || null;
+  }
+
+  const queuedVoiceChannelId = String(queue?.voiceChannel?.id || "").trim();
+  if (queuedVoiceChannelId) {
+    return queuedVoiceChannelId;
+  }
+
+  const connectionVoiceChannelId = String(queue?.connection?.joinConfig?.channelId || "").trim();
+  return connectionVoiceChannelId || null;
 }
 
 function getVoiceChannelCheck(member, queue, action = "control playback") {

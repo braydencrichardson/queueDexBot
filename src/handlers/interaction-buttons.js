@@ -300,17 +300,44 @@ function createButtonInteractionHandler(deps) {
 
       if (customId === "np_toggle") {
         if (queue.player.state.status === AudioPlayerStatus.Playing) {
+          let pauseResult = { ok: true };
           if (queueService?.pause) {
-            await queueService.pause(queue, { refreshNowPlaying: false });
+            pauseResult = await queueService.pause(queue, { refreshNowPlaying: false });
           } else {
             queue.player.pause();
           }
+          if (!pauseResult?.ok) {
+            if (typeof interaction.followUp === "function") {
+              await interaction.followUp({
+                content: pauseResult.error || "Failed to pause playback.",
+                flags: MessageFlags.Ephemeral,
+              });
+            }
+            return;
+          }
           await announceNowPlayingAction(queue, "paused playback", interaction.user, member, interaction.message.channel);
         } else {
+          let resumeResult = { ok: true };
           if (queueService?.resume) {
-            await queueService.resume(queue, { refreshNowPlaying: false });
+            resumeResult = await queueService.resume(queue, {
+              refreshNowPlaying: false,
+              ensureVoiceConnection: true,
+              ensureVoiceConnectionOptions: {
+                guildId: interaction.guildId,
+                preferredVoiceChannel: member?.voice?.channel || null,
+              },
+            });
           } else {
             queue.player.unpause();
+          }
+          if (!resumeResult?.ok) {
+            if (typeof interaction.followUp === "function") {
+              await interaction.followUp({
+                content: resumeResult.error || "Failed to resume playback.",
+                flags: MessageFlags.Ephemeral,
+              });
+            }
+            return;
           }
           await announceNowPlayingAction(queue, "resumed playback", interaction.user, member, interaction.message.channel);
         }

@@ -63,6 +63,11 @@ Discord OAuth / API server (for Activity + future web view):
 - `ACTIVITY_WEB_URL`: Optional public web URL to include alongside generated Activity invite links.
 - `ACTIVITY_INVITE_PREWARM_ON_PLAYBACK_START`: `1` to pre-create/reuse an Activity invite when playback starts, `0` (default) to disable.
 - `NOW_PLAYING_SHOW_PROGRESS`: `1` to show/update progress in Discord now-playing messages, `0` (default) to hide it.
+- `DISCORD_GATEWAY_WATCHDOG_ENABLED`: `1` (default) enables forced relogin watchdog during prolonged shard disconnects, `0` disables it.
+- `DISCORD_GATEWAY_WATCHDOG_CHECK_INTERVAL_MS`: Watchdog check interval in ms (default: `5000`).
+- `DISCORD_GATEWAY_WATCHDOG_DISCONNECT_THRESHOLD_MS`: How long a shard can stay disconnected before forced relogin (default: `20000`).
+- `DISCORD_GATEWAY_WATCHDOG_BACKOFF_BASE_MS`: Base retry delay for watchdog relogin attempts (default: `8000`).
+- `DISCORD_GATEWAY_WATCHDOG_BACKOFF_MAX_MS`: Max retry delay cap for watchdog relogin attempts (default: `120000`).
 - `AUTH_SERVER_ENABLED`: `1` (default) to start API/Auth server, `0` to disable.
 - `AUTH_SERVER_HOST`: Bind host (default: `127.0.0.1`).
 - `AUTH_SERVER_PORT`: Bind port (default: `8787`).
@@ -232,7 +237,7 @@ Web mode notes:
 - Use `Refresh Guild Memberships` in the `Debug` tab to re-sync your Discord guild membership list into the current session after adding/removing bot access.
 - Activity/web controls require the user to be in the same voice channel as the bot when the bot is connected.
 - Admin users listed in `AUTH_ADMIN_USER_IDS` can enable a session-level bypass for this voice check in the Activity Admin tab.
-- The Activity Admin tab also includes provider status/verification, queue repair actions, and an admin event feed.
+- The Activity Admin tab also includes provider status/verification, Discord gateway watchdog status + force relogin, queue repair actions, and an admin event feed.
 - Admin users can optionally toggle all-guild access in the Activity Admin tab to select/control any guild where the bot is present.
 - Embedded mode now shows the guild as read-only text (not a selectable dropdown).
 - Guild selector is filtered to guilds where both the user and bot are present.
@@ -250,6 +255,8 @@ Activity API notes:
 - `GET /api/activity/admin/providers/status`: admin-only provider readiness status snapshot.
 - `POST /api/activity/admin/providers/verify`: admin-only cookie/auth verification run.
 - `POST /api/activity/admin/providers/reinitialize`: admin-only provider reinit action.
+- `GET /api/activity/admin/discord/status`: admin-only Discord gateway/watchdog diagnostics snapshot.
+- `POST /api/activity/admin/discord/relogin`: admin-only force Discord client relogin request.
 - `POST /api/activity/admin/queue/force-cleanup`: admin-only force stop/leave/clear for a guild queue.
 - `POST /api/activity/admin/queue/refresh-now-playing`: admin-only repair for now-playing/up-next message state.
 - Mutation endpoints enforce guild access and same-voice-channel checks when the bot is connected.

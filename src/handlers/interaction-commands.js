@@ -1,7 +1,7 @@
 const { ApplicationFlagsBitField, MessageFlags } = require("discord.js");
 const { QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
-const { getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
+const { getQueueVoiceChannelId, getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
 const { createActivityInviteService } = require("../activity/invite-service");
 const { formatActivityInviteResponse } = require("../activity/invite-message");
 const {
@@ -201,6 +201,80 @@ function createCommandInteractionHandler(deps) {
     return fromDeps || "";
   }
 
+  function getBotVoiceChannelId(interaction) {
+    const voiceChannelId = String(
+      interaction?.guild?.members?.me?.voice?.channelId
+      || interaction?.guild?.members?.me?.voice?.channel?.id
+      || interaction?.member?.guild?.members?.me?.voice?.channelId
+      || interaction?.member?.guild?.members?.me?.voice?.channel?.id
+      || ""
+    ).trim();
+    return voiceChannelId || null;
+  }
+
+  function clearStaleQueueVoiceState(queue, interaction, reason) {
+    if (!queue) {
+      return false;
+    }
+    const queueVoiceChannelId = String(
+      queue?.voiceChannel?.id
+      || queue?.connection?.joinConfig?.channelId
+      || getQueueVoiceChannelId(queue)
+      || ""
+    ).trim() || null;
+    if (!queueVoiceChannelId && !queue.connection && !queue.voiceChannel) {
+      return false;
+    }
+
+    if (queue.connection) {
+      try {
+        queue.connection.destroy();
+      } catch (error) {
+        logError("Failed to destroy stale voice connection", error);
+      }
+      queue.connection = null;
+    }
+    queue.voiceChannel = null;
+
+    logInfo("Cleared stale queue voice state", {
+      guild: interaction?.guildId || null,
+      reason,
+      previousQueueVoiceChannelId: queueVoiceChannelId,
+    });
+    return true;
+  }
+
+  function reconcileQueueVoiceState(interaction, queue) {
+    if (!queue) {
+      return null;
+    }
+    const botVoiceChannelId = getBotVoiceChannelId(interaction);
+    if (!botVoiceChannelId) {
+      clearStaleQueueVoiceState(queue, interaction, "bot not connected");
+      return null;
+    }
+
+    const queueVoiceChannelId = getQueueVoiceChannelId(queue);
+    if (queueVoiceChannelId && queueVoiceChannelId !== botVoiceChannelId) {
+      logInfo("Detected queue voice channel mismatch; keeping live bot voice channel", {
+        guild: interaction?.guildId || null,
+        queueVoiceChannelId,
+        botVoiceChannelId,
+      });
+    }
+
+    if (!queue.voiceChannel || queue.voiceChannel.id !== botVoiceChannelId) {
+      const liveVoiceChannel = interaction?.guild?.channels?.cache?.get(botVoiceChannelId)
+        || interaction?.guild?.members?.me?.voice?.channel
+        || null;
+      if (liveVoiceChannel) {
+        queue.voiceChannel = liveVoiceChannel;
+      }
+    }
+
+    return botVoiceChannelId;
+  }
+
   return async function handleCommandInteraction(interaction) {
     const isChatInputCommand = typeof interaction.isChatInputCommand === "function"
       ? interaction.isChatInputCommand()
@@ -232,7 +306,8 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
-      const queueVoiceChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+      const botVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
+      const queueVoiceChannelId = botVoiceChannelId || getQueueVoiceChannelId(queue);
       if (queueVoiceChannelId && queueVoiceChannelId !== voiceChannel.id) {
         await interaction.reply({ content: "I am already playing in another voice channel.", flags: MessageFlags.Ephemeral });
         return;
@@ -286,7 +361,8 @@ function createCommandInteractionHandler(deps) {
       }
 
       async function ensurePlaybackVoiceConnection() {
-        const activeChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
+        const liveBotVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
+        const activeChannelId = liveBotVoiceChannelId || getQueueVoiceChannelId(queue);
         if (activeChannelId && activeChannelId !== voiceChannel.id) {
           throw new Error("Queue already connected to another voice channel");
         }
@@ -430,8 +506,8 @@ function createCommandInteractionHandler(deps) {
         return;
       }
 
-      const queueVoiceChannelId = queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
-      if (queueVoiceChannelId === voiceChannel.id) {
+      const botVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
+      if (botVoiceChannelId === voiceChannel.id) {
         await interaction.reply({ content: "I am already in your voice channel.", flags: MessageFlags.Ephemeral });
         return;
       }
@@ -592,7 +668,14 @@ function createCommandInteractionHandler(deps) {
         return;
       }
       if (queueService?.resume) {
-        const result = await queueService.resume(queue, { refreshNowPlaying: false });
+        const result = await queueService.resume(queue, {
+          refreshNowPlaying: false,
+          ensureVoiceConnection: true,
+          ensureVoiceConnectionOptions: {
+            guildId: interaction.guildId,
+            preferredVoiceChannel: interaction.member?.voice?.channel || null,
+          },
+        });
         if (!result.ok) {
           await interaction.reply({ content: result.error || "Failed to resume playback.", flags: MessageFlags.Ephemeral });
           return;
