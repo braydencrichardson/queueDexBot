@@ -8,6 +8,12 @@ function createSpotifyApiClient(deps) {
     market = "US",
     httpsModule = https,
     requestTimeoutMs = 12000,
+    rateLimitMaxRetries = 3,
+    rateLimitDefaultDelayMs = 2500,
+    rateLimitMaxDelayMs = 15000,
+    rateLimitRetryAfterCeilingMs = 30000,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = () => Date.now(),
     logInfo = () => {},
   } = deps;
 
@@ -154,7 +160,36 @@ function createSpotifyApiClient(deps) {
     return appTokenRefreshPromise;
   }
 
-  async function requestSpotifyJsonWithToken(path, getToken, { retryOnAuthError = true } = {}) {
+  function parseRetryAfterMs(headers) {
+    const rawValue = headers?.["retry-after"];
+    const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    if (value === undefined || value === null || value === "") {
+      return null;
+    }
+    const asSeconds = Number(value);
+    if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+      return Math.round(asSeconds * 1000);
+    }
+    const asDateMs = Date.parse(String(value));
+    if (Number.isFinite(asDateMs)) {
+      return Math.max(0, asDateMs - now());
+    }
+    return null;
+  }
+
+  function normalizeDelayMs(delayMs) {
+    const normalized = Number.isFinite(delayMs) ? delayMs : rateLimitDefaultDelayMs;
+    return Math.max(0, Math.min(normalized, rateLimitMaxDelayMs));
+  }
+
+  async function requestSpotifyJsonWithToken(
+    path,
+    getToken,
+    {
+      retryOnAuthError = true,
+      rateLimitRetriesRemaining = rateLimitMaxRetries,
+    } = {}
+  ) {
     const token = await getToken();
     const response = await requestRaw({
       method: "GET",
@@ -166,6 +201,35 @@ function createSpotifyApiClient(deps) {
       },
     });
 
+    if (response.statusCode === 429) {
+      const retryAfterMsRaw = parseRetryAfterMs(response.headers);
+      const retryAfterHeader = response.headers?.["retry-after"] || null;
+      const excessiveRetryAfter = Number.isFinite(retryAfterMsRaw)
+        && retryAfterMsRaw > rateLimitRetryAfterCeilingMs;
+
+      if (excessiveRetryAfter) {
+        logInfo("Spotify API rate limited; skipping retry due to large Retry-After", {
+          path,
+          retryAfterHeader,
+          retryAfterMs: retryAfterMsRaw,
+          retryAfterCeilingMs: rateLimitRetryAfterCeilingMs,
+        });
+      } else if (rateLimitRetriesRemaining > 0) {
+        const delayMs = normalizeDelayMs(retryAfterMsRaw);
+        logInfo("Spotify API rate limited; retrying request", {
+          path,
+          retryAfterHeader,
+          retryAfterMs: delayMs,
+          retriesRemaining: rateLimitRetriesRemaining - 1,
+        });
+        await sleep(delayMs);
+        return requestSpotifyJsonWithToken(path, getToken, {
+          retryOnAuthError,
+          rateLimitRetriesRemaining: rateLimitRetriesRemaining - 1,
+        });
+      }
+    }
+
     if (response.statusCode === 401 && retryOnAuthError) {
       if (getToken === getAccessToken) {
         accessToken = null;
@@ -175,7 +239,10 @@ function createSpotifyApiClient(deps) {
         appAccessTokenExpiresAtMs = 0;
       }
       await getToken();
-      return requestSpotifyJsonWithToken(path, getToken, { retryOnAuthError: false });
+      return requestSpotifyJsonWithToken(path, getToken, {
+        retryOnAuthError: false,
+        rateLimitRetriesRemaining,
+      });
     }
     if (response.statusCode >= 400) {
       let spotifyError = null;
