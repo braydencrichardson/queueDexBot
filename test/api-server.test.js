@@ -541,6 +541,26 @@ test("activity session endpoint enforces JSON content type", async () => {
   }
 });
 
+test("auth endpoints ignore malformed cookie encoding instead of returning server error", async () => {
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  const response = await dispatch(serverApi, {
+    method: "GET",
+    path: "/auth/me",
+    headers: {
+      cookie: "qdex_session=%E0%A4%A",
+    },
+  });
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(response.json?.authenticated, false);
+});
+
 test("auth refresh-guilds updates current session guild list", async () => {
   const originalFetch = global.fetch;
   let guildCallCount = 0;
@@ -653,6 +673,104 @@ test("auth refresh-guilds returns conflict when session lacks guilds scope", asy
       refreshResponse.json?.error,
       "Session is missing guilds scope. Sign in again with guilds scope enabled."
     );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("api activity state denies access when session has no guild scope and membership check fails", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    player: {
+      state: { status: "idle" },
+    },
+  };
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    isUserInGuild: async () => false,
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const sessionResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/auth/discord/activity/session",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        access_token: "access-token-1",
+        scopes: ["identify"],
+      }),
+    });
+    assert.equal(sessionResponse.statusCode, 200);
+    const cookie = String(sessionResponse.headers.get("set-cookie") || "").split(";")[0];
+
+    const stateResponse = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/state?guild_id=guild-1",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(stateResponse.statusCode, 403);
+    assert.equal(stateResponse.json?.error, "Forbidden for this guild");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("api activity state allows no-guild-scope session when user membership check passes", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = createDiscordFetchMock();
+
+  const queue = {
+    current: null,
+    tracks: [],
+    player: {
+      state: { status: "idle" },
+    },
+  };
+  const serverApi = createApiServer({
+    queues: new Map([["guild-1", queue]]),
+    isUserInGuild: async (guildId, userId) => guildId === "guild-1" && userId === "user-1",
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const sessionResponse = await dispatch(serverApi, {
+      method: "POST",
+      path: "/auth/discord/activity/session",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        access_token: "access-token-1",
+        scopes: ["identify"],
+      }),
+    });
+    assert.equal(sessionResponse.statusCode, 200);
+    const cookie = String(sessionResponse.headers.get("set-cookie") || "").split(";")[0];
+
+    const stateResponse = await dispatch(serverApi, {
+      method: "GET",
+      path: "/api/activity/state?guild_id=guild-1",
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(stateResponse.statusCode, 200);
+    assert.equal(stateResponse.json?.guildId, "guild-1");
   } finally {
     global.fetch = originalFetch;
   }
@@ -829,6 +947,55 @@ test("activity thumbnail proxy rejects non-allowlisted hosts", async () => {
 
     assert.equal(response.statusCode, 403);
     assert.equal(response.json?.error, "Thumbnail host is not allowed");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("activity thumbnail proxy rejects redirects to non-allowlisted hosts", async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const target = String(url || "");
+    if (target === "https://discord.com/api/v10/users/@me") {
+      return jsonResponse({
+        id: "user-1",
+        username: "userone",
+        global_name: "User One",
+      });
+    }
+    if (target === "https://discord.com/api/v10/users/@me/guilds") {
+      return jsonResponse([{ id: "guild-1", name: "Guild One", owner: true, permissions: "0" }]);
+    }
+    if (target === "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: "https://example.com/forbidden.jpg",
+        },
+      });
+    }
+    throw new Error(`Unexpected fetch URL in test: ${target}`);
+  };
+
+  const serverApi = createApiServer({
+    queues: new Map(),
+    config: {
+      cookieSecure: false,
+    },
+  });
+
+  try {
+    const cookie = await createSessionCookie(serverApi);
+    const response = await dispatch(serverApi, {
+      method: "GET",
+      path: `/api/activity/thumbnail?src=${encodeURIComponent("https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg")}`,
+      headers: {
+        cookie,
+      },
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json?.error, "Thumbnail redirect host is not allowed");
   } finally {
     global.fetch = originalFetch;
   }

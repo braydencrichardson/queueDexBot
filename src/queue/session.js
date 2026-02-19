@@ -1,6 +1,7 @@
 const { sanitizeInlineDiscordText } = require("../utils/discord-content");
 const { formatTrackPrimary, formatTrackSecondary } = require("../ui/messages");
 const { getTrackKey } = require("./track-key");
+const { getQueueVoiceChannelId } = require("./voice-channel");
 const { ensureTrackId } = require("./utils");
 const { LOOP_MODES, clearLoopState, getQueueLoopMode, syncLoopState } = require("./loop");
 const {
@@ -661,10 +662,6 @@ function createQueueSession(deps) {
       queue.connection = null;
     }
     queue.voiceChannel = null;
-  }
-
-  function getQueueVoiceChannelId(queue) {
-    return queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || null;
   }
 
   function isSameVoiceChannel(member, queue) {

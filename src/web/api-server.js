@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { createQueueService } = require("../queue/service");
+const { getQueueVoiceChannelId } = require("../queue/voice-channel");
 const { enqueueTracks, formatDuration, getQueuedTrackIndex } = require("../queue/utils");
 const { listQueueEvents } = require("../queue/event-feed");
 const { formatQueuedMessage, formatQueuedPlaylistMessage } = require("../ui/messages");
@@ -24,6 +25,7 @@ const THUMBNAIL_PROXY_TIMEOUT_MS = 8000;
 const THUMBNAIL_PROXY_MAX_BYTES = 5 * 1024 * 1024;
 const THUMBNAIL_PROXY_CACHE_TTL_MS = 10 * 60 * 1000;
 const THUMBNAIL_PROXY_CACHE_MAX_ENTRIES = 400;
+const THUMBNAIL_PROXY_MAX_REDIRECTS = 4;
 const ACTIVITY_SEARCH_CHOOSER_TTL_MS = 90 * 1000;
 const ACTIVITY_USER_FEED_LIMIT = 20;
 const THUMBNAIL_PROXY_ALLOWED_HOST_SUFFIXES = [
@@ -46,7 +48,12 @@ function parseCookies(cookieHeader) {
       }
       const key = entry.slice(0, separatorIndex).trim();
       const value = entry.slice(separatorIndex + 1).trim();
-      parsed[key] = decodeURIComponent(value);
+      try {
+        parsed[key] = decodeURIComponent(value);
+      } catch {
+        // Ignore malformed percent-encoding and keep the raw value.
+        parsed[key] = value;
+      }
     });
   return parsed;
 }
@@ -468,8 +475,78 @@ function isAllowedThumbnailHost(hostname) {
   );
 }
 
-function getQueueVoiceChannelId(queue) {
-  return String(queue?.voiceChannel?.id || queue?.connection?.joinConfig?.channelId || "").trim() || null;
+function isRedirectStatus(statusCode) {
+  return Number.isInteger(statusCode) && statusCode >= 300 && statusCode < 400;
+}
+
+function normalizeAllowedThumbnailUrl(rawUrl, baseUrl = null) {
+  const normalizedBaseUrl = String(baseUrl || "").trim() || null;
+  let resolvedUrl;
+  try {
+    resolvedUrl = normalizedBaseUrl ? new URL(String(rawUrl || ""), normalizedBaseUrl) : new URL(String(rawUrl || ""));
+  } catch {
+    return null;
+  }
+  const protocol = String(resolvedUrl.protocol || "").toLowerCase();
+  if (protocol !== "https:") {
+    return null;
+  }
+  if (!isAllowedThumbnailHost(resolvedUrl.hostname)) {
+    return null;
+  }
+  return resolvedUrl.toString();
+}
+
+async function fetchThumbnailWithValidatedRedirects(sourceUrl, options = {}) {
+  const {
+    signal = null,
+    maxRedirects = THUMBNAIL_PROXY_MAX_REDIRECTS,
+  } = options;
+
+  const safeMaxRedirects = Number.isInteger(maxRedirects) && maxRedirects >= 0
+    ? maxRedirects
+    : THUMBNAIL_PROXY_MAX_REDIRECTS;
+  let requestUrl = sourceUrl;
+
+  for (let redirectCount = 0; redirectCount <= safeMaxRedirects; redirectCount += 1) {
+    const response = await fetch(requestUrl, {
+      method: "GET",
+      redirect: "manual",
+      signal,
+      headers: {
+        "User-Agent": "queueDexBot-thumbnail-proxy/1.0",
+      },
+    });
+
+    if (!isRedirectStatus(response.status)) {
+      return response;
+    }
+
+    if (redirectCount >= safeMaxRedirects) {
+      const error = new Error("Thumbnail redirect limit exceeded");
+      error.statusCode = 508;
+      throw error;
+    }
+
+    const location = String(response.headers.get("location") || "").trim();
+    if (!location) {
+      const error = new Error("Thumbnail redirect response did not include a location");
+      error.statusCode = 502;
+      throw error;
+    }
+
+    const nextUrl = normalizeAllowedThumbnailUrl(location, requestUrl);
+    if (!nextUrl) {
+      const error = new Error("Thumbnail redirect host is not allowed");
+      error.statusCode = 403;
+      throw error;
+    }
+    requestUrl = nextUrl;
+  }
+
+  const error = new Error("Thumbnail redirect resolution failed");
+  error.statusCode = 502;
+  throw error;
 }
 
 function summarizeChannelAttachment(channel, fallbackId = null) {
@@ -590,6 +667,7 @@ function createApiServer(options) {
     logInfo = () => {},
     logError = () => {},
     isBotInGuild = () => true,
+    isUserInGuild = async () => false,
     getQueueForGuild = null,
     getBotGuilds = () => [],
     getUserVoiceChannelId = async () => null,
@@ -935,7 +1013,7 @@ function createApiServer(options) {
     return queues?.get?.(normalizedGuildId) || null;
   }
 
-  function canAccessGuild(session, guildId) {
+  async function canAccessGuild(session, guildId) {
     if (!session || !guildId) {
       return false;
     }
@@ -955,11 +1033,25 @@ function createApiServer(options) {
       return true;
     }
 
-    if (!Array.isArray(session.guilds) || !session.guilds.length) {
-      // If guilds scope wasn't granted, we can't verify membership server-side.
-      return true;
+    if (Array.isArray(session.guilds) && session.guilds.length) {
+      return session.guilds.some((guild) => guild?.id === guildId);
     }
-    return session.guilds.some((guild) => guild?.id === guildId);
+
+    const sessionUserId = String(session?.user?.id || "").trim();
+    if (!sessionUserId) {
+      return false;
+    }
+
+    try {
+      return Boolean(await isUserInGuild(guildId, sessionUserId));
+    } catch (error) {
+      logError("Failed to evaluate user guild membership check", {
+        guildId,
+        userId: sessionUserId,
+        error,
+      });
+      return false;
+    }
   }
 
   function stopQueueFallback(queue) {
@@ -1005,7 +1097,7 @@ function createApiServer(options) {
       return null;
     }
 
-    if (!canAccessGuild(session, normalizedGuildId)) {
+    if (!(await canAccessGuild(session, normalizedGuildId))) {
       sendJson(response, 403, { error: "Forbidden for this guild" });
       return null;
     }
@@ -2409,18 +2501,17 @@ function createApiServer(options) {
 
     let upstream;
     try {
-      upstream = await fetch(sourceUrl, {
-        method: "GET",
-        redirect: "follow",
+      upstream = await fetchThumbnailWithValidatedRedirects(sourceUrl, {
         signal: controller.signal,
-        headers: {
-          "User-Agent": "queueDexBot-thumbnail-proxy/1.0",
-        },
       });
     } catch (error) {
       const isTimeout = String(error?.name || "").toLowerCase() === "aborterror";
-      sendJson(response, isTimeout ? 504 : 502, {
-        error: isTimeout ? "Thumbnail request timed out" : "Failed to fetch thumbnail",
+      const statusCode = Number.isInteger(error?.statusCode)
+        ? error.statusCode
+        : (isTimeout ? 504 : 502);
+      sendJson(response, statusCode, {
+        error: error?.message
+          || (isTimeout ? "Thumbnail request timed out" : "Failed to fetch thumbnail"),
       });
       return;
     } finally {
@@ -2844,7 +2935,7 @@ function createApiServer(options) {
           sendJson(response, 400, { error: "Missing guild_id query parameter" });
           return;
         }
-        if (!canAccessGuild(session, guildId)) {
+        if (!(await canAccessGuild(session, guildId))) {
           sendJson(response, 403, { error: "Forbidden for this guild" });
           return;
         }

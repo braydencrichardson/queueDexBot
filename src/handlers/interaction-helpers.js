@@ -1,3 +1,5 @@
+const { getQueueVoiceChannelId } = require("../queue/voice-channel");
+
 function clearMapEntryWithTimeout(store, key) {
   const existingEntry = store.get(key);
   if (!existingEntry) {
@@ -46,23 +48,6 @@ function setExpiringMapEntry(options) {
   const storedEntry = { ...entryData, timeout };
   store.set(key, storedEntry);
   return storedEntry;
-}
-
-function getQueueVoiceChannelId(queue) {
-  const guild = queue?.voiceChannel?.guild;
-  const botMember = guild?.members?.me;
-  if (botMember) {
-    const liveVoiceChannelId = String(botMember.voice?.channelId || botMember.voice?.channel?.id || "").trim();
-    return liveVoiceChannelId || null;
-  }
-
-  const queuedVoiceChannelId = String(queue?.voiceChannel?.id || "").trim();
-  if (queuedVoiceChannelId) {
-    return queuedVoiceChannelId;
-  }
-
-  const connectionVoiceChannelId = String(queue?.connection?.joinConfig?.channelId || "").trim();
-  return connectionVoiceChannelId || null;
 }
 
 function getVoiceChannelCheck(member, queue, action = "control playback") {

@@ -600,6 +600,32 @@ const apiServer = env.authServerEnabled
       }
       return Boolean(client.guilds?.cache?.has(normalizedGuildId));
     },
+    isUserInGuild: async (guildId, userId) => {
+      const normalizedGuildId = String(guildId || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      if (!normalizedGuildId || !normalizedUserId) {
+        return false;
+      }
+      const guild = client.guilds?.cache?.get(normalizedGuildId);
+      if (!guild) {
+        return false;
+      }
+
+      if (guild.members?.cache?.has(normalizedUserId)) {
+        return true;
+      }
+
+      if (typeof guild.members?.fetch !== "function") {
+        return false;
+      }
+
+      try {
+        const member = await guild.members.fetch(normalizedUserId);
+        return Boolean(member?.id === normalizedUserId);
+      } catch {
+        return false;
+      }
+    },
     getBotGuilds: () => Array.from(client.guilds?.cache?.values?.() || [])
       .map((guild) => ({
         id: guild?.id || null,
