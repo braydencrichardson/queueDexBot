@@ -1,9 +1,12 @@
-const { ApplicationFlagsBitField, MessageFlags } = require("discord.js");
+const { MessageFlags } = require("discord.js");
 const { QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE } = require("../config/constants");
 const { createQueueViewService } = require("./queue-view-service");
 const { getQueueVoiceChannelId, getVoiceChannelCheck, setExpiringMapEntry } = require("./interaction-helpers");
 const { createActivityInviteService } = require("../activity/invite-service");
-const { formatActivityInviteResponse } = require("../activity/invite-message");
+const {
+  appendActivityWebLine,
+  formatActivityInviteResponse,
+} = require("../activity/invite-message");
 const {
   formatQueuedMessage,
   formatQueuedPlaylistMessage,
@@ -54,7 +57,6 @@ function createCommandInteractionHandler(deps) {
     queueService = null,
     activityInviteService = null,
     getActivityApplicationId = () => "",
-    resolveVoiceChannelById = async () => null,
     activityWebUrl = "",
   } = deps;
   const inviteService = activityInviteService || createActivityInviteService();
@@ -110,84 +112,6 @@ function createCommandInteractionHandler(deps) {
       return;
     }
     await interaction.editReply("Could not load that track or playlist.");
-  }
-
-  function buildEphemeralPayload(content) {
-    return {
-      content,
-      flags: MessageFlags.Ephemeral,
-    };
-  }
-
-  async function safeReplyOrFollowUp(interaction, payload, context = "interaction response") {
-    const tryReply = async () => {
-      if (typeof interaction.reply !== "function") {
-        return false;
-      }
-      await interaction.reply(payload);
-      return true;
-    };
-    const tryFollowUp = async () => {
-      if (typeof interaction.followUp !== "function") {
-        return false;
-      }
-      await interaction.followUp(payload);
-      return true;
-    };
-
-    const preferFollowUp = Boolean(interaction.deferred || interaction.replied);
-    const primary = preferFollowUp ? tryFollowUp : tryReply;
-    const fallback = preferFollowUp ? tryReply : tryFollowUp;
-
-    try {
-      if (await primary()) {
-        return true;
-      }
-      return await fallback();
-    } catch (error) {
-      if (error?.code === 40060) {
-        try {
-          return await fallback();
-        } catch (fallbackError) {
-          if (fallbackError?.code === 10062) {
-            logInfo(`${context} skipped (unknown interaction)`, {
-              guild: interaction.guildId,
-              command: interaction.commandName,
-            });
-            return false;
-          }
-          throw fallbackError;
-        }
-      }
-      if (error?.code === 10062) {
-        logInfo(`${context} skipped (unknown interaction)`, {
-          guild: interaction.guildId,
-          command: interaction.commandName,
-        });
-        return false;
-      }
-      throw error;
-    }
-  }
-
-  async function hasEmbeddedActivityFlag(interaction) {
-    const cachedFlags = interaction?.client?.application?.flags;
-    if (cachedFlags?.has?.(ApplicationFlagsBitField.Flags.Embedded)) {
-      return true;
-    }
-
-    const fetchApplication = interaction?.client?.application?.fetch;
-    if (typeof fetchApplication !== "function") {
-      return false;
-    }
-
-    try {
-      const application = await interaction.client.application.fetch();
-      return Boolean(application?.flags?.has?.(ApplicationFlagsBitField.Flags.Embedded));
-    } catch (error) {
-      logError("Failed to fetch application flags while checking activity support", error);
-      return false;
-    }
   }
 
   function resolveActivityApplicationId(interaction) {
@@ -275,47 +199,6 @@ function createCommandInteractionHandler(deps) {
     }
 
     return botVoiceChannelId;
-  }
-
-  async function resolveLaunchVoiceChannel(interaction, queue) {
-    const botVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
-    if (botVoiceChannelId) {
-      const liveFromGuildCache = interaction?.guild?.channels?.cache?.get(botVoiceChannelId);
-      if (liveFromGuildCache) {
-        return liveFromGuildCache;
-      }
-      const liveFromMemberVoice = interaction?.guild?.members?.me?.voice?.channel || null;
-      if (liveFromMemberVoice) {
-        return liveFromMemberVoice;
-      }
-      try {
-        const resolved = await resolveVoiceChannelById(interaction?.guildId, botVoiceChannelId);
-        if (resolved) {
-          return resolved;
-        }
-      } catch (error) {
-        logError("Failed to resolve live bot voice channel for launch", {
-          guild: interaction?.guildId || null,
-          channelId: botVoiceChannelId,
-          error,
-        });
-      }
-      if (queue?.voiceChannel?.id === botVoiceChannelId) {
-        return queue.voiceChannel;
-      }
-    }
-    return interaction?.member?.voice?.channel || null;
-  }
-
-  function normalizeHttpUrl(value) {
-    const raw = String(value || "").trim();
-    if (!raw) {
-      return null;
-    }
-    if (!/^https?:\/\//i.test(raw)) {
-      return null;
-    }
-    return raw;
   }
 
   return async function handleCommandInteraction(interaction) {
@@ -647,13 +530,7 @@ function createCommandInteractionHandler(deps) {
           }
         }
 
-        const normalizedWebUrl = normalizeHttpUrl(activityWebUrl);
-        if (normalizedWebUrl) {
-          const alreadyIncluded = responseLines.some((line) => line.includes(normalizedWebUrl));
-          if (!alreadyIncluded) {
-            responseLines.push(`Web: <${normalizedWebUrl}>`);
-          }
-        }
+        appendActivityWebLine(responseLines, activityWebUrl);
         responseLines.push("Use `/play` here or open the Activity/Web UI to queue tracks.");
       }
 
@@ -661,80 +538,6 @@ function createCommandInteractionHandler(deps) {
         content: responseLines.join("\n"),
         flags: MessageFlags.Ephemeral,
       });
-      return;
-    }
-
-    if (interaction.commandName === "launch") {
-      const voiceChannel = await resolveLaunchVoiceChannel(interaction, queue);
-      if (!voiceChannel) {
-        await safeReplyOrFollowUp(interaction, buildEphemeralPayload("Join a voice channel first."), "launch validation");
-        return;
-      }
-      if (typeof voiceChannel.createInvite !== "function") {
-        await safeReplyOrFollowUp(
-          interaction,
-          buildEphemeralPayload("I couldn't create an Activity invite for the current bot voice channel in this runtime."),
-          "launch runtime validation"
-        );
-        return;
-      }
-      const embeddedEnabled = await hasEmbeddedActivityFlag(interaction);
-      if (!embeddedEnabled) {
-        await safeReplyOrFollowUp(
-          interaction,
-          buildEphemeralPayload(
-            "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again."
-          ),
-          "launch app flag validation"
-        );
-        return;
-      }
-      const applicationId = resolveActivityApplicationId(interaction);
-      if (!applicationId) {
-        await safeReplyOrFollowUp(
-          interaction,
-          buildEphemeralPayload("Couldn't determine this app's ID to create an Activity invite."),
-          "launch app id validation"
-        );
-        return;
-      }
-
-      try {
-        const inviteResult = await inviteService.getOrCreateInvite({
-          voiceChannel,
-          applicationId,
-          reason: `Activity launch requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
-        });
-        await safeReplyOrFollowUp(
-          interaction,
-          buildEphemeralPayload(
-            formatActivityInviteResponse({
-              inviteUrl: inviteResult.url,
-              reused: inviteResult.reused,
-              voiceChannelName: voiceChannel.name,
-              activityWebUrl,
-            })
-          ),
-          "launch success response"
-        );
-      } catch (error) {
-        logError("Failed to launch activity", {
-          guild: interaction.guildId,
-          channel: voiceChannel.id,
-          user: interaction.user?.tag,
-          error,
-        });
-        const message = error?.code === 50234
-          ? "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again."
-          : (error?.code === 50013 || error?.code === 50001)
-            ? "I couldn't create an Activity invite in the current bot voice channel. Check that I can create invites there."
-          : "Couldn't launch this activity. Ensure Activities is enabled for this app and try again.";
-        try {
-          await safeReplyOrFollowUp(interaction, buildEphemeralPayload(message), "launch error response");
-        } catch (replyError) {
-          logError("Failed to send launch failure response", replyError);
-        }
-      }
       return;
     }
 

@@ -228,7 +228,7 @@ test("sendNowPlaying includes activity links when provided by callback", async (
 
   const content = String(sentPayload?.content || "");
   assert.equal(
-    content.includes("**Activity:** Open Activity: <https://discord.gg/activity-test> | Web: <https://activity.example.com>"),
+    content.includes("**Activity:** <https://discord.gg/activity-test> | Web: <https://activity.example.com>"),
     true
   );
 

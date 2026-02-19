@@ -356,7 +356,6 @@ If you hit stale UI while testing tunnels:
 
 - `/play query:<url or search>`: Resolve and queue one or more tracks.
 - `/join`: Join your current voice channel and bind queue updates to the current text channel.
-- `/launch`: Launch this app's Discord Activity in the bot's active voice channel (or your current voice channel if idle).
 - `/playing`: Post now-playing controls in channel.
 - `/pause`, `/resume`, `/skip`, `/stop`: Playback controls.
 - `/queue view|clear|shuffle|remove|move`: Queue management.

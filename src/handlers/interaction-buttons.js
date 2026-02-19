@@ -4,7 +4,10 @@ const {
   QUEUE_VIEW_PAGE_SIZE: CONFIG_QUEUE_VIEW_PAGE_SIZE,
 } = require("../config/constants");
 const { createActivityInviteService } = require("../activity/invite-service");
-const { formatActivityInviteResponse } = require("../activity/invite-message");
+const {
+  formatActivityInviteResponse,
+  getActivityInviteFailureMessage,
+} = require("../activity/invite-message");
 const { createQueueViewService } = require("./queue-view-service");
 const {
   clearMapEntryWithTimeout,
@@ -147,16 +150,6 @@ function createButtonInteractionHandler(deps) {
     return null;
   }
 
-  function getActivityInviteFailureMessage(error) {
-    if (error?.code === 50234) {
-      return "This app is not Activities-enabled yet (missing EMBEDDED flag). Enable Activities for this application in the Discord Developer Portal, then try again.";
-    }
-    if (error?.code === 50013 || error?.code === 50001) {
-      return "I couldn't create an Activity invite in this voice channel. Check that I can create invites there.";
-    }
-    return "Couldn't create an Activity invite right now. Try /launch to verify setup.";
-  }
-
   async function replyWithActivityInvite(interaction, queue, member) {
     const voiceChannelCheck = getVoiceChannelCheck(member, queue, "open this activity");
     if (voiceChannelCheck) {
@@ -186,7 +179,7 @@ function createButtonInteractionHandler(deps) {
       const inviteResult = await inviteService.getOrCreateInvite({
         voiceChannel,
         applicationId,
-        reason: `Activity launch requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
+        reason: `Activity invite requested by ${interaction.user?.tag || interaction.user?.id || "unknown user"}`,
       });
       await interaction.reply({
         content: formatActivityInviteResponse({

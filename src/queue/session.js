@@ -280,7 +280,7 @@ function createQueueSession(deps) {
     }
     const parts = [];
     if (inviteUrl) {
-      parts.push(`Open Activity: <${inviteUrl}>`);
+      parts.push(`<${inviteUrl}>`);
     }
     if (webUrl) {
       parts.push(`Web: <${webUrl}>`);
