@@ -226,7 +226,7 @@ npm run activity:dev
 5. Expose it via HTTPS (for web/desktop Activity testing) and set Discord Activity URL Mapping to the tunnel target.
 
 Auth mode notes:
-- `VITE_DISCORD_AUTHORIZE_MODE=auto` (default): try RPC-style authorize first, then retry with `redirect_uri` only when Discord reports missing redirect.
+- `VITE_DISCORD_AUTHORIZE_MODE=auto` (default): try RPC-style authorize first, then retry with `redirect_uri` when RPC authorize fails due to redirect/auth requirements (for example `missing redirect_uri`, `access_denied`, or interactive-login-required responses).
 - `VITE_DISCORD_AUTHORIZE_MODE=rpc`: force authorize without `redirect_uri`.
 - `VITE_DISCORD_AUTHORIZE_MODE=web`: force authorize with `redirect_uri`.
 - Embedded auth note: avoid `guilds` and `rpc` scopes in this Activity authorize flow; use `identify`. Use web OAuth endpoints for broader scopes like `guilds`.

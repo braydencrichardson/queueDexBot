@@ -212,6 +212,18 @@ function isDiscordSaysUrl(urlValue) {
   }
 }
 
+function shouldRetryAuthorizeWithRedirect(errorMessage) {
+  const normalized = String(errorMessage || "").toLowerCase();
+  return (
+    normalized.includes('missing "redirect_uri"')
+    || normalized.includes("missing redirect_uri")
+    || normalized.includes("access_denied")
+    || normalized.includes("interaction_required")
+    || normalized.includes("login_required")
+    || normalized.includes("consent_required")
+  );
+}
+
 function pushDebugEvent(stage, details = "") {
   const line = `[${new Date().toISOString()}] ${stage}${details ? `: ${details}` : ""}`;
   debugEvents.push(line);
@@ -2945,16 +2957,12 @@ async function authorizeEmbeddedSession(discordSdk, clientId) {
       authorizeResult = await discordSdk.commands.authorize(authorizeRpcRequest);
     } catch (error) {
       const firstMessage = String(error?.message || error);
-      const normalizedFirst = firstMessage.toLowerCase();
-      const missingRedirect =
-        normalizedFirst.includes('missing "redirect_uri"') ||
-        normalizedFirst.includes("missing redirect_uri");
-      if (!missingRedirect) {
+      if (!shouldRetryAuthorizeWithRedirect(firstMessage)) {
         pushDebugEvent("auth.authorize.failed", `auto step1 non-retriable: ${firstMessage}`);
         throw new Error(`Authorize failed (auto/rpc step): ${firstMessage}`);
       }
 
-      pushDebugEvent("auth.authorize.retry", `auto step2 due to missing redirect: ${firstMessage}`);
+      pushDebugEvent("auth.authorize.retry", `auto step2 web/with redirect due to rpc failure: ${firstMessage}`);
       try {
         authorizeResult = await discordSdk.commands.authorize(authorizeWebRequest);
       } catch (retryError) {
