@@ -67,6 +67,7 @@ function saveBooleanPreference(key, value) {
 const state = {
   mode: "unknown",
   connectedAt: null,
+  embeddedSessionBearer: null,
   sdkContext: {
     guildId: null,
     channelId: null,
@@ -142,6 +143,19 @@ function getApiUrl(path) {
   }
   const normalizedBase = rawBase.endsWith("/") ? rawBase.slice(0, -1) : rawBase;
   return `${normalizedBase}${path}`;
+}
+
+function withEmbeddedSessionAuth(options = {}) {
+  const requestOptions = {
+    ...options,
+  };
+  const requestHeaders = new Headers(options.headers || {});
+  const embeddedSessionBearer = String(state.embeddedSessionBearer || "").trim();
+  if (state.mode === "embedded" && embeddedSessionBearer && !requestHeaders.has("Authorization")) {
+    requestHeaders.set("Authorization", `Bearer ${embeddedSessionBearer}`);
+  }
+  requestOptions.headers = requestHeaders;
+  return requestOptions;
 }
 
 function setPipBodyMode(enabled) {
@@ -659,9 +673,9 @@ async function fetchThumbnailDataUrlViaProxy(sourceUrl) {
 
   const proxyPath = `/api/activity/thumbnail?src=${encodeURIComponent(sourceUrl)}`;
   const requestTask = (async () => {
-    const response = await fetch(getApiUrl(proxyPath), {
+    const response = await fetch(getApiUrl(proxyPath), withEmbeddedSessionAuth({
       credentials: "include",
-    });
+    }));
     if (!response.ok) {
       const proxyError = new Error(`Thumbnail proxy request failed (${response.status})`);
       proxyError.status = response.status;
@@ -2847,9 +2861,10 @@ function withTimeout(promise, timeoutMs, message) {
 
 async function fetchJson(path, options = {}) {
   markApiAttempt();
+  const requestOptions = withEmbeddedSessionAuth(options);
   let response;
   try {
-    response = await fetch(getApiUrl(path), options);
+    response = await fetch(getApiUrl(path), requestOptions);
   } catch (error) {
     markApiFailure();
     throw error;
@@ -2883,7 +2898,7 @@ async function fetchAuthSummaryOrNull() {
 }
 
 async function createActivitySessionFromAccessToken(accessToken, scopes = []) {
-  await fetchJson("/auth/discord/activity/session", {
+  const payload = await fetchJson("/auth/discord/activity/session", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -2894,6 +2909,11 @@ async function createActivitySessionFromAccessToken(accessToken, scopes = []) {
       scopes,
     }),
   });
+  const sessionId = String(payload?.session?.id || "").trim();
+  if (sessionId) {
+    state.embeddedSessionBearer = sessionId;
+    pushDebugEvent("auth.session.bearer.set", "using backend session id bearer fallback");
+  }
 }
 
 async function authorizeEmbeddedSession(discordSdk, clientId) {
@@ -2996,6 +3016,11 @@ async function authorizeEmbeddedSession(discordSdk, clientId) {
   });
 
   const accessToken = String(exchange?.access_token || "").trim();
+  const sessionId = String(exchange?.session?.id || "").trim();
+  if (sessionId) {
+    state.embeddedSessionBearer = sessionId;
+    pushDebugEvent("auth.session.bearer.set", "using backend session id bearer fallback");
+  }
   if (!accessToken) {
     throw new Error("OAuth exchange response did not include an access token");
   }
@@ -3776,6 +3801,7 @@ async function logoutWebSession() {
     pushDebugEvent("web.logout.failed", error?.message || String(error));
   }
   state.authSummary = null;
+  state.embeddedSessionBearer = null;
   state.queueSummary = null;
   state.queueList = null;
   state.adminProviders = null;
@@ -3927,6 +3953,7 @@ async function bootstrap() {
   stopDebugTabHideTimer();
   ensureViewportWatcher();
   state.hasMountedDashboard = false;
+  state.embeddedSessionBearer = null;
   state.debugTabVisible = false;
   state.discordSdkConnected = false;
   state.lastApiAttemptAt = null;
