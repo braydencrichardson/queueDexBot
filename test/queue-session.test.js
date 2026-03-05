@@ -861,3 +861,177 @@ test("idle cleanup resolves original now playing channel when queue text channel
   assert.equal(String(cleanedPayload?.content || "").includes("**Played:**"), true);
   assert.deepEqual(cleanedPayload?.components, []);
 });
+
+test("auto-paused listener attempts re-subscribe and unpause recovery", () => {
+  const listeners = new Map();
+  let subscribeCalled = false;
+  let unpauseCalled = false;
+  const player = {
+    state: {},
+    on(event, handler) {
+      listeners.set(event, handler);
+    },
+    stop: () => {},
+    unpause() {
+      unpauseCalled = true;
+    },
+  };
+
+  const { getGuildQueue, ensurePlayerListeners } = createSession({
+    player,
+    deps: {
+      AudioPlayerStatus: { Idle: "idle", Playing: "playing", AutoPaused: "autopaused" },
+    },
+  });
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Song",
+    requester: "Requester",
+    duration: 89,
+    url: "https://soundcloud.com/sleepmethods/piggy",
+    source: "soundcloud",
+  };
+  queue.connection = {
+    state: { status: "ready" },
+    subscribe() {
+      subscribeCalled = true;
+    },
+  };
+
+  ensurePlayerListeners(queue, "guild-1");
+
+  const onAutoPaused = listeners.get("autopaused");
+  assert.equal(typeof onAutoPaused, "function");
+  onAutoPaused();
+
+  assert.equal(subscribeCalled, true);
+  assert.equal(unpauseCalled, true);
+});
+
+test("auto-paused listener waits for voice connection ready before recovering", () => {
+  const listeners = new Map();
+  const connectionListeners = new Map();
+  let subscribeCalled = false;
+  let unpauseCalled = false;
+  const player = {
+    state: {},
+    on(event, handler) {
+      listeners.set(event, handler);
+    },
+    stop: () => {},
+    unpause() {
+      unpauseCalled = true;
+    },
+  };
+
+  const { getGuildQueue, ensurePlayerListeners } = createSession({
+    player,
+    deps: {
+      AudioPlayerStatus: { Idle: "idle", Playing: "playing", AutoPaused: "autopaused" },
+    },
+  });
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Song",
+    requester: "Requester",
+    duration: 89,
+    url: "https://soundcloud.com/sleepmethods/piggy",
+    source: "soundcloud",
+  };
+  queue.connection = {
+    state: { status: "signaling" },
+    subscribe() {
+      subscribeCalled = true;
+    },
+    on(event, handler) {
+      connectionListeners.set(event, handler);
+    },
+    off(event, handler) {
+      if (connectionListeners.get(event) === handler) {
+        connectionListeners.delete(event);
+      }
+    },
+  };
+
+  ensurePlayerListeners(queue, "guild-1");
+
+  const onAutoPaused = listeners.get("autopaused");
+  assert.equal(typeof onAutoPaused, "function");
+  onAutoPaused();
+
+  assert.equal(subscribeCalled, false);
+  assert.equal(unpauseCalled, false);
+
+  const onStateChange = connectionListeners.get("stateChange");
+  assert.equal(typeof onStateChange, "function");
+  queue.connection.state.status = "ready";
+  onStateChange({ status: "signaling" }, { status: "ready" });
+
+  assert.equal(subscribeCalled, true);
+  assert.equal(unpauseCalled, true);
+});
+
+test("auto-paused timeout triggers forced voice reconnect recovery", async () => {
+  const listeners = new Map();
+  let forcedReconnectCalled = false;
+  let subscribeCalled = false;
+  let unpauseCalled = false;
+  const player = {
+    state: {},
+    on(event, handler) {
+      listeners.set(event, handler);
+    },
+    stop: () => {},
+    unpause() {
+      unpauseCalled = true;
+    },
+  };
+
+  const { getGuildQueue, ensurePlayerListeners, stopAndLeaveQueue } = createSession({
+    player,
+    deps: {
+      AudioPlayerStatus: { Idle: "idle", Playing: "playing", AutoPaused: "autopaused" },
+      autoPausedRecoveryWaitMs: 5,
+      ensureVoiceConnection: async (_queue, options) => {
+        if (options?.forceReconnect) {
+          forcedReconnectCalled = true;
+        }
+        return { ok: true };
+      },
+    },
+  });
+  const queue = getGuildQueue("guild-1");
+  queue.current = {
+    id: "track-1",
+    title: "Song",
+    requester: "Requester",
+    duration: 89,
+    url: "https://soundcloud.com/sleepmethods/piggy",
+    source: "soundcloud",
+  };
+  queue.voiceChannel = { id: "vc-1", guild: { id: "guild-1" } };
+  queue.connection = {
+    state: { status: "signaling" },
+    subscribe() {
+      subscribeCalled = true;
+    },
+    destroy() {},
+    on() {},
+    off() {},
+  };
+
+  ensurePlayerListeners(queue, "guild-1");
+  const onAutoPaused = listeners.get("autopaused");
+  assert.equal(typeof onAutoPaused, "function");
+  onAutoPaused();
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(forcedReconnectCalled, true);
+  assert.equal(subscribeCalled, true);
+  assert.equal(unpauseCalled, true);
+
+  stopAndLeaveQueue(queue, "cleanup");
+});

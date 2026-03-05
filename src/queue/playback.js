@@ -75,24 +75,13 @@ function createQueuePlayback(deps) {
     return "Queue finished. Leaving voice channel.";
   }
 
-  async function createTrackResource(track, options = {}) {
-    if (!track?.url) {
-      logInfo("Track missing URL", track);
-      throw new Error("Track URL missing");
-    }
-    if (track.source === "youtube") {
-      return createYoutubeResource(track.url, options);
-    }
-    if (track.source === "soundcloud" && typeof createSoundcloudResource === "function") {
-      return createSoundcloudResource(track.url);
-    }
-
-    const stream = await playdl.stream(track.url);
+  async function createPlayDlResource(url, source, pipeline) {
+    const stream = await playdl.stream(url);
     const resource = createAudioResource(stream.stream, {
       inputType: stream.type ?? StreamType.Arbitrary,
       metadata: {
-        source: track.source || "unknown",
-        pipeline: "play-dl-passthrough",
+        source,
+        pipeline,
         inputType: stream.type ?? StreamType.Arbitrary,
       },
     });
@@ -102,6 +91,38 @@ function createQueuePlayback(deps) {
       };
     }
     return resource;
+  }
+
+  async function createTrackResource(track, options = {}) {
+    if (!track?.url) {
+      logInfo("Track missing URL", track);
+      throw new Error("Track URL missing");
+    }
+    if (track.source === "youtube") {
+      try {
+        return await createYoutubeResource(track.url, options);
+      } catch (error) {
+        logInfo("YouTube provider failed; falling back to play-dl stream", {
+          title: track.title,
+          url: track.url,
+          error,
+        });
+        try {
+          return await createPlayDlResource(track.url, "youtube", "play-dl-youtube-fallback");
+        } catch (fallbackError) {
+          logInfo("YouTube play-dl fallback failed", {
+            title: track.title,
+            url: track.url,
+            error: fallbackError,
+          });
+          throw fallbackError;
+        }
+      }
+    }
+    if (track.source === "soundcloud" && typeof createSoundcloudResource === "function") {
+      return createSoundcloudResource(track.url);
+    }
+    return createPlayDlResource(track.url, track.source || "unknown", "play-dl-passthrough");
   }
 
   async function resolveTrackIfPending(queue, track, { context = "playback" } = {}) {
@@ -582,12 +603,11 @@ function createQueuePlayback(deps) {
         await sendPlaybackNotice(queue, summary);
       }
 
-      queue.suppressNextIdle = false;
-      queue.player.play(resource);
-
       if (queue.connection) {
         queue.connection.subscribe(queue.player);
       }
+      queue.suppressNextIdle = false;
+      queue.player.play(resource);
 
       appendQueueEvent(queue, `Now playing: ${sanitizeInlineDiscordText(nextTrack.title || "unknown track")}`, {
         source: "playback.now_playing",

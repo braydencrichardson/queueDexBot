@@ -5,7 +5,7 @@ Can queue from Spotify share links (will search title/artist on YouTube)
 
 ## Requirements
 
-- Node.js 20+ (Discord.js v14)
+- Node.js 22.12+ (`@discordjs/voice` 0.19 requirement)
 - npm
 - `yt-dlp` (required)
 - Python 3 + venv (recommended for reliable `yt-dlp`)
@@ -15,7 +15,7 @@ Can queue from Spotify share links (will search title/artist on YouTube)
 1. Install dependencies:
 
 ```bash
-npm install
+npm install --include=optional
 ```
 
 2. Create a `.env` file:
@@ -181,6 +181,34 @@ npm run verify-commands -- --guild
 
 ```bash
 npm start
+```
+
+## Discord Voice (DAVE / 4017)
+
+Discord voice currently requires DAVE-capable runtime dependencies. If these are missing, voice joins can fail with WebSocket close code `4017`.
+
+Recommended baseline:
+
+- `@discordjs/voice` 0.19+
+- Node.js 22.12+
+- `@snazzah/davey` installed and loadable at runtime
+- Optional dependencies enabled during install (this repo uses `.npmrc` with `include=optional`)
+
+Verify runtime on host:
+
+```bash
+npm ls @discordjs/voice @snazzah/davey
+node -e "import('@snazzah/davey').then(m=>console.log('DAVE_PROTOCOL_VERSION=',m.DAVE_PROTOCOL_VERSION)).catch(e=>{console.error(e);process.exit(1)})"
+```
+
+Platform note:
+- Linux x64 (glibc) hosts should also have `@snazzah/davey-linux-x64-gnu` present.
+
+If you still see `Cannot find native binding` from `@snazzah/davey`, perform a clean reinstall so optional platform bindings are re-resolved:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install --include=optional
 ```
 
 ## Run Activity App (Scaffold)

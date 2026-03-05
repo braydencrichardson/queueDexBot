@@ -138,6 +138,46 @@ test("playNext plays next track, subscribes connection, marks queue view stale, 
   assert.equal(nowPlayingCalled, true);
 });
 
+test("playNext subscribes voice connection before starting playback", async () => {
+  const track = { source: "youtube", url: "https://youtu.be/abc", title: "Song" };
+  const callOrder = [];
+  const queue = {
+    tracks: [track],
+    playing: false,
+    current: null,
+    connection: {
+      subscribe(player) {
+        callOrder.push(["subscribe", player]);
+      },
+      destroy() {},
+    },
+    player: {
+      play(resource) {
+        callOrder.push(["play", resource]);
+      },
+    },
+    textChannel: null,
+  };
+
+  const { playNext } = createQueuePlayback({
+    playdl: { stream: async () => ({ stream: null, type: null }) },
+    createAudioResource: () => ({}),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => "yt-resource",
+    getGuildQueue: () => queue,
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  await playNext("guild-1");
+
+  assert.equal(callOrder.length >= 2, true);
+  assert.equal(callOrder[0][0], "subscribe");
+  assert.equal(callOrder[1][0], "play");
+});
+
 test("playNext triggers onPlaybackStarted hook after playback begins", async () => {
   const track = { source: "youtube", url: "https://youtu.be/abc", title: "Song" };
   const queue = {
@@ -379,6 +419,46 @@ test("playNext uses soundcloud resource provider for soundcloud tracks", async (
 
   assert.equal(soundcloudCreateCalls, 1);
   assert.equal(queue.player.played, "sc-resource");
+});
+
+test("createTrackResource falls back to play-dl when youtube provider fails", async () => {
+  const fallbackStream = {
+    destroyed: false,
+    destroy() {
+      this.destroyed = true;
+    },
+  };
+  let playDlUrl = null;
+
+  const { createTrackResource } = createQueuePlayback({
+    playdl: {
+      stream: async (url) => {
+        playDlUrl = url;
+        return { stream: fallbackStream, type: "arbitrary-type" };
+      },
+    },
+    createAudioResource: (stream, options) => ({ stream, options }),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => {
+      throw new Error("yt-dlp download failed");
+    },
+    getGuildQueue: () => ({ tracks: [] }),
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  const track = { source: "youtube", url: "https://youtu.be/fallback123", title: "Fallback song" };
+  const resource = await createTrackResource(track);
+
+  assert.equal(playDlUrl, track.url);
+  assert.equal(resource.options.metadata.source, "youtube");
+  assert.equal(resource.options.metadata.pipeline, "play-dl-youtube-fallback");
+  assert.equal(typeof resource.__queueDexDispose, "function");
+
+  resource.__queueDexDispose();
+  assert.equal(fallbackStream.destroyed, true);
 });
 
 test("playNext preloads the next track immediately after current playback starts", async () => {

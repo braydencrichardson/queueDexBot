@@ -54,6 +54,7 @@ function createCommandInteractionHandler(deps) {
     isSpotifyUrl,
     hasSpotifyCredentials,
     stopAndLeaveQueue,
+    getVoiceConnection = () => null,
     queueService = null,
     activityInviteService = null,
     getActivityApplicationId = () => "",
@@ -206,6 +207,172 @@ function createCommandInteractionHandler(deps) {
     return botVoiceChannelId;
   }
 
+  function summarizeVoiceNetworkingState(state) {
+    const codeMap = {
+      0: "opening-ws",
+      1: "identifying",
+      2: "udp-handshaking",
+      3: "selecting-protocol",
+      4: "ready",
+      5: "resuming",
+      6: "closed",
+    };
+    if (!state || typeof state !== "object") {
+      return null;
+    }
+    const rawCode = Number.isFinite(state?.code) ? state.code : null;
+    const wsReadyState = Number.isFinite(state?.ws?.readyState) ? state.ws.readyState : null;
+    const wsCloseCode = Number.isFinite(state?.closeCode)
+      ? state.closeCode
+      : Number.isFinite(state?.ws?.closeCode)
+        ? state.ws.closeCode
+        : null;
+    const udpInfo = state?.udp || null;
+    return {
+      code: rawCode,
+      codeName: rawCode !== null && Object.prototype.hasOwnProperty.call(codeMap, rawCode) ? codeMap[rawCode] : null,
+      wsReadyState,
+      wsCloseCode,
+      udpIp: typeof udpInfo?.ip === "string" ? udpInfo.ip : null,
+      udpPort: Number.isFinite(udpInfo?.port) ? udpInfo.port : null,
+    };
+  }
+
+  function attachVoiceConnectionDiagnostics(connection, { context, guildId, channelId }) {
+    if (!connection || connection.__queueDexVoiceDiagnosticsAttached) {
+      return;
+    }
+    connection.__queueDexVoiceDiagnosticsAttached = true;
+
+    const onNetworkingStateChange = (oldNetworkState, newNetworkState) => {
+      logInfo("Voice networking state change", {
+        context,
+        guildId: guildId || null,
+        channelId: channelId || null,
+        from: summarizeVoiceNetworkingState(oldNetworkState),
+        to: summarizeVoiceNetworkingState(newNetworkState),
+      });
+    };
+    const onNetworkingClose = (closeCode) => {
+      connection.__queueDexLastNetworkingCloseCode = Number.isFinite(closeCode) ? closeCode : null;
+      logInfo("Voice networking closed", {
+        context,
+        guildId: guildId || null,
+        channelId: channelId || null,
+        closeCode: Number.isFinite(closeCode) ? closeCode : null,
+        connectionStatus: String(connection?.state?.status || "").toLowerCase() || null,
+        rejoinAttempts: Number.isFinite(connection?.rejoinAttempts) ? connection.rejoinAttempts : null,
+      });
+    };
+
+    connection.on("stateChange", (oldState, newState) => {
+      const fromStatus = String(oldState?.status || "").toLowerCase() || null;
+      const toStatus = String(newState?.status || "").toLowerCase() || null;
+      logInfo("Voice connection state change", {
+        context,
+        guildId: guildId || null,
+        channelId: channelId || null,
+        from: fromStatus,
+        to: toStatus,
+        rejoinAttempts: Number.isFinite(connection?.rejoinAttempts) ? connection.rejoinAttempts : null,
+      });
+      if (oldState?.networking && oldState.networking !== newState?.networking) {
+        oldState.networking.off?.("stateChange", onNetworkingStateChange);
+        oldState.networking.off?.("close", onNetworkingClose);
+      }
+      if (newState?.networking && oldState?.networking !== newState.networking) {
+        newState.networking.on?.("stateChange", onNetworkingStateChange);
+        newState.networking.on?.("close", onNetworkingClose);
+      }
+    });
+
+    if (connection.state?.networking) {
+      connection.state.networking.on?.("stateChange", onNetworkingStateChange);
+      connection.state.networking.on?.("close", onNetworkingClose);
+    }
+    logInfo("Voice connection diagnostics attached", {
+      context,
+      guildId: guildId || null,
+      channelId: channelId || null,
+      status: String(connection?.state?.status || "").toLowerCase() || null,
+    });
+  }
+
+  async function waitForVoiceConnectionReady(connection, { timeoutMs = 12000, context = "interaction" } = {}) {
+    if (!connection) {
+      return false;
+    }
+
+    const startedAt = Date.now();
+    const getStatus = () => String(connection?.state?.status || "").toLowerCase();
+    const currentStatus = getStatus();
+    if (currentStatus === "ready") {
+      logInfo("Voice connection already ready", {
+        context,
+        status: currentStatus,
+      });
+      return true;
+    }
+    if (currentStatus === "destroyed") {
+      return false;
+    }
+    if (typeof connection.on !== "function" || typeof connection.off !== "function") {
+      return true;
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timeoutHandle = null;
+
+      function cleanup() {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        connection.off?.("stateChange", onStateChange);
+      }
+
+      function finish(value) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(Boolean(value));
+      }
+
+      function onStateChange(_oldState, newState) {
+        const nextStatus = String(newState?.status || getStatus() || "").toLowerCase();
+        if (nextStatus === "ready") {
+          logInfo("Voice connection reached ready state", {
+            context,
+            elapsedMs: Date.now() - startedAt,
+          });
+          finish(true);
+          return;
+        }
+        if (nextStatus === "destroyed") {
+          finish(false);
+        }
+      }
+
+      timeoutHandle = setTimeout(() => {
+        logInfo("Timed out waiting for voice connection ready state", {
+          context,
+          timeoutMs,
+          elapsedMs: Date.now() - startedAt,
+          status: getStatus() || null,
+        });
+        finish(false);
+      }, timeoutMs);
+
+      connection.on?.("stateChange", onStateChange);
+      if (getStatus() === "ready") {
+        finish(true);
+      }
+    });
+  }
+
   return async function handleCommandInteraction(interaction) {
     const isChatInputCommand = typeof interaction.isChatInputCommand === "function"
       ? interaction.isChatInputCommand()
@@ -299,6 +466,73 @@ function createCommandInteractionHandler(deps) {
       }
 
       async function ensurePlaybackVoiceConnection() {
+        if (!queue.connection && typeof getVoiceConnection === "function") {
+          const existingConnection = getVoiceConnection(interaction.guildId);
+          if (existingConnection) {
+            queue.connection = existingConnection;
+            attachVoiceConnectionDiagnostics(queue.connection, {
+              context: "play-adopt-existing-connection",
+              guildId: interaction.guildId,
+              channelId: voiceChannel.id,
+            });
+            logInfo("Adopted existing voice connection from voice adapter cache", {
+              guild: interaction.guildId,
+              channel: voiceChannel.id,
+              status: String(queue.connection?.state?.status || "").toLowerCase() || null,
+            });
+          }
+        }
+
+        async function attemptRejoinReadyWait(connection, context) {
+          if (!connection || typeof connection.rejoin !== "function") {
+            return false;
+          }
+          const previousJoinConfig = connection.joinConfig || {};
+          try {
+            const rejoinResult = connection.rejoin({
+              channelId: voiceChannel.id,
+              guildId: voiceChannel.guild.id,
+              selfDeaf: typeof previousJoinConfig.selfDeaf === "boolean" ? previousJoinConfig.selfDeaf : true,
+              selfMute: typeof previousJoinConfig.selfMute === "boolean" ? previousJoinConfig.selfMute : false,
+            });
+            logInfo("Attempted voice connection rejoin while waiting for ready", {
+              guild: interaction.guildId,
+              channel: voiceChannel.id,
+              context,
+              rejoinResult: Boolean(rejoinResult),
+              status: String(connection?.state?.status || "").toLowerCase() || null,
+            });
+          } catch (error) {
+            logError("Voice connection rejoin attempt failed", {
+              guild: interaction.guildId,
+              channel: voiceChannel.id,
+              context,
+              error,
+            });
+            return false;
+          }
+          return waitForVoiceConnectionReady(connection, {
+            timeoutMs: 8000,
+            context: `${context}:rejoin`,
+          });
+        }
+
+        function getLastVoiceCloseCode(connection) {
+          const code = connection?.__queueDexLastNetworkingCloseCode;
+          return Number.isFinite(code) ? code : null;
+        }
+
+        function buildVoiceNotReadyError(connection) {
+          const closeCode = getLastVoiceCloseCode(connection);
+          if (closeCode === 4017) {
+            return new Error("Voice connection rejected with close code 4017");
+          }
+          if (closeCode !== null) {
+            return new Error(`Voice connection failed to become ready (signaling; close code ${closeCode})`);
+          }
+          return new Error("Voice connection failed to become ready (signaling)");
+        }
+
         const liveBotVoiceChannelId = reconcileQueueVoiceState(interaction, queue);
         const activeChannelId = liveBotVoiceChannelId || getQueueVoiceChannelId(queue);
         if (activeChannelId && activeChannelId !== voiceChannel.id) {
@@ -306,7 +540,46 @@ function createCommandInteractionHandler(deps) {
         }
         queue.voiceChannel = voiceChannel;
         if (queue.connection) {
-          return;
+          attachVoiceConnectionDiagnostics(queue.connection, {
+            context: "play-existing-connection",
+            guildId: interaction.guildId,
+            channelId: voiceChannel.id,
+          });
+          const ready = await waitForVoiceConnectionReady(queue.connection, {
+            context: "play-existing-connection",
+          });
+          if (ready) {
+            return;
+          }
+          const liveBotVoiceChannelIdAfterWait = getBotVoiceChannelId(interaction);
+          if (liveBotVoiceChannelIdAfterWait === voiceChannel.id) {
+            const recovered = await attemptRejoinReadyWait(queue.connection, "play-existing-connection");
+            if (recovered) {
+              return;
+            }
+            if (getLastVoiceCloseCode(queue.connection) === 4017) {
+              const notReadyError = buildVoiceNotReadyError(queue.connection);
+              try {
+                queue.connection.destroy();
+              } catch (destroyError) {
+                logError("Failed to destroy non-ready voice connection after voice close code 4017", destroyError);
+              }
+              queue.connection = null;
+              queue.voiceChannel = null;
+              throw notReadyError;
+            }
+            logInfo("Voice connection remained signaling after rejoin attempt; rebuilding connection", {
+              guild: interaction.guildId,
+              channel: voiceChannel.id,
+              status: String(queue.connection?.state?.status || "").toLowerCase() || null,
+            });
+          }
+          try {
+            queue.connection.destroy();
+          } catch (destroyError) {
+            logError("Failed to destroy non-ready voice connection before reconnect", destroyError);
+          }
+          queue.connection = null;
         }
         await ensureSodiumReady();
         queue.connection = joinVoiceChannel({
@@ -314,10 +587,36 @@ function createCommandInteractionHandler(deps) {
           guildId: voiceChannel.guild.id,
           adapterCreator: voiceChannel.guild.voiceAdapterCreator,
         });
+        attachVoiceConnectionDiagnostics(queue.connection, {
+          context: "play-new-connection",
+          guildId: interaction.guildId,
+          channelId: voiceChannel.id,
+        });
         queue.connection.on("error", (error) => {
           logError("Voice connection error", error);
         });
         ensurePlayerListeners(queue, interaction.guildId);
+        const ready = await waitForVoiceConnectionReady(queue.connection, {
+          context: "play-new-connection",
+        });
+        if (!ready) {
+          const notReadyError = buildVoiceNotReadyError(queue.connection);
+          const liveBotVoiceChannelIdAfterWait = getBotVoiceChannelId(interaction);
+          if (liveBotVoiceChannelIdAfterWait === voiceChannel.id) {
+            const recovered = await attemptRejoinReadyWait(queue.connection, "play-new-connection");
+            if (recovered) {
+              return;
+            }
+          }
+          try {
+            queue.connection.destroy();
+          } catch (destroyError) {
+            logError("Failed to destroy non-ready voice connection after join timeout", destroyError);
+          }
+          queue.connection = null;
+          queue.voiceChannel = null;
+          throw notReadyError;
+        }
       }
 
       let tracks;
@@ -371,7 +670,16 @@ function createCommandInteractionHandler(deps) {
         await ensurePlaybackVoiceConnection();
       } catch (error) {
         logError("Failed to join voice channel for playback", error);
-        await interaction.editReply("I couldn't join your voice channel.");
+        const message = String(error?.message || "").toLowerCase();
+        if (message.includes("close code 4017")) {
+          await interaction.editReply(
+            "Discord voice rejected this connection (code 4017). Update to a DAVE-compatible voice stack (@discordjs/voice + Node.js runtime)."
+          );
+        } else if (message.includes("signaling")) {
+          await interaction.editReply("I joined your channel, but Discord voice did not become ready (stuck signaling).");
+        } else {
+          await interaction.editReply("I couldn't join your voice channel.");
+        }
         return;
       }
 
@@ -465,10 +773,37 @@ function createCommandInteractionHandler(deps) {
           guildId: voiceChannel.guild.id,
           adapterCreator: voiceChannel.guild.voiceAdapterCreator,
         });
+        attachVoiceConnectionDiagnostics(queue.connection, {
+          context: "join-command",
+          guildId: interaction.guildId,
+          channelId: voiceChannel.id,
+        });
         queue.connection.on("error", (error) => {
           logError("Voice connection error", error);
         });
         ensurePlayerListeners(queue, interaction.guildId);
+        const ready = await waitForVoiceConnectionReady(queue.connection, {
+          context: "join-command",
+        });
+        if (!ready) {
+          const liveBotVoiceChannelIdAfterWait = getBotVoiceChannelId(interaction);
+          if (liveBotVoiceChannelIdAfterWait !== voiceChannel.id) {
+            try {
+              queue.connection.destroy();
+            } catch (destroyError) {
+              logError("Failed to destroy non-ready voice connection during /join", destroyError);
+            }
+            queue.connection = null;
+            queue.voiceChannel = null;
+            await interaction.reply({ content: "I couldn't complete voice setup for that channel.", flags: MessageFlags.Ephemeral });
+            return;
+          }
+          logInfo("Voice connection still signaling after /join timeout; keeping connection", {
+            guild: interaction.guildId,
+            channel: voiceChannel.id,
+            status: String(queue.connection?.state?.status || "").toLowerCase() || null,
+          });
+        }
         queue.connection.subscribe(queue.player);
         joinedVoice = true;
 

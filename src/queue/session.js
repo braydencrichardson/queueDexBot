@@ -31,11 +31,16 @@ function createQueueSession(deps) {
     logError,
     getPlayNext,
     ensureNextTrackPreload = async () => null,
+    ensureVoiceConnection = async () => null,
     resolveNowPlayingChannelById = async () => null,
     getNowPlayingActivityLinks = async () => null,
     showNowPlayingProgress = false,
     canSendDiscordMessages = () => true,
+    autoPausedRecoveryWaitMs = 8000,
   } = deps;
+  const autoPausedRecoveryTimeoutMs = Number.isFinite(autoPausedRecoveryWaitMs) && autoPausedRecoveryWaitMs > 0
+    ? autoPausedRecoveryWaitMs
+    : 8000;
   let lastDiscordSendSuppressionLogAt = 0;
 
   function maybeLogDiscordSendSuppressed(context, error = null) {
@@ -75,6 +80,8 @@ function createQueueSession(deps) {
         nowPlayingProgressStartTimeout: null,
         nowPlayingProgressTrackKey: null,
         nowPlayingProgressMarker: null,
+        autoPausedRecoveryCleanup: null,
+        autoPausedReconnectInFlight: false,
         inactivityTimeout: null,
         inactivityNoticeMessageId: null,
         inactivityNoticeChannelId: null,
@@ -602,6 +609,144 @@ function createQueueSession(deps) {
       }
     });
 
+    if (AudioPlayerStatus?.AutoPaused !== undefined) {
+      queue.player.on(AudioPlayerStatus.AutoPaused, () => {
+        logInfo("Audio player entered AutoPaused state", {
+          guildId,
+          pausedForInactivity: Boolean(queue.pausedForInactivity),
+          hasCurrentTrack: Boolean(queue.current),
+          hasConnection: Boolean(queue.connection),
+          connectionState: queue?.connection?.state?.status || null,
+        });
+
+        if (queue.pausedForInactivity || !queue.current || !queue.connection) {
+          return;
+        }
+
+        if (typeof queue.autoPausedRecoveryCleanup === "function") {
+          return;
+        }
+
+        const connection = queue.connection;
+        const isConnectionReady = () => String(connection?.state?.status || "").toLowerCase() === "ready";
+        const runRecovery = () => {
+          try {
+            connection.subscribe(queue.player);
+          } catch (error) {
+            logError("Failed to subscribe voice connection while recovering from AutoPaused", {
+              guildId,
+              error,
+            });
+          }
+
+          if (typeof queue.player.unpause === "function") {
+            try {
+              queue.player.unpause();
+              logInfo("Attempted AutoPaused recovery by re-subscribing and unpausing player", {
+                guildId,
+                currentTrack: queue.current?.title || null,
+              });
+            } catch (error) {
+              logError("Failed to unpause audio player during AutoPaused recovery", {
+                guildId,
+                error,
+              });
+            }
+          }
+        };
+
+        if (isConnectionReady() || typeof connection.on !== "function") {
+          runRecovery();
+          return;
+        }
+
+        let timeoutHandle = null;
+        const onStateChange = (_oldState, newState) => {
+          const nextStatus = String(newState?.status || connection?.state?.status || "").toLowerCase();
+          if (nextStatus !== "ready") {
+            return;
+          }
+          if (typeof queue.autoPausedRecoveryCleanup === "function") {
+            queue.autoPausedRecoveryCleanup();
+          }
+          runRecovery();
+        };
+        const cleanup = () => {
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+          }
+          connection.off?.("stateChange", onStateChange);
+          if (queue.autoPausedRecoveryCleanup === cleanup) {
+            queue.autoPausedRecoveryCleanup = null;
+          }
+        };
+
+        queue.autoPausedRecoveryCleanup = cleanup;
+        connection.on("stateChange", onStateChange);
+        timeoutHandle = setTimeout(() => {
+          logInfo("AutoPaused recovery timed out waiting for voice connection ready", {
+            guildId,
+            currentTrack: queue.current?.title || null,
+            connectionState: connection?.state?.status || null,
+          });
+          cleanup();
+          if (
+            queue.pausedForInactivity
+            || queue.autoPausedReconnectInFlight
+            || typeof ensureVoiceConnection !== "function"
+          ) {
+            return;
+          }
+          queue.autoPausedReconnectInFlight = true;
+          ensureVoiceConnection(queue, {
+            guildId,
+            preferredVoiceChannel: queue.voiceChannel || null,
+            forceReconnect: true,
+          })
+            .then((result) => {
+              if (!result?.ok) {
+                logInfo("AutoPaused forced reconnect failed", {
+                  guildId,
+                  currentTrack: queue.current?.title || null,
+                  result: result || null,
+                });
+                return;
+              }
+              try {
+                queue.connection?.subscribe?.(queue.player);
+              } catch (error) {
+                logError("Failed to subscribe after AutoPaused forced reconnect", {
+                  guildId,
+                  error,
+                });
+              }
+              try {
+                queue.player?.unpause?.();
+                logInfo("Attempted AutoPaused recovery via forced voice reconnect", {
+                  guildId,
+                  currentTrack: queue.current?.title || null,
+                });
+              } catch (error) {
+                logError("Failed to unpause after AutoPaused forced reconnect", {
+                  guildId,
+                  error,
+                });
+              }
+            })
+            .catch((error) => {
+              logError("AutoPaused forced reconnect threw an error", {
+                guildId,
+                error,
+              });
+            })
+            .finally(() => {
+              queue.autoPausedReconnectInFlight = false;
+            });
+        }, autoPausedRecoveryTimeoutMs);
+      });
+    }
+
     queue.player.on("error", (error) => {
       logError("Audio player error", error);
       const playNext = getPlayNext();
@@ -653,6 +798,10 @@ function createQueueSession(deps) {
     queue.inactivityNoticeChannelId = null;
     clearLoopState(queue);
     clearNowPlayingProgressUpdates(queue);
+    if (typeof queue.autoPausedRecoveryCleanup === "function") {
+      queue.autoPausedRecoveryCleanup();
+    }
+    queue.autoPausedReconnectInFlight = false;
     if (queue.player) {
       queue.suppressNextIdle = true;
       queue.player.stop(true);
