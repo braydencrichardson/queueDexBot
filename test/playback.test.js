@@ -461,6 +461,102 @@ test("createTrackResource falls back to play-dl when youtube provider fails", as
   assert.equal(fallbackStream.destroyed, true);
 });
 
+test("createTrackResource recovers play-dl youtube fallback when stream() fails with invalid URL", async () => {
+  const recoveredStream = {
+    destroyed: false,
+    destroy() {
+      this.destroyed = true;
+    },
+  };
+  let streamCalls = 0;
+  let videoInfoCalls = 0;
+  let streamFromInfoCalls = 0;
+
+  const { createTrackResource } = createQueuePlayback({
+    playdl: {
+      stream: async () => {
+        streamCalls += 1;
+        const error = new TypeError("Invalid URL");
+        error.code = "ERR_INVALID_URL";
+        error.input = "undefined";
+        throw error;
+      },
+      video_info: async () => {
+        videoInfoCalls += 1;
+        return {
+          format: [
+            { url: undefined, codec: "opus", container: "webm" },
+            { url: "https://example.invalid/audio.opus", codec: "opus", container: "webm" },
+          ],
+          LiveStreamData: { isLive: false, dashManifestUrl: null },
+          video_details: { durationInSec: 120, url: "https://youtu.be/recover123" },
+        };
+      },
+      stream_from_info: async (info) => {
+        streamFromInfoCalls += 1;
+        assert.equal(Array.isArray(info.format), true);
+        assert.equal(info.format.length, 1);
+        assert.equal(info.format[0].url, "https://example.invalid/audio.opus");
+        return { stream: recoveredStream, type: "webm/opus" };
+      },
+    },
+    createAudioResource: (stream, options) => ({ stream, options }),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => {
+      throw new Error("yt-dlp download failed");
+    },
+    getGuildQueue: () => ({ tracks: [] }),
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  const track = { source: "youtube", url: "https://youtu.be/recover123", title: "Recovered song" };
+  const resource = await createTrackResource(track);
+
+  assert.equal(streamCalls, 1);
+  assert.equal(videoInfoCalls, 1);
+  assert.equal(streamFromInfoCalls, 1);
+  assert.equal(resource.options.metadata.pipeline, "play-dl-youtube-fallback-recovered");
+  assert.equal(typeof resource.__queueDexDispose, "function");
+
+  resource.__queueDexDispose();
+  assert.equal(recoveredStream.destroyed, true);
+});
+
+test("createTrackResource rethrows invalid URL fallback error when recovered info has no streamable formats", async () => {
+  const { createTrackResource } = createQueuePlayback({
+    playdl: {
+      stream: async () => {
+        const error = new TypeError("Invalid URL");
+        error.code = "ERR_INVALID_URL";
+        error.input = "undefined";
+        throw error;
+      },
+      video_info: async () => ({
+        format: [{ url: undefined, codec: "opus", container: "webm" }],
+      }),
+      stream_from_info: async () => {
+        throw new Error("stream_from_info should not be called when no streamable formats exist");
+      },
+    },
+    createAudioResource: (stream, options) => ({ stream, options }),
+    StreamType: { Arbitrary: "arbitrary" },
+    createYoutubeResource: async () => {
+      throw new Error("yt-dlp download failed");
+    },
+    getGuildQueue: () => ({ tracks: [] }),
+    queueViews: new Map(),
+    sendNowPlaying: async () => null,
+    logInfo: () => {},
+    logError: () => {},
+  });
+
+  const track = { source: "youtube", url: "https://youtu.be/recover123", title: "Unrecoverable song" };
+  await assert.rejects(createTrackResource(track), (error) => error?.code === "ERR_INVALID_URL");
+});
+
 test("playNext preloads the next track immediately after current playback starts", async () => {
   const currentTrack = { id: "current", source: "youtube", url: "https://youtu.be/current", title: "Current", duration: 12 };
   const upNextTrack = { id: "next", source: "youtube", url: "https://youtu.be/next", title: "Next" };

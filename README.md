@@ -35,7 +35,32 @@ cp .env.example .env
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install yt-dlp
+./.venv/bin/python -m pip install -U pip yt-dlp
+```
+
+Verify activation is using this project venv:
+
+```bash
+echo "$VIRTUAL_ENV"
+which python3
+python3 -c "import sys; print(sys.executable); print(sys.prefix); print(sys.base_prefix)"
+```
+
+Expected:
+- `VIRTUAL_ENV` ends with `/queueDexBot/.venv`
+- `which python3` is `/home/user/queueDexBot/.venv/bin/python3`
+- `sys.executable` and `sys.prefix` point to `.venv`
+- `sys.prefix != sys.base_prefix`
+
+If activation is wrong (for example prompt shows `(.venv)` but `python3` still points to `/usr/bin/python3`), rebuild the venv in this repo:
+
+```bash
+deactivate 2>/dev/null || true
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+./.venv/bin/python -m ensurepip --upgrade
+./.venv/bin/python -m pip install -U pip yt-dlp
 ```
 
 Set `YTDLP_PATH` to the venv binary, e.g.:
@@ -210,6 +235,36 @@ If you still see `Cannot find native binding` from `@snazzah/davey`, perform a c
 rm -rf node_modules package-lock.json
 npm install --include=optional
 ```
+
+## YouTube Extraction Troubleshooting
+
+If YouTube tracks fail with messages like `found 0 n function possibilities`, `Requested format is not available`, or `ios client ... requires a GVS PO Token`:
+
+1. Update yt-dlp:
+
+```bash
+# if yt-dlp is installed in a Python venv / pip:
+source .venv/bin/activate
+./.venv/bin/python -m pip install -U pip yt-dlp
+
+# if yt-dlp is installed as a standalone binary:
+yt-dlp -U
+```
+
+If you see `You installed yt-dlp with pip or using the wheel from PyPi; Use that to update`, use the venv/pip commands above instead of `yt-dlp -U`.
+If you see `externally-managed-environment`, your command is hitting system Python; use `./.venv/bin/python -m pip ...` explicitly and re-check `which python3`.
+If prompt says `(.venv)` but `which python3` is still `/usr/bin/python3`, your `.venv` activation is stale/mispointed; rebuild `.venv` using the setup steps above.
+
+2. Prefer these client settings in `.env`:
+
+```env
+YTDLP_PLAYER_CLIENT=web
+YTDLP_FALLBACK_PLAYER_CLIENT=android
+```
+
+3. Avoid `YTDLP_FALLBACK_PLAYER_CLIENT=ios` unless you also provide a valid YouTube PO token setup for yt-dlp.
+
+The bot now also auto-adds an `android` safety fallback when `ios` is configured, to reduce hard failures on YouTube extraction.
 
 ## Run Activity App (Scaffold)
 

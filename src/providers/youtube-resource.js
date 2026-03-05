@@ -29,6 +29,20 @@ function createYoutubeResourceFactory(deps) {
     ytdlpStreamTimeoutMs,
     youtubeUserAgent,
   } = config;
+  const primaryPlayerClient = String(ytdlpPlayerClient || "web").trim() || "web";
+  const fallbackPlayerClient = String(ytdlpFallbackPlayerClient || "").trim();
+
+  function buildPlayerClientOrder() {
+    const configuredClients = [primaryPlayerClient, fallbackPlayerClient].filter(Boolean);
+    const clients = [...new Set(configuredClients)];
+    if (clients.includes("ios") && !clients.includes("android")) {
+      clients.push("android");
+      logInfo("Added yt-dlp Android safety client because iOS client may require PO token", {
+        configuredClients,
+      });
+    }
+    return clients;
+  }
 
   function extractYoutubeId(url) {
     try {
@@ -297,14 +311,11 @@ function createYoutubeResourceFactory(deps) {
   }
 
   async function createYoutubeResource(url, options = {}) {
-    const clients = [ytdlpPlayerClient];
-    if (ytdlpFallbackPlayerClient && ytdlpFallbackPlayerClient !== ytdlpPlayerClient) {
-      clients.push(ytdlpFallbackPlayerClient);
-    }
+    const clients = buildPlayerClientOrder();
 
     if (ytdlpStream) {
       for (const client of clients) {
-        const useCookies = client === ytdlpPlayerClient;
+        const useCookies = client === primaryPlayerClient;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           try {
             return await createYoutubeStreamResource(url, attempt, client, useCookies, options);
@@ -318,7 +329,7 @@ function createYoutubeResourceFactory(deps) {
 
     let lastError = null;
     for (const client of clients) {
-      const useCookies = client === ytdlpPlayerClient;
+      const useCookies = client === primaryPlayerClient;
       try {
         const filePath = await downloadYoutubeAudio(url, client, useCookies);
         const stream = fs.createReadStream(filePath);

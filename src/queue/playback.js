@@ -75,8 +75,7 @@ function createQueuePlayback(deps) {
     return "Queue finished. Leaving voice channel.";
   }
 
-  async function createPlayDlResource(url, source, pipeline) {
-    const stream = await playdl.stream(url);
+  function createAudioResourceFromPlayDlStream(stream, source, pipeline) {
     const resource = createAudioResource(stream.stream, {
       inputType: stream.type ?? StreamType.Arbitrary,
       metadata: {
@@ -91,6 +90,67 @@ function createQueuePlayback(deps) {
       };
     }
     return resource;
+  }
+
+  async function createPlayDlResource(url, source, pipeline) {
+    const stream = await playdl.stream(url);
+    return createAudioResourceFromPlayDlStream(stream, source, pipeline);
+  }
+
+  async function createYoutubePlayDlFallbackResource(track) {
+    try {
+      return await createPlayDlResource(track.url, "youtube", "play-dl-youtube-fallback");
+    } catch (error) {
+      const isInvalidUrlError = error?.code === "ERR_INVALID_URL"
+        || /invalid url/i.test(String(error?.message || ""));
+      const canRecoverFromInfo = typeof playdl.video_info === "function"
+        && typeof playdl.stream_from_info === "function";
+      if (!isInvalidUrlError || !canRecoverFromInfo) {
+        throw error;
+      }
+
+      let info;
+      try {
+        info = await playdl.video_info(track.url);
+      } catch (infoError) {
+        logInfo("YouTube play-dl fallback video_info recovery failed", {
+          title: track.title,
+          url: track.url,
+          error: infoError,
+        });
+        throw error;
+      }
+
+      const originalFormats = Array.isArray(info?.format) ? info.format : [];
+      const streamableFormats = originalFormats.filter((format) => (
+        typeof format?.url === "string" && /^https?:\/\//i.test(format.url)
+      ));
+      if (!streamableFormats.length) {
+        logInfo("YouTube play-dl fallback has no streamable formats after recovery", {
+          title: track.title,
+          url: track.url,
+          originalFormatCount: originalFormats.length,
+        });
+        throw error;
+      }
+
+      info.format = streamableFormats;
+      try {
+        const recoveredStream = await playdl.stream_from_info(info);
+        return createAudioResourceFromPlayDlStream(
+          recoveredStream,
+          "youtube",
+          "play-dl-youtube-fallback-recovered"
+        );
+      } catch (recoveryError) {
+        logInfo("YouTube play-dl fallback stream recovery failed", {
+          title: track.title,
+          url: track.url,
+          error: recoveryError,
+        });
+        throw error;
+      }
+    }
   }
 
   async function createTrackResource(track, options = {}) {
@@ -108,7 +168,7 @@ function createQueuePlayback(deps) {
           error,
         });
         try {
-          return await createPlayDlResource(track.url, "youtube", "play-dl-youtube-fallback");
+          return await createYoutubePlayDlFallbackResource(track);
         } catch (fallbackError) {
           logInfo("YouTube play-dl fallback failed", {
             title: track.title,
